@@ -78,9 +78,54 @@ These values live only in the process environment and ignored CMake cache.
   fill/copy, reduction, scan, compact, radix sort, gather/scatter, histogram,
   and deterministic RNG.
 
+## S2A: reusable runtime and deployment profile decision
+
+- Status: accepted locally
+- Date: 2026-08-01
+- Scope: reusable Vulkan resource/dispatch runtime and persisted-profile
+  selection; primitive algorithms remain outside this slice
+- Git baseline: recorded by the commit containing this status entry
+
+### Delivered contracts
+
+- The Vulkan runtime owns instance/device/queue, host-visible buffers, shader
+  modules, descriptors, compute pipelines, command buffers, fences, and their
+  destruction through move-only RAII types.
+- Device selection prefers a dedicated compute queue and exposes the selected
+  queue family to diagnostics.
+- The parent Vulkan CMake target builds the runtime whenever Vulkan support is
+  enabled. `VIENNAPS_BUILD_VULKAN_SMOKE` controls only the smoke executable.
+- Deployment profile lookup uses caller configuration first, then
+  `VIENNAPS_DEVICE_PROFILE_DIR`, then the relative
+  `.viennaps-device-profiles` directory. No absolute SDK, library, or profile
+  location is stored in source.
+- Missing, corrupt, unknown-schema, or hardware/driver-stale profiles require a
+  new probe and fail closed to CPU. A fresh matching profile can feed Auto
+  selection without probing again; Manual selection remains authoritative and
+  unsupported Manual Vulkan requests return an explicit failure.
+
+### Acceptance evidence
+
+| Gate | Result |
+|---|---|
+| Parent Vulkan configure/build | runtime library and both smoke executables build with SDK supplied through `VULKAN_SDK` |
+| Reusable runtime smoke | Intel Arc queue family 1, dedicated; 16 `y = 2x + 1` FP32 values exact; exit 0 |
+| Original compute smoke regression | all 16 values exact, 0 ULP; exit 0 |
+| No-SDK regression | probe stub builds and reports `status=disabled`; exit 0 |
+| Capability/deployment profile | 13 focused cases pass under MSVC C++20 `/W4` without warnings |
+| Fixed-path audit | no local Vulkan SDK, VTK, or reference-tree absolute path in the changed source |
+
+### Open exits before S2B
+
+- Adapt the probe JSON directly into `CapabilityProfileRecord`, add safe
+  working-set calibration, and atomically persist the resulting profile.
+- Implement and differentially validate fill/copy, transform, reduction, scan,
+  compaction, sort, gather/scatter, histogram, and deterministic RNG. A failed
+  delegated primitive attempt produced no accepted code and is not counted as
+  progress.
+
 ## Next slice
 
-S2 delivers the reusable Vulkan runtime, versioned profile ingestion and cache
-invalidation, calibrated memory budget, and the primitive differential suite.
-It unlocks the first Vulkan implementation of the frozen two-dimensional Level
-Set scenario.
+S2B delivers calibrated probe-to-profile persistence and the primitive
+differential suite. It unlocks the first Vulkan implementation of the frozen
+two-dimensional Level Set scenario.

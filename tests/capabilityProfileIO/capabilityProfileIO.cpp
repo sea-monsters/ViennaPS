@@ -1,9 +1,12 @@
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
 #include <compute/backendPolicy.hpp>
 #include <compute/capabilityProfileIO.hpp>
+#include <compute/deploymentProfile.hpp>
 #include <vcTestAsserts.hpp>
 
 namespace viennacore {
@@ -47,38 +50,64 @@ void assertProfileEqual(const CapabilityProfileRecord &left,
                  right.capabilityProfile.safeVulkanWorkingSetBytes);
 }
 
-void assertBackendSelectionCpuFallbackOnNoShader64() {
-  CapabilityProfileRecord record;
-  record.schemaVersion = kCapabilityProfileSchemaVersion;
-  record.recordedAt = "2026-08-01T12:00:00Z";
-  record.hardware.deviceUuid = "DEV-CPU-001";
-  record.hardware.driverUuid = "DRV-CPU-001";
-  record.hardware.vendorId = 1111;
-  record.hardware.deviceId = 2222;
-  record.hardware.deviceName = "test-device";
-  record.hardware.driverVersion = "0.0.0";
-  record.hardware.driverDate = "2026-08-01";
-  record.capabilityProfile.cpuAvailable = true;
-  record.capabilityProfile.cudaAvailable = false;
-  record.capabilityProfile.vulkanAvailable = true;
-  record.capabilityProfile.vulkanPrimitiveSuitePass = true;
-  record.capabilityProfile.vulkanFp64SuitePass = false;
-  record.capabilityProfile.vulkanCompute = true;
-  record.capabilityProfile.vulkanRayQuery = true;
-  record.capabilityProfile.vulkanRayTracingPipeline = false;
-  record.capabilityProfile.shaderFloat64 = false;
-  record.capabilityProfile.safeVulkanWorkingSetBytes = 1024ULL * 1024ULL;
+void writeRecordToTempDir(const HardwareFingerprint &hardware,
+                          const CapabilityProfileRecord &record,
+                          const std::string &dirName,
+                          const std::string &suffix = "") {
+  const auto dir =
+      std::filesystem::path(std::filesystem::temp_directory_path()) / dirName;
+  std::filesystem::create_directories(dir);
+  const auto filePath = dir / (hardware.deviceUuid + suffix + ".json");
+  VC_TEST_ASSERT(
+      writeCapabilityProfileRecordToFile(filePath.string(), record, nullptr));
+}
 
-  const auto plan =
-      buildSelectionPlan(record.capabilityProfile,
-                         std::vector<StageWorkload>{
-                             {Stage::OXIDATION_LINEAR_SOLVE, Precision::FP64,
-                              4096, false, RayMode::NONE, true}});
+void cleanTempProfileIfExists(const HardwareFingerprint &hardware,
+                              const std::string &dirName,
+                              const std::string &suffix = "") {
+  const auto dir =
+      std::filesystem::path(std::filesystem::temp_directory_path()) / dirName;
+  const auto filePath = dir / (hardware.deviceUuid + suffix + ".json");
+  std::error_code removeError;
+  std::filesystem::remove(filePath, removeError);
+}
 
-  VC_TEST_ASSERT(plan.ok);
-  VC_TEST_ASSERT(plan.stages.size() == 1);
-  VC_TEST_ASSERT(plan.stages[0].selected);
-  VC_TEST_ASSERT(plan.stages[0].selectedBackend == ComputeBackend::CPU);
+void assertManualBlockReasonContainsVulkan(const StageSelection &selection) {
+  VC_TEST_ASSERT(!selection.ok);
+  VC_TEST_ASSERT(!selection.selected);
+  VC_TEST_ASSERT(!selection.rejectionReasons.empty());
+  VC_TEST_ASSERT(selection.rejectionReasons[0].find(
+                     "Manual backend blocked: ") != std::string::npos);
+}
+
+#ifdef _WIN32
+void setEnvVar(const std::string &name, const std::string &value) {
+  _putenv_s(name.c_str(), value.c_str());
+}
+#else
+void setEnvVar(const std::string &name, const std::string &value) {
+  if (value.empty()) {
+    unsetenv(name.c_str());
+    return;
+  }
+  setenv(name.c_str(), value.c_str(), 1);
+}
+#endif
+
+std::string getEnvVar(const std::string &name) {
+#ifdef _WIN32
+  char *value = nullptr;
+  std::size_t valueLength = 0;
+  if (_dupenv_s(&value, &valueLength, name.c_str()) != 0 || value == nullptr) {
+    return {};
+  }
+  const std::string result(value);
+  std::free(value);
+  return result;
+#else
+  const char *value = std::getenv(name.c_str());
+  return value == nullptr ? std::string() : std::string(value);
+#endif
 }
 
 void TestRoundTrip() {
@@ -243,6 +272,223 @@ void TestCorruptedInputIsRejected() {
   VC_TEST_ASSERT(result.error == CapabilityProfileIOError::JSON_SYNTAX_ERROR);
 }
 
+void TestDeploymentProfileMissingRequiresProbeAndUsesCpuFallback() {
+  const HardwareFingerprint runtimeFingerprint = {
+      "DEV-DEP-001", "DRV-DEP-001", 111, 222, "device", "1.0.0", "2026-01-01"};
+  const auto dirName = "viennaps-profile-missing";
+  const auto profilePath = (std::filesystem::temp_directory_path() / dirName /
+                            "missing-profile.json")
+                               .string();
+
+  std::error_code removeError;
+  std::filesystem::remove(profilePath, removeError);
+
+  const std::vector<StageWorkload> workloads = {
+      {Stage::LEVEL_SET, Precision::FP32, 4096, false, RayMode::NONE, true}};
+  const auto decision = selectDeploymentProfile(
+      runtimeFingerprint, workloads, ManualSelectionConfig{}, profilePath);
+  VC_TEST_ASSERT(decision.requiresProbe);
+  VC_TEST_ASSERT(decision.state == DeploymentProfileState::MISSING);
+  VC_TEST_ASSERT(!decision.hasProfile);
+  VC_TEST_ASSERT(decision.plan.stages[0].selectedBackend ==
+                 ComputeBackend::CPU);
+}
+
+void TestDeploymentProfileFreshMatchAvoidsProbeAndCanSelectVulkan() {
+  const HardwareFingerprint runtimeFingerprint = {
+      "DEV-DEP-002", "DRV-DEP-002", 333,         444,
+      "arc-device",  "1.2.3",       "2026-01-01"};
+  const auto dirName = "viennaps-profile-fresh-match";
+
+  CapabilityProfileRecord record;
+  record.schemaVersion = kCapabilityProfileSchemaVersion;
+  record.recordedAt = "2026-08-01T00:00:00Z";
+  record.hardware = runtimeFingerprint;
+  record.capabilityProfile.cpuAvailable = true;
+  record.capabilityProfile.vulkanAvailable = true;
+  record.capabilityProfile.vulkanPrimitiveSuitePass = true;
+  record.capabilityProfile.vulkanFp64SuitePass = true;
+  record.capabilityProfile.vulkanCompute = true;
+  record.capabilityProfile.vulkanRayQuery = true;
+  record.capabilityProfile.vulkanRayTracingPipeline = false;
+  record.capabilityProfile.shaderFloat64 = false;
+  record.capabilityProfile.safeVulkanWorkingSetBytes =
+      1024ULL * 1024ULL * 64ULL;
+
+  writeRecordToTempDir(runtimeFingerprint, record, dirName);
+
+  const std::vector<StageWorkload> workloads = {
+      {Stage::LEVEL_SET, Precision::FP32, 1024ULL * 1024ULL, false,
+       RayMode::NONE, true}};
+  const auto decision = selectDeploymentProfile(
+      runtimeFingerprint, workloads, ManualSelectionConfig{},
+      (std::filesystem::temp_directory_path() / dirName).string());
+  VC_TEST_ASSERT(!decision.requiresProbe);
+  VC_TEST_ASSERT(decision.state == DeploymentProfileState::VALID);
+  VC_TEST_ASSERT(decision.hasProfile);
+  VC_TEST_ASSERT(decision.plan.stages[0].selectedBackend ==
+                 ComputeBackend::VULKAN);
+
+  cleanTempProfileIfExists(runtimeFingerprint, dirName);
+}
+
+void TestDeploymentProfileMismatchRequiresProbeAndCpuFallback() {
+  HardwareFingerprint runtimeFingerprint = {
+      "DEV-DEP-003", "DRV-DEP-A", 111,         222,
+      "arc-device",  "1.2.3",     "2026-01-01"};
+  HardwareFingerprint profileFingerprint = runtimeFingerprint;
+  profileFingerprint.driverUuid = "DRV-DEP-OLD";
+  const auto dirName = "viennaps-profile-mismatch";
+
+  CapabilityProfileRecord record;
+  record.schemaVersion = kCapabilityProfileSchemaVersion;
+  record.recordedAt = "2026-08-01T00:00:00Z";
+  record.hardware = profileFingerprint;
+  record.capabilityProfile.cpuAvailable = true;
+  record.capabilityProfile.vulkanAvailable = true;
+  record.capabilityProfile.vulkanPrimitiveSuitePass = true;
+  record.capabilityProfile.vulkanCompute = true;
+  record.capabilityProfile.safeVulkanWorkingSetBytes =
+      1024ULL * 1024ULL * 64ULL;
+
+  writeRecordToTempDir(runtimeFingerprint, record, dirName);
+
+  const std::vector<StageWorkload> workloads = {
+      {Stage::LEVEL_SET, Precision::FP32, 2048ULL, false, RayMode::NONE, true}};
+  const auto decision = selectDeploymentProfile(
+      runtimeFingerprint, workloads, ManualSelectionConfig{},
+      (std::filesystem::temp_directory_path() / dirName).string());
+  VC_TEST_ASSERT(decision.requiresProbe);
+  VC_TEST_ASSERT(decision.state == DeploymentProfileState::STALE);
+  VC_TEST_ASSERT(!decision.hasProfile);
+  VC_TEST_ASSERT(decision.plan.stages[0].selectedBackend ==
+                 ComputeBackend::CPU);
+
+  cleanTempProfileIfExists(runtimeFingerprint, dirName);
+}
+
+void TestDeploymentCorruptedOrUnknownProfileFallsClosedToCpu() {
+  const HardwareFingerprint runtimeFingerprint = {
+      "DEV-DEP-004", "DRV-DEP-004", 1, 1, "device", "1.0.0", "2026-01-01"};
+  const auto dir =
+      std::filesystem::temp_directory_path() / "viennaps-profile-bad";
+  std::filesystem::create_directories(dir);
+  const auto corruptedPath = (dir / "corrupt.json").string();
+  const auto schemaPath = (dir / "schema.json").string();
+
+  {
+    std::ofstream badFile(corruptedPath, std::ios::binary);
+    badFile << "{ \"schemaVersion\": 2,";
+  }
+  {
+    std::ofstream schemaFile(schemaPath, std::ios::binary);
+    schemaFile
+        << R"({"schemaVersion":99,"recordedAt":"2026-08-01T00:00:00Z","hardwareFingerprint":{"deviceUuid":"X","driverUuid":"Y","vendorId":1,"deviceId":2,"deviceName":"x","driverVersion":"1","driverDate":"2026-01-01"},"capabilityProfile":{"cpuAvailable":true,"cudaAvailable":false,"vulkanAvailable":true,"vulkanPrimitiveSuitePass":true,"vulkanFp64SuitePass":true,"vulkanCompute":true,"vulkanRayQuery":false,"vulkanRayTracingPipeline":false,"shaderFloat64":true,"safeVulkanWorkingSetBytes":1024}})";
+  }
+
+  const std::vector<StageWorkload> workloads = {
+      {Stage::LEVEL_SET, Precision::FP64, 1024ULL, false, RayMode::NONE, true}};
+  const auto corruptDecision = selectDeploymentProfile(
+      runtimeFingerprint, workloads, ManualSelectionConfig{}, corruptedPath);
+  VC_TEST_ASSERT(corruptDecision.requiresProbe);
+  VC_TEST_ASSERT(corruptDecision.state == DeploymentProfileState::INVALID);
+  VC_TEST_ASSERT(corruptDecision.plan.stages[0].selectedBackend ==
+                 ComputeBackend::CPU);
+
+  const auto schemaDecision = selectDeploymentProfile(
+      runtimeFingerprint, workloads, ManualSelectionConfig{}, schemaPath);
+  VC_TEST_ASSERT(schemaDecision.requiresProbe);
+  VC_TEST_ASSERT(schemaDecision.state == DeploymentProfileState::INVALID);
+  VC_TEST_ASSERT(schemaDecision.plan.stages[0].selectedBackend ==
+                 ComputeBackend::CPU);
+
+  std::error_code removeError;
+  std::filesystem::remove(corruptedPath, removeError);
+  std::filesystem::remove(schemaPath, removeError);
+}
+
+void TestDeploymentManualAlwaysAppliedOverAuto() {
+  const HardwareFingerprint runtimeFingerprint = {
+      "DEV-DEP-005", "DRV-DEP-005", 10, 20, "device", "1.0.0", "2026-01-01"};
+  const auto dirName = "viennaps-profile-manual";
+
+  CapabilityProfileRecord record;
+  record.schemaVersion = kCapabilityProfileSchemaVersion;
+  record.recordedAt = "2026-08-01T00:00:00Z";
+  record.hardware = runtimeFingerprint;
+  record.capabilityProfile.cpuAvailable = true;
+  record.capabilityProfile.vulkanAvailable = true;
+  record.capabilityProfile.vulkanPrimitiveSuitePass = true;
+  record.capabilityProfile.vulkanFp64SuitePass = true;
+  record.capabilityProfile.vulkanCompute = true;
+  record.capabilityProfile.safeVulkanWorkingSetBytes = 1024ULL * 1024ULL;
+
+  writeRecordToTempDir(runtimeFingerprint, record, dirName);
+
+  ManualSelectionConfig manualCpu;
+  manualCpu.selectionMode = SelectionMode::MANUAL;
+  manualCpu.globalBackend = ComputeBackend::CPU;
+  const std::vector<StageWorkload> workloads = {{Stage::RAY_TRACING,
+                                                 Precision::FP32, 2048ULL,
+                                                 false, RayMode::NONE, true}};
+  const auto decision = selectDeploymentProfile(
+      runtimeFingerprint, workloads, manualCpu,
+      (std::filesystem::temp_directory_path() / dirName).string());
+  VC_TEST_ASSERT(decision.plan.ok);
+  VC_TEST_ASSERT(decision.plan.stages[0].selectedBackend ==
+                 ComputeBackend::CPU);
+  VC_TEST_ASSERT(!decision.requiresProbe);
+
+  cleanTempProfileIfExists(runtimeFingerprint, dirName);
+}
+
+void TestDeploymentManualVulkanUnsupportedMustFailExplicitly() {
+  HardwareFingerprint runtimeFingerprint = {
+      "DEV-DEP-006", "DRV-DEP-006", 1, 1, "device", "1.0.0", "2026-01-01"};
+  const auto dirName = "viennaps-profile-manual-vulkan";
+
+  CapabilityProfileRecord record;
+  record.schemaVersion = kCapabilityProfileSchemaVersion;
+  record.recordedAt = "2026-08-01T00:00:00Z";
+  record.hardware = runtimeFingerprint;
+  record.capabilityProfile.cpuAvailable = true;
+  record.capabilityProfile.vulkanAvailable = false;
+  record.capabilityProfile.vulkanPrimitiveSuitePass = false;
+  record.capabilityProfile.vulkanCompute = false;
+  record.capabilityProfile.safeVulkanWorkingSetBytes = 1024ULL * 1024ULL;
+
+  writeRecordToTempDir(runtimeFingerprint, record, dirName);
+
+  ManualSelectionConfig manualVulkan;
+  manualVulkan.selectionMode = SelectionMode::MANUAL;
+  manualVulkan.globalBackend = ComputeBackend::VULKAN;
+  const std::vector<StageWorkload> workloads = {
+      {Stage::LEVEL_SET, Precision::FP32, 2048ULL, false, RayMode::NONE, true}};
+  const auto decision = selectDeploymentProfile(
+      runtimeFingerprint, workloads, manualVulkan,
+      (std::filesystem::temp_directory_path() / dirName).string());
+  assertManualBlockReasonContainsVulkan(decision.plan.stages[0]);
+
+  cleanTempProfileIfExists(runtimeFingerprint, dirName);
+}
+
+void TestDeploymentProfileDirectoryFallsBackToDefaultWhenEnvEmpty() {
+  const std::string oldEnv =
+      getEnvVar(std::string(kDeploymentProfileDirEnvVar));
+  setEnvVar(std::string(kDeploymentProfileDirEnvVar), "");
+
+  const auto defaultDir = resolveDeploymentProfileDirectory("");
+  VC_TEST_ASSERT(defaultDir == std::filesystem::path(
+                                   std::string(kDeploymentProfileDefaultDir)));
+  VC_TEST_ASSERT(!defaultDir.is_absolute());
+
+  if (oldEnv.empty()) {
+    setEnvVar(std::string(kDeploymentProfileDirEnvVar), "");
+  } else {
+    setEnvVar(std::string(kDeploymentProfileDirEnvVar), oldEnv);
+  }
+}
+
 } // namespace
 
 } // namespace viennacore
@@ -254,6 +500,14 @@ int main() {
   viennacore::TestMissingRequiredFieldIsRejected();
   viennacore::TestUnknownSchemaVersionIsRejected();
   viennacore::TestCorruptedInputIsRejected();
-  viennacore::assertBackendSelectionCpuFallbackOnNoShader64();
+
+  viennacore::TestDeploymentProfileMissingRequiresProbeAndUsesCpuFallback();
+  viennacore::TestDeploymentProfileFreshMatchAvoidsProbeAndCanSelectVulkan();
+  viennacore::TestDeploymentProfileMismatchRequiresProbeAndCpuFallback();
+  viennacore::TestDeploymentCorruptedOrUnknownProfileFallsClosedToCpu();
+  viennacore::TestDeploymentManualAlwaysAppliedOverAuto();
+  viennacore::TestDeploymentManualVulkanUnsupportedMustFailExplicitly();
+  viennacore::TestDeploymentProfileDirectoryFallsBackToDefaultWhenEnvEmpty();
+
   return 0;
 }

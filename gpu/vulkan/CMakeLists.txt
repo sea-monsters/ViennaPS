@@ -99,6 +99,11 @@ set(VULKAN_SMOKE_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/ComputeSmoke.cpp")
 set(VULKAN_SMOKE_SHADER "${CMAKE_CURRENT_SOURCE_DIR}/shaders/compute_smoke.comp")
 set(VULKAN_SMOKE_SPV "${CMAKE_CURRENT_BINARY_DIR}/compute_smoke.comp.spv")
 
+if(VIENNAPS_VULKAN_SDK_AVAILABLE AND
+   (VIENNAPS_ENABLE_VULKAN OR VIENNAPS_BUILD_VULKAN_SMOKE))
+  add_subdirectory(runtime)
+endif()
+
 if(VIENNAPS_BUILD_VULKAN_PROBE)
   add_executable(viennaps-device-probe ${VULKAN_PROBE_SOURCE})
   target_compile_features(viennaps-device-probe PRIVATE cxx_std_20)

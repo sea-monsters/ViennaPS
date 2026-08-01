@@ -266,8 +266,34 @@ under MSVC C++20 `/W4` without code warnings.
 | No-SDK regression | primitives are skipped cleanly when `VULKAN_SDK` is absent |
 | Fixed-path audit | no local SDK, VTK, or comparison-tree absolute path occurs in tracked text |
 
+## P3-oracle-1: frozen ViennaLS single-step CPU oracle
+
+- Status: accepted locally as a CPU reference, not a Vulkan implementation
+- Date: 2026-08-01
+- Scope: the smallest deterministic structure update used to validate the
+  first Vulkan Level Set kernels
+
+The existing CPU baseline advances a circle through its complete requested
+duration. This additional oracle enables ViennaLS single-step mode, performs
+exactly one forward-Euler/Engquist-Osher step at a 0.49 time-step ratio, and
+fingerprints both the initial-to-updated topology transition and the exact
+advected time. It deliberately depends only on ViennaLS/ViennaCore; the
+higher-level ViennaPS `AdvectionHandler` oracle remains gated by the currently
+unavailable ViennaCS dependency.
+
+| Precision | Active / nodes / lines | Advected time | Transition fingerprint |
+|---|---:|---:|---:|
+| FP32 | 92 / 68 / 68 | `0.40459004530160253` | `0x51052040fecec990` |
+| FP64 | 92 / 68 / 68 | `0.40459001562216945` | `0x6af00ac25d8971d0` |
+
+The standalone MSVC C++20 `/W4` build and two consecutive executions pass.
+Known narrowing/uninitialized-use warnings instantiated inside the current
+ViennaLS headers were suppressed only in the local direct-compile command; the
+oracle source itself compiles without a warning-specific source workaround.
+
 ## Next slice
 
 The next S2B slice removes the current 256-block bound and adds the remaining
-primitive contracts. It unlocks the first Vulkan implementation of the frozen
-two-dimensional Level Set scenario.
+primitive contracts. In parallel, P3 can implement the first Vulkan Level Set
+step against the frozen oracle above. Higher-level process integration remains
+behind the ViennaCS dependency gate.

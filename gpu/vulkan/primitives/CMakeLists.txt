@@ -43,6 +43,12 @@ set(VULKAN_PRIMITIVES_SMOKE_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/PrimitivesSmoke.
 set(VULKAN_PRIMITIVES_SMOKE_SHADER
     "${CMAKE_CURRENT_SOURCE_DIR}/shaders/primitives.comp")
 set(VULKAN_PRIMITIVES_SMOKE_SPV "${CMAKE_CURRENT_BINARY_DIR}/primitives.comp.spv")
+set(VULKAN_PRIMITIVES_PROD_SMOKE_SOURCE
+    "${CMAKE_CURRENT_SOURCE_DIR}/production_primitives_smoke.cpp")
+set(VULKAN_PRIMITIVES_PROD_SMOKE_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/elementwise.comp")
+set(VULKAN_PRIMITIVES_PROD_SMOKE_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/elementwise.comp.spv")
 
 find_program(VIENNAPS_VULKAN_PRIMITIVES_SMOKE_SHADER_COMPILER
              NAMES glslc glslangValidator
@@ -92,6 +98,23 @@ endif()
 
 add_custom_target(viennaps-vulkan-primitives-smoke-spv
   DEPENDS ${VULKAN_PRIMITIVES_SMOKE_SPV})
+add_library(viennaps_vulkan_primitives
+  vulkan_primitives.cpp
+)
+target_link_libraries(viennaps_vulkan_primitives
+  PUBLIC
+    viennaps_vulkan_compute_runtime
+    Vulkan::Vulkan)
+target_include_directories(viennaps_vulkan_primitives
+  PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(viennaps_vulkan_primitives PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps_vulkan_primitives PRIVATE /W4 /WX)
+else()
+  target_compile_options(viennaps_vulkan_primitives
+                         PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
 
 string(REPLACE "\\" "/" VIENNAPS_VULKAN_PRIMITIVES_SPV_PATH
                "${VULKAN_PRIMITIVES_SMOKE_SPV}")
@@ -113,7 +136,56 @@ target_compile_definitions(
     "VIENNAPS_VULKAN_PRIMITIVES_SPV_PATH=\"${VIENNAPS_VULKAN_PRIMITIVES_SPV_PATH}\"")
 target_link_libraries(viennaps-vulkan-primitives-smoke PRIVATE Vulkan::Vulkan)
 
+if("${VIENNAPS_VULKAN_PRIMITIVES_SMOKE_SHADER_COMPILER}" MATCHES ".*glslangValidator.*")
+  add_custom_command(
+    OUTPUT ${VULKAN_PRIMITIVES_PROD_SMOKE_SPV}
+    COMMAND ${VIENNAPS_VULKAN_PRIMITIVES_SMOKE_SHADER_COMPILER} -V
+            ${VULKAN_PRIMITIVES_PROD_SMOKE_SHADER}
+            -o ${VULKAN_PRIMITIVES_PROD_SMOKE_SPV}
+    DEPENDS ${VULKAN_PRIMITIVES_PROD_SMOKE_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Generating Vulkan elementwise SPIR-V shader.")
+else()
+  add_custom_command(
+    OUTPUT ${VULKAN_PRIMITIVES_PROD_SMOKE_SPV}
+    COMMAND ${VIENNAPS_VULKAN_PRIMITIVES_SMOKE_SHADER_COMPILER}
+            -o ${VULKAN_PRIMITIVES_PROD_SMOKE_SPV}
+            ${VULKAN_PRIMITIVES_PROD_SMOKE_SHADER}
+    DEPENDS ${VULKAN_PRIMITIVES_PROD_SMOKE_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Generating Vulkan elementwise SPIR-V shader.")
+endif()
+add_custom_target(viennaps-vulkan-elementwise-smoke-spv
+  DEPENDS ${VULKAN_PRIMITIVES_PROD_SMOKE_SPV})
+
+string(REPLACE "\\" "/"
+               VIENNAPS_VULKAN_PRIMITIVES_ELEMENTWISE_SPV_PATH
+               "${VULKAN_PRIMITIVES_PROD_SMOKE_SPV}")
+
+add_executable(viennaps-vulkan-primitives-production-smoke
+  ${VULKAN_PRIMITIVES_PROD_SMOKE_SOURCE})
+add_dependencies(viennaps-vulkan-primitives-production-smoke
+  viennaps-vulkan-elementwise-smoke-spv)
+target_compile_features(viennaps-vulkan-primitives-production-smoke PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps-vulkan-primitives-production-smoke
+                         PRIVATE /W4 /WX)
+else()
+  target_compile_options(viennaps-vulkan-primitives-production-smoke
+                         PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+target_compile_definitions(
+  viennaps-vulkan-primitives-production-smoke
+  PRIVATE
+    "VIENNAPS_VULKAN_PRIMITIVES_ELEMENTWISE_SPV_PATH=\"${VIENNAPS_VULKAN_PRIMITIVES_ELEMENTWISE_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-primitives-production-smoke
+  PRIVATE
+    viennaps_vulkan_primitives
+    Vulkan::Vulkan)
+
 if(BUILD_TESTING)
   add_test(NAME viennaps-vulkan-primitives-smoke
            COMMAND viennaps-vulkan-primitives-smoke)
+  add_test(NAME viennaps-vulkan-primitives-production-smoke
+           COMMAND viennaps-vulkan-primitives-production-smoke)
 endif()

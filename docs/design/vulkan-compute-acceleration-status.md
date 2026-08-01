@@ -64,6 +64,10 @@ cmake -S . -B build -G Ninja -DVIENNAPS_ENABLE_VULKAN=ON
 ```
 
 These values live only in the process environment and ignored CMake cache.
+The same rule applies to external comparison trees used during development:
+automation may read them through environment variables such as
+`VIENNAPS_MPROCESS_SOURCE_DIR`, but neither their resolved value nor a
+machine-local fallback path may enter tracked CMake, presets, tests, or docs.
 
 ### Open exits before S2
 
@@ -223,6 +227,44 @@ under MSVC C++20 `/W4` without code warnings.
   randomized deterministic inputs before setting the corresponding persisted
   profile suite gates.
 - Complete the remaining primitive list and safe memory-budget calibration.
+
+## S2B-primitive-2: reusable production elementwise primitives
+
+- Status: accepted locally
+- Date: 2026-08-01
+- Scope: reusable fill, copy, and affine-transform API built on the shared
+  Vulkan runtime; this slice alone does not set `vulkanPrimitiveSuitePass`
+
+### Delivered contracts
+
+- `ElementwisePrimitives` owns only composition-level state and reuses the S2A
+  runtime for instance, device, queue, buffers, shaders, descriptors,
+  pipelines, command buffers, and fences. Public consumers link the runtime
+  transitively instead of duplicating Vulkan lifetimes.
+- One specialization-driven shader exposes fill, copy, and affine transform.
+  Push constants carry the active element count and scalar operands.
+- Dispatch validates buffer sizes and the device workgroup-count limit, handles
+  zero length without dispatch, preserves inactive tails, and rejects in-place
+  copy/affine unless the caller opts in explicitly.
+- Host-visible non-coherent memory is flushed before device access and
+  invalidated before CPU readback. Aliasing dispatches use one combined buffer
+  barrier, and destruction follows Vulkan dependency order.
+- SDK discovery and shader compilation remain driven by `VULKAN_SDK`; no
+  resolved SDK or external source path is part of the target interface or
+  tracked source.
+
+### Acceptance evidence
+
+| Gate | Result |
+|---|---|
+| Warning gate | library and production smoke build under MSVC C++20 `/W4 /WX` |
+| CPU differential | fill, copy, and affine at lengths 0, 1, 16, 257, and 65,535 are bit-exact on Intel Arc |
+| Bounds and tails | inactive output tails retain sentinels for every tested length |
+| Alias policy | default in-place copy/affine rejection and explicit opt-in execution both pass |
+| Repeatability | complete production smoke passes twice consecutively with one reused command buffer/fence |
+| Existing regressions | bounded primitive smoke and reusable runtime smoke both remain passing |
+| No-SDK regression | primitives are skipped cleanly when `VULKAN_SDK` is absent |
+| Fixed-path audit | no local SDK, VTK, or comparison-tree absolute path occurs in tracked text |
 
 ## Next slice
 

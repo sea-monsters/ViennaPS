@@ -1,0 +1,50 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(constant_id = 0) const uint operation = 0u;
+
+layout(push_constant) uniform PushConstants {
+  uint elementCount;
+  float scalarA;
+  float scalarB;
+} pc;
+
+layout(std430, binding = 0) readonly buffer Input {
+  float inputFloat[];
+};
+
+layout(std430, binding = 1) buffer Output {
+  float outputFloat[];
+};
+
+void fillKernel() {
+  const uint idx = gl_GlobalInvocationID.x;
+  if (idx < pc.elementCount) {
+    outputFloat[idx] = pc.scalarA;
+  }
+}
+
+void copyKernel() {
+  const uint idx = gl_GlobalInvocationID.x;
+  if (idx < pc.elementCount) {
+    outputFloat[idx] = inputFloat[idx];
+  }
+}
+
+void affineKernel() {
+  const uint idx = gl_GlobalInvocationID.x;
+  if (idx < pc.elementCount) {
+    outputFloat[idx] = inputFloat[idx] * pc.scalarA + pc.scalarB;
+  }
+}
+
+void main() {
+  if (operation == 0u) {
+    fillKernel();
+  } else if (operation == 1u) {
+    copyKernel();
+  } else if (operation == 2u) {
+    affineKernel();
+  }
+}

@@ -42,6 +42,8 @@ public:
             const runtime::ComputeSessionOptions &manualDevice = {},
             const std::string_view configuredSpirvPath = {},
             const std::string_view configuredProfilePath = {}) {
+    process.setLevelSetUpdateFailurePolicy(
+        viennaps::LevelSetUpdateFailurePolicy::FALLBACK);
     process.clearLevelSetUpdateExecutor();
     Result result;
     result.manualMode =
@@ -193,6 +195,10 @@ public:
                 *activeSession, state->program);
             return executor(context, output, error);
           });
+      if (result.manualMode) {
+        process.setLevelSetUpdateFailurePolicy(
+            viennaps::LevelSetUpdateFailurePolicy::FAIL);
+      }
 
       result.ok = true;
       result.usingVulkan = true;
@@ -217,6 +223,8 @@ public:
 
   void clear(ProcessType &process) const {
     process.clearLevelSetUpdateExecutor();
+    process.setLevelSetUpdateFailurePolicy(
+        viennaps::LevelSetUpdateFailurePolicy::FALLBACK);
   }
 
 private:

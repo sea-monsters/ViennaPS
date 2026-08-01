@@ -56,6 +56,12 @@ public:
         context.advectionParams.adaptiveTimeStepping,
         context.advectionParams.adaptiveTimeStepSubdivisions);
     advectionKernel_.setLevelSetUpdateExecutor(context.levelSetUpdateExecutor);
+    using AdvectFailurePolicy =
+        typename viennals::Advect<NumericType, D>::LevelSetUpdateFailurePolicy;
+    advectionKernel_.setLevelSetUpdateFailurePolicy(
+        context.levelSetUpdateFailurePolicy == LevelSetUpdateFailurePolicy::FAIL
+            ? AdvectFailurePolicy::FAIL
+            : AdvectFailurePolicy::FALLBACK);
 
     advectionKernel_.setVelocityUpdateCallback(nullptr);
 
@@ -105,6 +111,15 @@ public:
     timer_.start();
     advectionKernel_.apply();
     timer_.finish();
+
+    if (advectionKernel_.hasLevelSetUpdateError()) {
+      viennacore::Logger::getInstance()
+          .addError("Level Set update executor failed: " +
+                        advectionKernel_.getLevelSetUpdateError(),
+                    false)
+          .print();
+      return ProcessResult::FAILURE;
+    }
 
     ++totalAdvectionSteps_;
     if (context.advectionParams.velocityOutput) {

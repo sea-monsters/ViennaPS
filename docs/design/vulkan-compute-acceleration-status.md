@@ -761,16 +761,59 @@ lifetime directly and does not conceal the separate strategy-progress defect.
 | No-SDK behavior | Vulkan-disabled configuration generates no execution target/test and the CPU routing test passes |
 | Path policy | test profile/temp paths are runtime generated; changed files contain no resolved local paths |
 
+## P3J-levelset-runtime-failure-policy: mode-aware execution failure
+
+- Status: accepted locally as the runtime failure contract for the installed
+  Level Set executor
+- Date: 2026-08-02
+- Scope: preserve automatic-selection compatibility while making a successful
+  manual Vulkan selection fail explicitly on executor runtime faults
+
+The Process context now carries an explicit Level Set update failure policy.
+Its default is `FALLBACK`, so existing callers and automatic deployment retain
+the previous behavior: executor `ERROR`, exceptions, and invalid `HANDLED`
+output shapes or values produce a warning and run the CPU value update. An
+executor-declared `FALLBACK` always requests that CPU path, including after a
+manual Vulkan selection.
+
+The deployment controller changes the policy to `FAIL` only after manual
+Vulkan configuration has fully succeeded. Configuration entry, every CPU or
+failed configuration exit, and `clear()` reset it to `FALLBACK`. Under `FAIL`,
+executor errors are propagated through ViennaLS and `AdvectionHandler` as
+`ProcessResult::FAILURE`. The pre-update sparse values are restored before the
+error leaves ViennaLS, later Runge-Kutta stages and rebuild work are skipped,
+and ViennaPS does not increment its advection-step count or process time.
+Breaking the ViennaLS outer loop on this state also prevents non-single-step
+and ALP execution from repeating a known-failed update.
+
+Seven independently time-bounded routing scenarios cover explicit fallback,
+automatic/default fallback after executor error, exception, and invalid output,
+and strict failure for the same three fault classes. The strict tests require
+transactional value preservation, zero process-time advance, and zero accepted
+step count. Each scenario completed well below its 15-second test timeout.
+
+| Gate | Result |
+|---|---|
+| Default compatibility | explicit `FALLBACK`, `ERROR`, exception, and invalid output use the CPU oracle |
+| Strict manual runtime | error, exception, and invalid output return `FAILURE` without hidden CPU update |
+| Transaction boundary | sparse values are restored; time and accepted-step count remain zero |
+| Multi-stage/loop exit | integration stages, rebuild, and the ViennaLS outer loop stop on strict failure |
+| Controller lifecycle | only successful manual Vulkan selects `FAIL`; configure/CPU/error/clear exits select `FALLBACK` |
+| Focused routing tests | seven of seven scenarios pass independently |
+| Validation layers | five-test Level Set chain passes twice with `VK_LAYER_KHRONOS_validation` |
+| No-SDK behavior | Vulkan-disabled configuration exposes no controller test; all seven CPU routing tests pass |
+| Patch applicability | the ViennaLS patch dry-run applies to both modified upstream headers |
+| Path policy | SDK, dependency, shader, and profile locations remain environment/caller supplied; no resolved local path is tracked |
+
 ## Next slice
 
-The next exit is mode-aware runtime failure handling. P3E currently converts
-executor `ERROR`, exception, and invalid-output outcomes to CPU fallback even
-after a manual Vulkan selection. The seam must retain that compatibility for
-automatic selection while allowing manual Vulkan to stop explicitly without
-performing a hidden CPU value update. `FALLBACK` remains an executor-declared
-unsupported-operation exit and is not silently reclassified as `ERROR`.
+The next exit is a bounded zero-progress contract at the ViennaPS advection
+boundary. A legal all-zero velocity uses ViennaLS's maximum-time sentinel and
+must still finish successfully. A finite zero step or floating-point addition
+that cannot advance `processTime` must terminate without looping; negative or
+non-finite steps must fail. The ALP non-single-step path needs an equivalent
+inner-loop exit rather than relying only on the outer Process strategy.
 
-In parallel, the analytic strategy needs a bounded no-progress exit when a
-single ViennaLS step advances zero time. After both behavior gates are
-accepted, the Level Set work advances to HRLE active-run classification and
-sparse rebuild, followed by the particle/ray and surface/oxidation stages.
+After that behavior gate is accepted, the Level Set work advances to HRLE
+active-run classification and sparse rebuild, followed by the particle/ray and
+surface/oxidation stages.

@@ -47,6 +47,7 @@ private:
 public:
   using LevelSetUpdateExecutor =
       typename ProcessContext<NumericType, D>::LevelSetUpdateExecutor;
+  using LevelSetUpdateFailurePolicy = viennaps::LevelSetUpdateFailurePolicy;
 
   Process() { initializeStrategies(); }
   Process(SmartPointer<Domain<NumericType, D>> domain) : context_{domain} {
@@ -105,6 +106,15 @@ public:
 
   [[nodiscard]] LevelSetUpdateExecutor getLevelSetUpdateExecutor() const {
     return context_.levelSetUpdateExecutor;
+  }
+
+  void setLevelSetUpdateFailurePolicy(LevelSetUpdateFailurePolicy policy) {
+    context_.levelSetUpdateFailurePolicy = policy;
+  }
+
+  [[nodiscard]] LevelSetUpdateFailurePolicy
+  getLevelSetUpdateFailurePolicy() const {
+    return context_.levelSetUpdateFailurePolicy;
   }
 
   void clearLevelSetUpdateExecutor() { context_.levelSetUpdateExecutor = {}; }

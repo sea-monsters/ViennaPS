@@ -19,6 +19,8 @@ enum class ProcessResult {
   NOT_IMPLEMENTED
 };
 
+enum class LevelSetUpdateFailurePolicy { FALLBACK, FAIL };
+
 VIENNAPS_TEMPLATE_ND(NumericType, D) struct ProcessContext {
   using LevelSetUpdateExecutor =
       typename viennals::Advect<NumericType, D>::LevelSetUpdateExecutor;
@@ -39,6 +41,8 @@ VIENNAPS_TEMPLATE_ND(NumericType, D) struct ProcessContext {
   AtomicLayerProcessParameters atomicLayerParams;
   SurfaceDiffusionParameters surfaceDiffusionParams;
   LevelSetUpdateExecutor levelSetUpdateExecutor;
+  LevelSetUpdateFailurePolicy levelSetUpdateFailurePolicy =
+      LevelSetUpdateFailurePolicy::FALLBACK;
   std::string intermediateOutputPath = "";
 
   // Simulation state

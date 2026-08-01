@@ -18,10 +18,12 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 namespace {
 
 using Controller = viennaps::vulkan::levelset::LevelSetProcessController<2>;
+using viennaps::LevelSetUpdateFailurePolicy;
 using viennaps::compute::ComputeBackend;
 using viennaps::compute::HardwareFingerprint;
 using viennaps::compute::ManualSelectionConfig;
@@ -105,14 +107,20 @@ struct TempDirectoryGuard {
       profilePath.string(), record, &error);
 }
 
-[[nodiscard]] Controller::Result configure(
+struct ConfigureResult {
+  Controller::Result controller;
+  LevelSetUpdateFailurePolicy failurePolicy;
+};
+
+[[nodiscard]] ConfigureResult configure(
     const ManualSelectionConfig &selection, const HardwareFingerprint &hardware,
     const StageWorkload &workload, const ComputeSessionOptions &manualDevice,
     const std::string_view spirvPath, const std::string_view profilePath) {
   viennaps::Process<float, 2> process;
   Controller controller;
-  return controller.configure(process, selection, hardware, workload,
-                              manualDevice, spirvPath, profilePath);
+  auto result = controller.configure(process, selection, hardware, workload,
+                                     manualDevice, spirvPath, profilePath);
+  return {std::move(result), process.getLevelSetUpdateFailurePolicy()};
 }
 
 } // namespace
@@ -132,100 +140,142 @@ int main() {
                                viennaps::compute::RayMode::NONE,
                                true};
   const TempDirectoryGuard missingProfile{uniqueTempDirectory()};
-  const auto missingResult =
+  const auto missingConfiguration =
       configure({}, hardware, workload, {}, {}, missingProfile.path.string());
+  const auto &missingResult = missingConfiguration.controller;
   VC_TEST_ASSERT(missingResult.ok);
   VC_TEST_ASSERT(missingResult.prepared);
   VC_TEST_ASSERT(missingResult.degraded);
   VC_TEST_ASSERT(!missingResult.usingVulkan);
   VC_TEST_ASSERT(missingResult.selectedBackend == ComputeBackend::CPU);
+  VC_TEST_ASSERT(missingConfiguration.failurePolicy ==
+                 LevelSetUpdateFailurePolicy::FALLBACK);
 
   const TempDirectoryGuard validProfile{uniqueTempDirectory()};
   VC_TEST_ASSERT(writeProfile(validProfile.path, hardware, error));
 
-  const auto autoVulkan =
+  const auto autoConfiguration =
       configure({}, hardware, workload, {}, VIENNAPS_LEVELSET_UPDATE_SPV_PATH,
                 validProfile.path.string());
+  const auto &autoVulkan = autoConfiguration.controller;
   VC_TEST_ASSERT(autoVulkan.ok);
   VC_TEST_ASSERT(autoVulkan.prepared);
   VC_TEST_ASSERT(autoVulkan.usingVulkan);
   VC_TEST_ASSERT(!autoVulkan.degraded);
   VC_TEST_ASSERT(autoVulkan.selectedBackend == ComputeBackend::VULKAN);
+  VC_TEST_ASSERT(autoConfiguration.failurePolicy ==
+                 LevelSetUpdateFailurePolicy::FALLBACK);
 
-  const auto autoShaderFallback =
+  const auto autoShaderConfiguration =
       configure({}, hardware, workload, {}, "missing-controller-shader.spv",
                 validProfile.path.string());
+  const auto &autoShaderFallback = autoShaderConfiguration.controller;
   VC_TEST_ASSERT(autoShaderFallback.ok);
   VC_TEST_ASSERT(autoShaderFallback.prepared);
   VC_TEST_ASSERT(autoShaderFallback.degraded);
   VC_TEST_ASSERT(!autoShaderFallback.usingVulkan);
   VC_TEST_ASSERT(autoShaderFallback.selectedBackend == ComputeBackend::CPU);
+  VC_TEST_ASSERT(autoShaderConfiguration.failurePolicy ==
+                 LevelSetUpdateFailurePolicy::FALLBACK);
 
   ManualSelectionConfig manualCpu;
   manualCpu.selectionMode = SelectionMode::MANUAL;
   manualCpu.globalBackend = ComputeBackend::CPU;
-  const auto cpuResult = configure(manualCpu, hardware, workload, {}, {},
-                                   validProfile.path.string());
+  const auto cpuConfiguration = configure(manualCpu, hardware, workload, {}, {},
+                                          validProfile.path.string());
+  const auto &cpuResult = cpuConfiguration.controller;
   VC_TEST_ASSERT(cpuResult.ok);
   VC_TEST_ASSERT(cpuResult.prepared);
   VC_TEST_ASSERT(!cpuResult.degraded);
   VC_TEST_ASSERT(!cpuResult.usingVulkan);
   VC_TEST_ASSERT(cpuResult.selectedBackend == ComputeBackend::CPU);
+  VC_TEST_ASSERT(cpuConfiguration.failurePolicy ==
+                 LevelSetUpdateFailurePolicy::FALLBACK);
 
   ManualSelectionConfig manualVulkan;
   manualVulkan.selectionMode = SelectionMode::MANUAL;
   manualVulkan.globalBackend = ComputeBackend::VULKAN;
-  const auto manualShaderError =
+  const auto manualShaderConfiguration =
       configure(manualVulkan, hardware, workload, {},
                 "missing-controller-shader.spv", validProfile.path.string());
+  const auto &manualShaderError = manualShaderConfiguration.controller;
   VC_TEST_ASSERT(!manualShaderError.ok);
   VC_TEST_ASSERT(manualShaderError.prepared);
   VC_TEST_ASSERT(!manualShaderError.degraded);
   VC_TEST_ASSERT(!manualShaderError.usingVulkan);
+  VC_TEST_ASSERT(manualShaderConfiguration.failurePolicy ==
+                 LevelSetUpdateFailurePolicy::FALLBACK);
 
   ComputeSessionOptions selectedDevice;
   selectedDevice.manualDeviceName = hardware.deviceName;
-  const auto manualVulkanResult =
+  const auto manualVulkanConfiguration =
       configure(manualVulkan, hardware, workload, selectedDevice,
                 VIENNAPS_LEVELSET_UPDATE_SPV_PATH, validProfile.path.string());
+  const auto &manualVulkanResult = manualVulkanConfiguration.controller;
   VC_TEST_ASSERT(manualVulkanResult.ok);
   VC_TEST_ASSERT(manualVulkanResult.prepared);
   VC_TEST_ASSERT(manualVulkanResult.usingVulkan);
   VC_TEST_ASSERT(manualVulkanResult.selectedBackend == ComputeBackend::VULKAN);
+  VC_TEST_ASSERT(manualVulkanConfiguration.failurePolicy ==
+                 LevelSetUpdateFailurePolicy::FAIL);
+
+  viennaps::Process<float, 2> clearProcess;
+  Controller clearController;
+  const auto clearConfiguration = clearController.configure(
+      clearProcess, manualVulkan, hardware, workload, selectedDevice,
+      VIENNAPS_LEVELSET_UPDATE_SPV_PATH, validProfile.path.string());
+  VC_TEST_ASSERT(clearConfiguration.ok);
+  VC_TEST_ASSERT(clearProcess.getLevelSetUpdateFailurePolicy() ==
+                 LevelSetUpdateFailurePolicy::FAIL);
+  clearController.clear(clearProcess);
+  VC_TEST_ASSERT(clearProcess.getLevelSetUpdateFailurePolicy() ==
+                 LevelSetUpdateFailurePolicy::FALLBACK);
 
   auto staleHardware = hardware;
   staleHardware.driverVersion += "-stale";
-  const auto staleResult = configure({}, staleHardware, workload, {}, {},
-                                     validProfile.path.string());
+  const auto staleConfiguration = configure({}, staleHardware, workload, {}, {},
+                                            validProfile.path.string());
+  const auto &staleResult = staleConfiguration.controller;
   VC_TEST_ASSERT(staleResult.ok);
   VC_TEST_ASSERT(staleResult.prepared);
   VC_TEST_ASSERT(staleResult.degraded);
   VC_TEST_ASSERT(!staleResult.usingVulkan);
   VC_TEST_ASSERT(staleResult.selectedBackend == ComputeBackend::CPU);
+  VC_TEST_ASSERT(staleConfiguration.failurePolicy ==
+                 LevelSetUpdateFailurePolicy::FALLBACK);
 
   auto invalidWorkload = workload;
   invalidWorkload.stage = Stage::RAY_TRACING;
-  const auto invalidResult = configure({}, hardware, invalidWorkload, {}, {},
-                                       validProfile.path.string());
+  const auto invalidConfiguration = configure({}, hardware, invalidWorkload, {},
+                                              {}, validProfile.path.string());
+  const auto &invalidResult = invalidConfiguration.controller;
   VC_TEST_ASSERT(!invalidResult.ok);
   VC_TEST_ASSERT(!invalidResult.prepared);
   VC_TEST_ASSERT(!invalidResult.message.empty());
+  VC_TEST_ASSERT(invalidConfiguration.failurePolicy ==
+                 LevelSetUpdateFailurePolicy::FALLBACK);
 
   auto zeroWorkload = workload;
   zeroWorkload.estimatedBytes = 0U;
-  const auto zeroWorkloadResult =
+  const auto zeroWorkloadConfiguration =
       configure({}, hardware, zeroWorkload, {}, {}, validProfile.path.string());
+  const auto &zeroWorkloadResult = zeroWorkloadConfiguration.controller;
   VC_TEST_ASSERT(!zeroWorkloadResult.ok);
   VC_TEST_ASSERT(!zeroWorkloadResult.prepared);
   VC_TEST_ASSERT(!zeroWorkloadResult.message.empty());
+  VC_TEST_ASSERT(zeroWorkloadConfiguration.failurePolicy ==
+                 LevelSetUpdateFailurePolicy::FALLBACK);
 
   ManualSelectionConfig fp64Selection;
   fp64Selection.precision = Precision::FP64;
-  const auto fp64Result = configure(fp64Selection, hardware, workload, {}, {},
-                                    validProfile.path.string());
+  const auto fp64Configuration = configure(fp64Selection, hardware, workload,
+                                           {}, {}, validProfile.path.string());
+  const auto &fp64Result = fp64Configuration.controller;
   VC_TEST_ASSERT(!fp64Result.ok);
   VC_TEST_ASSERT(!fp64Result.prepared);
   VC_TEST_ASSERT(!fp64Result.message.empty());
+  VC_TEST_ASSERT(fp64Configuration.failurePolicy ==
+                 LevelSetUpdateFailurePolicy::FALLBACK);
 
   std::cout << "[LevelSetController] auto/manual/stale/shader/gates PASS\n";
   return EXIT_SUCCESS;

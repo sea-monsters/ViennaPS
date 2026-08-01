@@ -12,6 +12,7 @@
 +  using LevelSetUpdateRates = std::vector<std::vector<LevelSetUpdateRate>>;
 +
 +  enum class LevelSetUpdateStatus { FALLBACK, HANDLED, ERROR };
++  enum class LevelSetUpdateFailurePolicy { FALLBACK, FAIL };
 +
 +  struct LevelSetUpdateContext {
 +    const typename Domain<T, D>::DomainType &domain;
@@ -34,9 +35,17 @@
 +private:
 @@ -83,0 +113 @@ template <class T, int D> class Advect {
 +  LevelSetUpdateExecutor levelSetUpdateExecutor = nullptr;
++  LevelSetUpdateFailurePolicy levelSetUpdateFailurePolicy =
++      LevelSetUpdateFailurePolicy::FALLBACK;
++  bool levelSetUpdateExecutorFailed = false;
++  std::string levelSetUpdateExecutorError;
 @@ -87 +117 @@ template <class T, int D> class Advect {
 -  std::vector<std::vector<std::pair<std::pair<T, T>, T>>> storedRates;
 +  LevelSetUpdateRates storedRates;
+@@ -238,0 +269,3 @@ template <class T, int D> class Advect {
++    if (levelSetUpdateExecutorFailed)
++      return;
++
 @@ -683,0 +714,85 @@ template <class T, int D> class Advect {
 +  bool tryLevelSetUpdateExecutor(const double dt) {
 +    if (!levelSetUpdateExecutor)
@@ -91,6 +100,11 @@
 +    if (!validOutput) {
 +      if (executorError.empty())
 +        executorError = "invalid output shape or non-finite value";
++      if (levelSetUpdateFailurePolicy == LevelSetUpdateFailurePolicy::FAIL) {
++        levelSetUpdateExecutorFailed = true;
++        levelSetUpdateExecutorError = executorError;
++        return true;
++      }
 +      VIENNACORE_LOG_WARNING(
 +          "Level Set update executor failed; using CPU fallback: " +
 +          executorError);
@@ -123,17 +137,64 @@
 +    return true;
 +  }
 +
-@@ -701,0 +817,5 @@ template <class T, int D> class Advect {
+@@ -696,0 +815,10 @@ template <class T, int D> class Advect {
++    std::vector<std::vector<T>> originalValues;
++    if (levelSetUpdateExecutor &&
++        levelSetUpdateFailurePolicy == LevelSetUpdateFailurePolicy::FAIL) {
++      originalValues.reserve(topDomain.getNumberOfSegments());
++      for (unsigned p = 0; p < topDomain.getNumberOfSegments(); ++p) {
++        originalValues.push_back(topDomain.getDomainSegment(p).definedValues);
++      }
++    }
++
+@@ -701,0 +830,11 @@ template <class T, int D> class Advect {
 +    if (tryLevelSetUpdateExecutor(dt)) {
++      if (levelSetUpdateExecutorFailed) {
++        for (unsigned p = 0; p < topDomain.getNumberOfSegments(); ++p) {
++          topDomain.getDomainSegment(p).definedValues =
++              std::move(originalValues[p]);
++        }
++      }
 +      storedRates.clear();
 +      return;
 +    }
 +
-@@ -970,0 +1091,7 @@ public:
+@@ -802,0 +942,3 @@ template <class T, int D> class Advect {
++    if (levelSetUpdateExecutorFailed)
++      return;
++
+@@ -970,0 +1091,20 @@ public:
 +  /// Set an optional executor for the value-update phase between rate
-+  /// calculation and sparse-domain rebuild. Returning FALLBACK or ERROR leaves
-+  /// the domain values untouched and executes the built-in CPU implementation.
++  /// calculation and sparse-domain rebuild. Returning FALLBACK uses the
++  /// built-in CPU implementation; ERROR uses it only in FALLBACK policy mode.
 +  void setLevelSetUpdateExecutor(LevelSetUpdateExecutor executor) {
 +    levelSetUpdateExecutor = std::move(executor);
 +  }
 +
++  void setLevelSetUpdateFailurePolicy(
++      LevelSetUpdateFailurePolicy policy) {
++    levelSetUpdateFailurePolicy = policy;
++  }
++
++  bool hasLevelSetUpdateError() const {
++    return levelSetUpdateExecutorFailed;
++  }
++
++  const std::string &getLevelSetUpdateError() const {
++    return levelSetUpdateExecutorError;
++  }
++
+@@ -1017,1 +1133,3 @@
+   void apply() {
++    levelSetUpdateExecutorFailed = false;
++    levelSetUpdateExecutorError.clear();
++
+@@ -1038 +1175 @@
+-        if (performOnlySingleStep)
++        if (levelSetUpdateExecutorFailed || performOnlySingleStep)
+--- a/include/viennals/lsAdvectIntegrationSchemes.hpp
++++ b/include/viennals/lsAdvectIntegrationSchemes.hpp
+@@ -51,0 +52,3 @@
++
++    if (kernel.hasLevelSetUpdateError())
++      return 0.;

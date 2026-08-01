@@ -103,6 +103,10 @@ public:
     context_.levelSetUpdateExecutor = std::move(executor);
   }
 
+  [[nodiscard]] LevelSetUpdateExecutor getLevelSetUpdateExecutor() const {
+    return context_.levelSetUpdateExecutor;
+  }
+
   void clearLevelSetUpdateExecutor() { context_.levelSetUpdateExecutor = {}; }
 
   void apply() {

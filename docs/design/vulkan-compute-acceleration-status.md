@@ -724,16 +724,53 @@ header warnings are isolated or fixed.
 | No-SDK behavior | Vulkan-disabled configuration generates no controller target/test and the CPU routing test passes |
 | Path policy | profile/shader inputs are caller/environment supplied; changed files contain no resolved local paths |
 
+## P3I-levelset-controller-execution: callback lifetime gate
+
+- Status: accepted locally as the Process-owned callback lifetime and direct
+  ViennaLS execution gate; full `Process::apply` progress remains a separate
+  open issue
+- Date: 2026-08-02
+- Scope: execute the callback installed by P3H after the controller's local
+  scope ends and compare its one-step result with the P3F CPU oracle
+
+`Process::getLevelSetUpdateExecutor` returns a copy of the installed generic
+executor without exposing Vulkan runtime types. The execution smoke configures
+an automatic Vulkan backend, destroys the controller, copies the executor from
+the still-live `Process`, and supplies it to a bounded ViennaLS Forward Euler
+step. The copied callback retains the shared deployment context and SPIR-V
+payload. The test asserts that it is non-empty, is called exactly once, returns
+`HANDLED`, and reports no error; a CPU run without an executor is the oracle.
+The advected time matches exactly and the extracted surface nodes match at the
+existing 1e-6 geometry tolerance.
+
+An initial version deliberately attempted the same gate through
+`Process::apply`; the CPU path itself exceeded a 15-second test limit and was
+stopped without retry. Read-only diagnosis found that `Advect` can return a
+zero single-step time while `AnalyticProcessStrategy` has no explicit
+no-progress exit, leaving its outer duration loop able to repeat indefinitely.
+The accepted smoke therefore verifies the controller/Process/ViennaLS callback
+lifetime directly and does not conceal the separate strategy-progress defect.
+
+| Gate | Result |
+|---|---|
+| Callback ownership | executor copied from `Process` remains valid after controller destruction |
+| Actual Vulkan execution | callback is called once, returns `HANDLED`, and has an empty error |
+| CPU parity | exact advected time and surface nodes within 1e-6 |
+| Bounded runtime | focused execution CTest completes in under one second locally |
+| Validation layers | five-test Level Set chain passes twice with `VK_LAYER_KHRONOS_validation` |
+| No-SDK behavior | Vulkan-disabled configuration generates no execution target/test and the CPU routing test passes |
+| Path policy | test profile/temp paths are runtime generated; changed files contain no resolved local paths |
+
 ## Next slice
 
-The next exit is a bounded full production execution gate. The controller-
-installed callback must execute a simple ViennaLS step and match the frozen CPU
-oracle after the controller's local scope ends. A direct analytic
-`Process::apply` experiment did not terminate within 120 seconds and was
-reverted; this progress-stall must be diagnosed separately rather than hidden
-inside the controller smoke. P3E currently converts executor `ERROR` outcomes
-to CPU fallback even after a manual Vulkan selection; the production gate must
-therefore define and test a mode-aware runtime failure policy before claiming
-strict manual behavior end to end. Once the lifetime/production gate is
+The next exit is mode-aware runtime failure handling. P3E currently converts
+executor `ERROR`, exception, and invalid-output outcomes to CPU fallback even
+after a manual Vulkan selection. The seam must retain that compatibility for
+automatic selection while allowing manual Vulkan to stop explicitly without
+performing a hidden CPU value update. `FALLBACK` remains an executor-declared
+unsupported-operation exit and is not silently reclassified as `ERROR`.
+
+In parallel, the analytic strategy needs a bounded no-progress exit when a
+single ViennaLS step advances zero time. After both behavior gates are
 accepted, the Level Set work advances to HRLE active-run classification and
 sparse rebuild, followed by the particle/ray and surface/oxidation stages.

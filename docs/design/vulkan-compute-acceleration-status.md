@@ -290,6 +290,37 @@ workgroup-count, and zero-length contracts are checked before GPU execution.
 | Repeatability | full Intel Arc smoke passes twice consecutively |
 | No-SDK regression | primitive targets remain cleanly skipped without `VULKAN_SDK` |
 
+## S2B-primitive-4: gather, scatter, and histogram
+
+- Status: accepted locally
+- Date: 2026-08-01
+- Scope: reusable FP32 gather/scatter and uint32 histogram primitives; this
+  slice alone does not set `vulkanPrimitiveSuitePass`
+
+The API validates logical buffer lengths, device dispatch limits, aliases,
+indices, histogram values, and bin counts before submission. Gather and
+scatter reject out-of-range indices. Scatter rejects duplicate destinations
+by default; an explicit option applies a deterministic host-side last-write-
+wins compaction before a race-free GPU dispatch. Histogram clears only its
+declared bins and uses device atomics after host validation guarantees every
+input is in range.
+
+Unused descriptor bindings are backed by live one-element dummy buffers with
+ranges constrained to those allocations. Deterministic scatter scratch
+buffers remain alive through queue completion. Initialization, reset, host
+flush/invalidate, barriers, and object destruction follow the shared Vulkan
+runtime contracts.
+
+| Gate | Result |
+|---|---|
+| Warning gate | library and production smoke build under MSVC C++20 `/W4 /WX` |
+| CPU differential | gather, scatter, and histogram exact at 0, 1, 16, 257, and 65,535 elements |
+| Bounds and tails | gather, scatter, and histogram guard elements remain unchanged |
+| Duplicate policy | default rejection and deterministic last-write-wins opt-in both pass |
+| Rejection paths | out-of-range gather/scatter indices, histogram values, and zero bins fail before submission |
+| Repeatability | full Intel Arc smoke passes twice consecutively |
+| Local paths | SDK discovery uses `VULKAN_SDK`; tracked inputs contain no resolved local SDK or reference-tree path |
+
 ## P3-oracle-1: frozen ViennaLS single-step CPU oracle
 
 - Status: accepted locally as a CPU reference, not a Vulkan implementation
@@ -317,7 +348,6 @@ oracle source itself compiles without a warning-specific source workaround.
 
 ## Next slice
 
-The next S2B slice removes the current 256-block bound and adds the remaining
-primitive contracts. In parallel, P3 can implement the first Vulkan Level Set
-step against the frozen oracle above. Higher-level process integration remains
-behind the ViennaCS dependency gate.
+The next S2B slice removes the current 256-block reduction/scan bound. P3 can
+then implement the first Vulkan Level Set step against the frozen oracle above.
+Higher-level process integration remains behind the ViennaCS dependency gate.

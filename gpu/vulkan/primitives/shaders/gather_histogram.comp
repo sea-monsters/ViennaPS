@@ -1,0 +1,69 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(constant_id = 0) const uint operation = 0u;
+
+layout(push_constant) uniform PushConstants {
+  uint elementCount;
+  uint outputElementCount;
+  uint binCount;
+} pc;
+
+layout(std430, binding = 0) readonly buffer InputFloat {
+  float inputFloat[];
+};
+
+layout(std430, binding = 1) buffer OutputFloat {
+  float outputFloat[];
+};
+
+layout(std430, binding = 2) readonly buffer InputIndices {
+  uint indices[];
+};
+
+layout(std430, binding = 3) buffer Histogram {
+  uint histogram[];
+};
+
+void gather_kernel() {
+  const uint idx = gl_GlobalInvocationID.x;
+  if (idx >= pc.elementCount) {
+    return;
+  }
+  const uint sourceIndex = indices[idx];
+  outputFloat[idx] = inputFloat[sourceIndex];
+}
+
+void scatter_kernel() {
+  const uint idx = gl_GlobalInvocationID.x;
+  if (idx >= pc.elementCount) {
+    return;
+  }
+  const uint dstIndex = indices[idx];
+  if (dstIndex >= pc.outputElementCount) {
+    return;
+  }
+  outputFloat[dstIndex] = inputFloat[idx];
+}
+
+void histogram_kernel() {
+  const uint idx = gl_GlobalInvocationID.x;
+  if (idx >= pc.elementCount) {
+    return;
+  }
+  const uint value = floatBitsToUint(inputFloat[idx]);
+  if (value < pc.binCount) {
+    atomicAdd(histogram[value], 1u);
+  }
+}
+
+void main() {
+  if (operation == 0u) {
+    gather_kernel();
+  } else if (operation == 1u) {
+    scatter_kernel();
+  } else if (operation == 2u) {
+    histogram_kernel();
+  }
+}

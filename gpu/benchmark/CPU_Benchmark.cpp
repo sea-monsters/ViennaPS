@@ -1,0 +1,158 @@
+#include <lsToDiskMesh.hpp>
+#include <process/psTranslationField.hpp>
+#include <psElementToPointData.hpp>
+#include <rayTraceDisk.hpp>
+#include <rayTraceTriangle.hpp>
+
+#include "Benchmark.hpp"
+
+int main() {
+  omp_set_num_threads(16);
+  using NumericType = float;
+  constexpr int D = DIM;
+
+  auto particle = makeCPUParticle<NumericType, D>();
+  std::string fluxLabel = particleType == 0 ? "flux" : "ionFlux";
+
+  if constexpr (runDisk) { // Disk
+    std::ofstream file("CPU_Benchmark_Disk.txt");
+    file << "Meshing;Tracing;Postprocessing;GridDelta\n";
+
+    viennaray::TraceDisk<NumericType, D> tracer;
+    tracer.setNumberOfRaysPerPoint(raysPerPoint);
+    if (FIXED_RAYS)
+      tracer.setNumberOfRaysFixed(numRays);
+    tracer.setUseRandomSeeds(false);
+    tracer.setParticleType(particle);
+
+    std::cout << "Starting Disk Benchmark\n";
+
+    for (int i = 0; i < gridDeltaValues.size(); i++) {
+      std::cout << "  Grid Delta: " << gridDeltaValues[i] << "\n";
+      auto domain = MAKE_GEO<NumericType>(gridDeltaValues[i]);
+
+      auto diskMesh = viennals::Mesh<NumericType>::New();
+      auto translator = SmartPointer<TranslatorType>::New();
+      viennals::ToDiskMesh<NumericType, D> mesher(domain->getSurface(),
+                                                  diskMesh);
+      mesher.setTranslator(translator);
+
+      for (int j = 0; j < numRuns; j++) {
+        std::cout << "    Process Step: " << j + 1 << "\n";
+
+        Timer timer;
+
+        // MESHING
+        timer.start();
+        mesher.apply();
+        const auto &materialIds = *diskMesh->getMaterialIds();
+        const auto &normals = *diskMesh->getNormals();
+        tracer.setGeometry(diskMesh->nodes, normals, domain->getGridDelta());
+        tracer.setMaterialIds(materialIds);
+        timer.finish();
+        file << timer.currentDuration << ";";
+
+        // TRACING
+        timer.start();
+        tracer.apply();
+        timer.finish();
+        file << timer.currentDuration << ";";
+
+        // POSTPROCESSING
+        timer.start();
+        auto flux = std::move(*tracer.getLocalData().getScalarData(fluxLabel));
+        tracer.normalizeFlux(flux);
+        int smoothingNeighbors = 1;
+        tracer.smoothFlux(flux, smoothingNeighbors);
+        timer.finish();
+        file << timer.currentDuration << ";";
+
+        file << gridDeltaValues[i] << "\n";
+      }
+    }
+
+    file.close();
+  }
+
+  if constexpr (runTriangle) { // Triangle
+    std::ofstream file("CPU_Benchmark_Triangle.txt");
+    file << "Meshing;Tracing;Postprocessing;GridDelta\n";
+
+    std::cout << "Starting Triangle Benchmark\n";
+
+    viennaray::TraceTriangle<NumericType, D> tracer;
+    tracer.setNumberOfRaysPerPoint(raysPerPoint);
+    if (FIXED_RAYS)
+      tracer.setNumberOfRaysFixed(numRays);
+    tracer.setUseRandomSeeds(false);
+    tracer.setParticleType(particle);
+
+    const auto &dataLabels = particle->getLocalDataLabels();
+
+    for (int i = 0; i < gridDeltaValues.size(); i++) {
+      std::cout << "  Grid Delta: " << gridDeltaValues[i] << "\n";
+      auto domain = MAKE_GEO<NumericType>(gridDeltaValues[i]);
+
+      auto diskMesh = viennals::Mesh<NumericType>::New();
+      auto translator = SmartPointer<TranslatorType>::New();
+      viennals::ToDiskMesh<NumericType, D> diskMesher(domain->getSurface(),
+                                                      diskMesh);
+      diskMesher.setTranslator(translator);
+
+      auto elementKdTree =
+          SmartPointer<KDTree<NumericType, Vec3D<NumericType>>>::New();
+      auto surfMesh = viennals::Mesh<NumericType>::New();
+
+      auto velocityField =
+          SmartPointer<DefaultVelocityField<NumericType, D>>::New();
+      auto translationField =
+          SmartPointer<TranslationField<NumericType, D>>::New(
+              velocityField, domain->getMaterialMap(), 1);
+      translationField->setTranslator(translator);
+
+      for (int j = 0; j < numRuns; j++) {
+        std::cout << "    Process Step: " << j + 1 << "\n";
+
+        Timer timer;
+
+        // MESHING
+        timer.start();
+        diskMesher.apply();
+        translationField->buildKdTree(diskMesh->nodes);
+        setupTriangleGeometry<NumericType, D, decltype(tracer)>(
+            domain, surfMesh, elementKdTree, tracer);
+        timer.finish();
+        file << timer.currentDuration << ";";
+
+        // TRACING
+        timer.start();
+        tracer.apply();
+        timer.finish();
+        file << timer.currentDuration << ";";
+
+        // POSTPROCESSING
+        timer.start();
+        auto pointData = PointData<NumericType>::New();
+        auto fluxResult = std::move(*tracer.getLocalData().getScalarData(0));
+        tracer.normalizeFlux(fluxResult);
+        std::vector<std::vector<NumericType>> fluxResultVec;
+        fluxResultVec.push_back(std::move(fluxResult));
+        if constexpr (particleType == 1) {
+          fluxResult = std::move(*tracer.getLocalData().getScalarData(1));
+          tracer.normalizeFlux(fluxResult);
+          fluxResultVec.push_back(std::move(fluxResult));
+        }
+        ElementToPointData<NumericType, float, float> post(
+            dataLabels, pointData, elementKdTree, diskMesh, surfMesh,
+            domain->getGridDelta() * 2.0f);
+        post.setElementDataArrays(std::move(fluxResultVec));
+        post.apply();
+        timer.finish();
+        file << timer.currentDuration << ";";
+
+        file << gridDeltaValues[i] << "\n";
+      }
+    }
+    file.close();
+  }
+}

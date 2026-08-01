@@ -1,0 +1,42 @@
+#pragma once
+
+#include "psProcessContext.hpp"
+
+#include <vcPointData.hpp>
+#include <vcTimer.hpp>
+
+namespace viennaps {
+
+VIENNAPS_TEMPLATE_ND(NumericType, D) class FluxEngine {
+protected:
+  viennacore::Timer<> timer_;
+  unsigned fluxCalculationsCount_ = 0;
+
+public:
+  virtual ~FluxEngine() = default;
+
+  // Implementation specific functions (to be implemented by derived classes,
+  // currently CPU or GPU Process)
+  virtual ProcessResult checkInput(ProcessContext<NumericType, D> &context) = 0;
+
+  virtual ProcessResult initialize(ProcessContext<NumericType, D> &context) = 0;
+
+  virtual ProcessResult
+  updateSurface(ProcessContext<NumericType, D> &context) = 0;
+
+  // Flux from source plane to surface
+  virtual ProcessResult calculateSourceFluxes(
+      ProcessContext<NumericType, D> &context,
+      viennacore::SmartPointer<PointData<NumericType>> &fluxes) = 0;
+
+  // Flux from surface to surface (e.g. desorption flux)
+  virtual ProcessResult calculateSurfaceFluxes(
+      ProcessContext<NumericType, D> &context,
+      viennacore::SmartPointer<PointData<NumericType>> &fluxes) = 0;
+
+  auto &getTimer() const { return timer_; }
+  void resetTimer() { timer_.reset(); }
+  auto getFluxCalculationsCount() const { return fluxCalculationsCount_; }
+};
+
+} // namespace viennaps

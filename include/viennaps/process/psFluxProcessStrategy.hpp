@@ -1,0 +1,617 @@
+#pragma once
+
+#include "../psUnits.hpp"
+#include "psAdvectionHandler.hpp"
+#include "psCoverageManager.hpp"
+#include "psFluxEngine.hpp"
+#include "psProcessStrategy.hpp"
+#include "psSurfaceDiffusion.hpp"
+
+#include <lsToDiskMesh.hpp>
+
+namespace viennaps {
+
+VIENNAPS_TEMPLATE_ND(NumericType, D)
+class FluxProcessStrategy final : public ProcessStrategy<NumericType, D> {
+  using TranslatorType = std::unordered_map<unsigned long, unsigned long>;
+  static constexpr const char *materialIdsLabel = "MaterialIds";
+
+  AdvectionHandler<NumericType, D> advectionHandler_;
+  CoverageManager<NumericType, D> coverageManager_;
+  std::unique_ptr<FluxEngine<NumericType, D>> fluxEngine_;
+
+  viennals::ToDiskMesh<NumericType, D> meshGenerator_;
+  SmartPointer<TranslatorType> translator_ = nullptr;
+  SmartPointer<KDTree<NumericType, Vec3D<NumericType>>> kdTree_ = nullptr;
+
+  Timer<> callbackTimer_{};
+  Timer<> diffusionTimer_{};
+
+public:
+  DEFINE_CLASS_NAME(FluxProcessStrategy)
+
+  FluxProcessStrategy() = default;
+  FluxProcessStrategy(std::unique_ptr<FluxEngine<NumericType, D>> fluxEngine)
+      : fluxEngine_(std::move(fluxEngine)) {}
+
+  ProcessResult execute(ProcessContext<NumericType, D> &context) override {
+    // Validate required components
+    PROCESS_CHECK(validateContext(context));
+
+    // Setup phase
+    PROCESS_CHECK(setupProcess(context));
+
+    // Main processing loop
+    return executeProcessingLoop(context);
+  }
+
+  bool canHandle(const ProcessContext<NumericType, D> &context) const override {
+    return context.processDuration > 0.0 && !context.flags.isGeometric &&
+           !context.flags.isAnalytic && context.flags.useFluxEngine &&
+           !context.flags.isALP;
+  }
+
+  ProcessResult calculateFlux(ProcessContext<NumericType, D> &context) {
+    // Validate required components
+    PROCESS_CHECK(validateContext(context));
+
+    // Setup phase
+    PROCESS_CHECK(setupProcess(context));
+
+    if (context.flags.useCoverages) {
+      coverageInitIterations(context);
+    }
+
+    updateState(context);
+    PROCESS_CHECK(fluxEngine_->updateSurface(context));
+
+    // Calculate source fluxes
+    auto fluxes = PointData<NumericType>::New();
+    PROCESS_CHECK(fluxEngine_->calculateSourceFluxes(context, fluxes));
+
+    // Calculate desorption fluxes
+    if (context.flags.hasSurfaceDesorption) {
+      auto desorptionFlux = PointData<NumericType>::New();
+      if (fluxEngine_->calculateSurfaceFluxes(context, desorptionFlux) ==
+          ProcessResult::SUCCESS) {
+        fluxes->mergeScalarData(*desorptionFlux);
+      }
+    }
+
+    // copy fluxes to cell data
+    context.diskMesh->getCellData().appendReplaceData(*fluxes);
+
+    return ProcessResult::SUCCESS;
+  }
+
+  bool requiresFluxEngine() const override {
+    if (!fluxEngine_)
+      return true;
+    return false;
+  }
+
+  void
+  setFluxEngine(std::unique_ptr<FluxEngine<NumericType, D>> engine) override {
+    fluxEngine_ = std::move(engine);
+  }
+
+private:
+  static ProcessResult
+  validateContext(const ProcessContext<NumericType, D> &context) {
+
+    context.model->initialize(context.domain, context.processTime);
+
+    if (!context.model->getSurfaceModel()) {
+      VIENNACORE_LOG_ERROR("No surface model passed to Process.");
+      return ProcessResult::INVALID_INPUT;
+    }
+
+    if (!context.model->getVelocityField()) {
+      VIENNACORE_LOG_ERROR("No velocity field passed to Process.");
+      return ProcessResult::INVALID_INPUT;
+    }
+
+    VIENNACORE_LOG_DEBUG(
+        "Process parameters:" +
+        util::metaDataToString(context.model->getProcessMetaData()));
+
+    return ProcessResult::SUCCESS;
+  }
+
+  ProcessResult setupProcess(ProcessContext<NumericType, D> &context) {
+    // Initialize disk mesh generator
+    context.diskMesh = viennals::Mesh<NumericType>::New();
+    meshGenerator_.clearLevelSets();
+    meshGenerator_.setMesh(context.diskMesh);
+    for (auto &dom : context.domain->getLevelSets()) {
+      meshGenerator_.insertNextLevelSet(dom);
+    }
+    if (context.domain->getMaterialMap() &&
+        context.domain->getMaterialMap()->size() ==
+            context.domain->getLevelSets().size()) {
+      meshGenerator_.setMaterialMap(
+          context.domain->getMaterialMap()->getMaterialMap());
+    } else {
+      VIENNACORE_LOG_WARNING("No valid material map found in domain.");
+    }
+
+    // Initialize translation field. Convert points ids from level set points
+    // to surface points
+    const int translationMethod = context.needsExtendedVelocities() ? 2 : 1;
+    VIENNACORE_LOG_DEBUG("Using translation field method: " +
+                         std::to_string(translationMethod));
+    context.translationField =
+        SmartPointer<TranslationField<NumericType, D>>::New(
+            context.model->getVelocityField(), context.domain->getMaterialMap(),
+            translationMethod);
+    if (translationMethod == 1) {
+      if (!translator_)
+        translator_ = SmartPointer<TranslatorType>::New();
+      meshGenerator_.setTranslator(translator_);
+      context.translationField->setTranslator(translator_);
+    } else if (translationMethod == 2) {
+      if (!kdTree_)
+        kdTree_ = SmartPointer<KDTree<NumericType, Vec3D<NumericType>>>::New();
+      context.translationField->setKdTree(kdTree_);
+    }
+
+    // Try to initialize coverages
+    meshGenerator_.apply();
+    // Always reinitialize coverages to handle geometry changes between cycles
+    if (coverageManager_.initializeCoverages(context)) {
+      if (!context.coverageParams.initialized) {
+        context.flags.useCoverages = true;
+        VIENNACORE_LOG_INFO("Using coverages.");
+
+        // Translator is needed to map coverage values to level set points
+        if (!translator_)
+          translator_ = SmartPointer<TranslatorType>::New();
+        meshGenerator_.setTranslator(translator_);
+      } else {
+        VIENNACORE_LOG_INFO("Coverages reinitialized.");
+      }
+    }
+    context.model->getSurfaceModel()->initializeSurfaceData(
+        context.diskMesh->nodes.size());
+
+    // Initialize advection handler
+    PROCESS_CHECK(advectionHandler_.initialize(context));
+
+    // Register velocity update callback for high-order time integration
+    if (context.advectionParams.calculateIntermediateVelocities) {
+      advectionHandler_.setVelocityUpdateCallback(
+          [this,
+           &context](SmartPointer<viennals::Domain<NumericType, D>> domain) {
+            // Update the mesh and translator based on the intermediate level
+            // set
+            this->updateState(context);
+
+            // If coverages are used, map them from the grid (which holds t^n
+            // data) to the new intermediate surface
+            if (context.flags.useCoverages) {
+              this->advectionHandler_.updateCoveragesFromAdvectedSurface(
+                  context, this->translator_);
+            }
+
+            // Update the surface in the flux engine
+            if (this->fluxEngine_->updateSurface(context) !=
+                ProcessResult::SUCCESS)
+              return false;
+
+            // Calculate fluxes on the intermediate surface
+            auto fluxes = SmartPointer<PointData<NumericType>>::New();
+            if (fluxEngine_->calculateSourceFluxes(context, fluxes) !=
+                ProcessResult::SUCCESS)
+              return false;
+
+            // Calculate velocities
+            auto velocities = this->calculateVelocities(context, fluxes);
+            context.model->getVelocityField()->prepare(
+                context.domain, velocities, context.processTime);
+
+            return true;
+          });
+    }
+
+    if (context.flags.useAdvectionCallback) {
+      context.model->getAdvectionCallback()->setDomain(context.domain);
+    }
+
+    // Initialize flux engine
+    PROCESS_CHECK(fluxEngine_->checkInput(context));
+    PROCESS_CHECK(fluxEngine_->initialize(context));
+
+    // reset timers
+    callbackTimer_.reset();
+    diffusionTimer_.reset();
+    fluxEngine_->resetTimer();
+    advectionHandler_.resetTimer();
+
+    if (Logger::hasDebug()) {
+      // debug output
+      std::stringstream ss;
+      ss << "Flux Process: " << context.getProcessName() << "\n"
+         << "Grid Delta: " << context.domain->getGridDelta() << "\n"
+         << "Advection Parameters: "
+         << context.advectionParams.toMetaDataString() << "\n"
+         << "Ray Tracing Parameters: "
+         << context.rayTracingParams.toMetaDataString() << "\n";
+      if (context.flags.hasSurfaceDiffusion) {
+        ss << "Surface Diffusion Parameters: "
+           << context.surfaceDiffusionParams.toMetaDataString() << "\n";
+      }
+      Logger::getInstance().addDebug(ss.str()).print();
+    }
+
+    return ProcessResult::SUCCESS;
+  }
+
+  ProcessResult executeProcessingLoop(ProcessContext<NumericType, D> &context) {
+    Timer processTimer;
+    processTimer.start();
+
+    if (context.flags.useCoverages && !context.coverageParams.initialized) {
+      coverageInitIterations(context);
+    }
+
+    while (context.processTime < context.processDuration) {
+#ifdef VIENNATOOLS_PYTHON_BUILD
+      // Check for user interruption
+      if (PyErr_CheckSignals() != 0)
+        return ProcessResult::USER_INTERRUPTED;
+#endif
+
+      // Process one time step
+      PROCESS_CHECK(processTimeStep(context));
+
+      ++context.currentIteration;
+    }
+
+    // Finalize process
+    context.model->finalize(context.domain, context.processTime);
+
+    processTimer.finish();
+
+    if (Logger::hasTiming()) {
+      logProcessingTimes(context, processTimer);
+    }
+
+    if (Logger::hasDebug()) {
+      auto numAdvectionSteps = advectionHandler_.getTotalAdvectionSteps();
+      VIENNACORE_LOG_DEBUG("Total advection steps: " +
+                           std::to_string(numAdvectionSteps));
+      auto numFluxCalculations = fluxEngine_->getFluxCalculationsCount();
+      VIENNACORE_LOG_DEBUG("Total flux calculations: " +
+                           std::to_string(numFluxCalculations));
+    }
+
+    if (static_cast<int>(context.domain->getMetaDataLevel()) > 1) {
+      context.domain->addMetaData("ProcessTime", context.processTime);
+    }
+    if (static_cast<int>(context.domain->getMetaDataLevel()) > 2) {
+      context.domain->addMetaData(context.advectionParams.toMetaData());
+      context.domain->addMetaData(context.rayTracingParams.toMetaData());
+      if (context.flags.useCoverages) {
+        context.domain->addMetaData(context.coverageParams.toMetaData());
+      }
+    }
+
+    return ProcessResult::SUCCESS;
+  }
+
+  ProcessResult processTimeStep(ProcessContext<NumericType, D> &context) {
+    // Prepare advection (expand level set based on discretization scheme)
+    advectionHandler_.prepareAdvection(context);
+
+    // Update surface mesh for flux calculation
+    updateState(context);
+    PROCESS_CHECK(fluxEngine_->updateSurface(context));
+
+    // Calculate fluxes from source plane to surface
+    auto fluxes = PointData<NumericType>::New();
+    PROCESS_CHECK(fluxEngine_->calculateSourceFluxes(context, fluxes));
+
+    // Calculate desorption fluxes
+    if (context.flags.hasSurfaceDesorption) {
+      auto desorptionFlux = PointData<NumericType>::New();
+      if (fluxEngine_->calculateSurfaceFluxes(context, desorptionFlux) ==
+          ProcessResult::SUCCESS) {
+        fluxes->append(*desorptionFlux);
+      }
+    }
+
+    // Calculate surface diffusion of fluxes
+    if (context.flags.hasSurfaceDiffusion) {
+      PROCESS_CHECK(calculateSurfaceDiffusion(context, fluxes));
+    }
+
+    // Update coverages in surface model
+    if (context.flags.useCoverages) {
+      PROCESS_CHECK(updateCoverages(context, fluxes));
+    }
+
+    // Calculate velocities in surface model
+    auto velocities = calculateVelocities(context, fluxes);
+    context.model->getVelocityField()->prepare(context.domain, velocities,
+                                               context.processTime);
+
+    // Apply advection callbacks (pre)
+    if (context.flags.useAdvectionCallback) {
+      if (!applyPreAdvectionCallback(context)) {
+        return ProcessResult::EARLY_TERMINATION;
+      }
+    }
+
+    // Move coverages to level set to propagate them during advection
+    if (context.flags.useCoverages) {
+      PROCESS_CHECK(
+          advectionHandler_.copyCoveragesToLevelSet(context, translator_));
+    }
+
+    if (Logger::hasIntermediate()) {
+      outputIntermediateResults(context, velocities, fluxes);
+    }
+
+    // Perform advection, updates processTime, reduces level set to width 1
+    PROCESS_CHECK(advectionHandler_.performAdvection(context));
+
+    // Update coverages from advected surface
+    if (context.flags.useCoverages) {
+      meshGenerator_.apply();
+      PROCESS_CHECK(advectionHandler_.updateCoveragesFromAdvectedSurface(
+          context, translator_));
+    }
+
+    // Apply advection callbacks (post)
+    if (context.flags.useAdvectionCallback) {
+      if (!applyPostAdvectionCallback(context)) {
+        return ProcessResult::EARLY_TERMINATION;
+      }
+    }
+
+    if (Logger::hasInfo()) {
+      std::stringstream stream;
+      stream << std::fixed << std::setprecision(4)
+             << "Process time: " << context.processTime << " / "
+             << context.processDuration << " " << units::Time::toShortString();
+      Logger::getInstance().addInfo(stream.str()).print();
+    }
+
+    return ProcessResult::SUCCESS;
+  }
+
+  bool applyPreAdvectionCallback(ProcessContext<NumericType, D> &context) {
+    callbackTimer_.start();
+    bool result = context.model->getAdvectionCallback()->applyPreAdvect(
+        context.processTime);
+    callbackTimer_.finish();
+    return result;
+  }
+
+  bool applyPostAdvectionCallback(ProcessContext<NumericType, D> &context) {
+    callbackTimer_.start();
+    bool result = context.model->getAdvectionCallback()->applyPostAdvect(
+        context.processTime);
+    callbackTimer_.finish();
+    return result;
+  }
+
+  SmartPointer<std::vector<NumericType>>
+  calculateVelocities(const ProcessContext<NumericType, D> &context,
+                      SmartPointer<PointData<NumericType>> &fluxes) {
+    auto const &points = context.diskMesh->getNodes();
+    assert(points.size() > 0);
+    auto const &materialIds = *context.diskMesh->getMaterialIds();
+    return context.model->getSurfaceModel()->calculateVelocities(fluxes, points,
+                                                                 materialIds);
+  }
+
+  ProcessResult updateCoverages(ProcessContext<NumericType, D> &context,
+                                SmartPointer<PointData<NumericType>> &fluxes) {
+    auto surfaceModel = context.model->getSurfaceModel();
+    assert(surfaceModel != nullptr);
+    assert(surfaceModel->getCoverages() != nullptr);
+
+    assert(context.diskMesh != nullptr);
+    surfaceModel->setSurfaceCoordinates(context.diskMesh->getNodes());
+    assert(context.diskMesh->getMaterialIds() != nullptr);
+    auto const &materialIds = *context.diskMesh->getMaterialIds();
+
+    surfaceModel->updateCoverages(fluxes, materialIds);
+
+    // Calculate surface diffusion of coverages
+    if (context.flags.hasSurfaceDiffusion) {
+      PROCESS_CHECK(
+          calculateSurfaceDiffusion(context, surfaceModel->getCoverages()));
+    }
+
+    return ProcessResult::SUCCESS;
+  }
+
+  void updateState(ProcessContext<NumericType, D> &context) {
+    meshGenerator_.apply();
+
+    if (context.translationField->getTranslationMethod() == 2) {
+      kdTree_->setPoints(context.diskMesh->getNodes());
+      kdTree_->build();
+    }
+  }
+
+  ProcessResult
+  coverageInitIterations(ProcessContext<NumericType, D> &context) {
+
+    const auto name = context.getProcessName();
+    auto &maxIterations = context.coverageParams.maxIterations;
+    if (maxIterations == std::numeric_limits<unsigned>::max() &&
+        context.coverageParams.tolerance == 0.) {
+      maxIterations = 10;
+      VIENNACORE_LOG_WARNING(
+          "No coverage initialization parameters set. Using " +
+          std::to_string(maxIterations) + " initialization iterations.");
+    }
+
+    Timer timer;
+    timer.start();
+    VIENNACORE_LOG_INFO("Initializing coverages ...");
+
+    PROCESS_CHECK(fluxEngine_->updateSurface(context));
+    for (unsigned iteration = 0; iteration < maxIterations; ++iteration) {
+#ifdef VIENNATOOLS_PYTHON_BUILD
+      // Check for user interruption
+      if (PyErr_CheckSignals() != 0)
+        return ProcessResult::USER_INTERRUPTED;
+#endif
+      // save current coverages to compare with the new ones for convergence
+      coverageManager_.saveCoverages(context);
+
+      auto fluxes = SmartPointer<PointData<NumericType>>::New();
+      PROCESS_CHECK(fluxEngine_->calculateSourceFluxes(context, fluxes));
+      // no desorption fluxes are calculated in coverage initialization
+
+      PROCESS_CHECK(updateCoverages(context, fluxes));
+
+      if (Logger::hasIntermediate()) {
+        outputIntermediateResults(context, nullptr, fluxes, "_covInit_");
+      }
+
+      if (coverageManager_.checkCoveragesConvergence(context)) {
+        VIENNACORE_LOG_INFO("Coverages converged after " +
+                            std::to_string(iteration + 1) + " iterations.");
+        break;
+      }
+    }
+    context.coverageParams.initialized = true;
+    timer.finish();
+    VIENNACORE_LOG_TIMING("Coverage initialization", timer);
+
+    return ProcessResult::SUCCESS;
+  }
+
+  ProcessResult
+  calculateSurfaceDiffusion(ProcessContext<NumericType, D> const &context,
+                            SmartPointer<PointData<NumericType>> targets) {
+    if (context.timeStep <= 0.)
+      return ProcessResult::SUCCESS;
+
+    auto diffusionCoefficientsOpt =
+        context.model->getSurfaceModel()->getDiffusionCoefficients();
+    assert(diffusionCoefficientsOpt.has_value());
+    const auto &diffusionCoefficients = diffusionCoefficientsOpt.value();
+
+    diffusionTimer_.start();
+    bool hasValidTarget = false;
+    for (const auto &[name, coefficient] : diffusionCoefficients) {
+      if (auto target = targets->getScalarData(name, true); target != nullptr) {
+        hasValidTarget = coefficient > 0.;
+        break;
+      }
+    }
+    if (!hasValidTarget)
+      return ProcessResult::SUCCESS;
+
+    PointCloud<NumericType> cloud;
+    cloud.positions = context.diskMesh->getNodes();
+    cloud.normals = *context.diskMesh->getNormals();
+
+    using Solver = SurfaceDiffusionSolver<NumericType>;
+    using Stencil = SurfaceDiffusionStencil<NumericType>;
+
+    Solver solver(Stencil(std::move(cloud), context.surfaceDiffusionParams));
+
+    for (const auto &[name, coefficient] : diffusionCoefficients) {
+      if (coefficient <= 0.)
+        continue;
+
+      if (auto target = targets->getScalarData(name, true); target != nullptr) {
+        double dt = std::min(context.surfaceDiffusionParams.stabilityFactor *
+                                 std::pow(context.domain->getGridDelta(), 2.0) /
+                                 (4.0 * coefficient),
+                             context.timeStep);
+        VIENNACORE_LOG_DEBUG("Applying surface diffusion for " + name +
+                             " with coefficient " +
+                             std::to_string(coefficient) + " and time step " +
+                             std::to_string(dt));
+
+        auto current = std::move(*target);
+        double diffusionTime = 0.0;
+        while (diffusionTime < context.timeStep) {
+#ifdef VIENNATOOLS_PYTHON_BUILD
+          // Check for user interruption
+          if (PyErr_CheckSignals() != 0)
+            return ProcessResult::USER_INTERRUPTED;
+#endif
+          current = solver.stepExplicit(current, dt, coefficient);
+          diffusionTime += dt;
+          dt = std::min(dt, context.timeStep - diffusionTime);
+        }
+        targets->insertReplaceScalarData(std::move(current), name);
+      }
+    }
+    diffusionTimer_.finish();
+
+    return ProcessResult::SUCCESS;
+  }
+
+  void outputIntermediateResults(
+      const ProcessContext<NumericType, D> &context,
+      const SmartPointer<std::vector<NumericType>> &velocities,
+      const SmartPointer<PointData<NumericType>> &fluxes,
+      const std::string &suffix = "_") {
+    auto surfaceModel = context.model->getSurfaceModel();
+    if (velocities) {
+      context.diskMesh->getCellData().insertNextScalarData(*velocities,
+                                                           "velocities");
+    }
+    if (fluxes) {
+      context.diskMesh->getCellData().appendReplaceData(*fluxes);
+    }
+    if (auto coverages = surfaceModel->getCoverages()) {
+      context.diskMesh->getCellData().appendReplaceData(*coverages);
+    }
+    if (auto surfaceData = surfaceModel->getSurfaceData()) {
+      context.diskMesh->getCellData().appendReplaceData(*surfaceData);
+    }
+
+    auto const name = context.getProcessName();
+    viennals::VTKWriter<NumericType>(
+        context.diskMesh, context.intermediateOutputPath + name + suffix +
+                              std::to_string(context.currentIteration) + ".vtp")
+        .apply();
+
+    if (context.domain->getCellSet()) {
+      context.domain->getCellSet()->writeVTU(
+          context.intermediateOutputPath + name + "_cellSet_" +
+          std::to_string(context.currentIteration) + ".vtu");
+    }
+  }
+
+  void logProcessingTimes(const ProcessContext<NumericType, D> &context,
+                          const viennacore::Timer<> &processTimer) {
+    Logger::getInstance()
+        .addTiming("\nProcess " + context.getProcessName(),
+                   processTimer.currentDuration * 1e-9)
+        .addTiming("Surface advection total time",
+                   advectionHandler_.getTimer().totalDuration * 1e-9,
+                   processTimer.totalDuration * 1e-9)
+        .addTiming("Flux engine total time",
+                   fluxEngine_->getTimer().totalDuration * 1e-9,
+                   processTimer.totalDuration * 1e-9)
+        .print();
+    if (context.flags.useAdvectionCallback) {
+      Logger::getInstance()
+          .addTiming("Advection callback total time",
+                     callbackTimer_.totalDuration * 1e-9,
+                     processTimer.totalDuration * 1e-9)
+          .print();
+    }
+    if (context.flags.hasSurfaceDiffusion) {
+      Logger::getInstance()
+          .addTiming("Surface diffusion total time",
+                     diffusionTimer_.totalDuration * 1e-9,
+                     processTimer.totalDuration * 1e-9)
+          .print();
+    }
+  }
+};
+
+} // namespace viennaps

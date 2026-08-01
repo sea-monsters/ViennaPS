@@ -1,0 +1,50 @@
+name: 🔍 Check Formatting
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      debug:
+        type: boolean
+        description: Enable Debugging
+
+jobs:
+  check-coding-style:
+    runs-on: ubuntu-latest
+    container: ghcr.io/viennatools/vienna-builder:suite-python
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v6
+        with:
+          set-safe-directory: true
+
+      - name: 🔗 Prepare ViennaLS source
+        run: |
+          VIENNALS_TAG=$(awk '/NAME ViennaLS/{f=1} f && /GIT_TAG/{print $2; exit}' CMakeLists.txt)
+          if ! git ls-remote --tags --exit-code https://github.com/ViennaTools/ViennaLS.git "$VIENNALS_TAG" > /dev/null 2>&1; then
+            echo "[CI] Tag $VIENNALS_TAG not found; cloning master as fallback"
+            rm -rf _viennals
+            git clone --depth 1 --branch master https://github.com/ViennaTools/ViennaLS.git _viennals
+            echo "CPM_ViennaLS_SOURCE=$(pwd)/_viennals" >> "$GITHUB_ENV"
+          fi
+
+      - name: 📋 Install additional dependencies
+        if: ${{ github.event.inputs.debug == 'true' }}
+        run: apk add tmate
+
+      - name: 🐛 Debug Issues
+        if: ${{ github.event.inputs.debug == 'true' }}
+        uses: mxschmitt/action-tmate@v3
+        with:
+          install-dependencies: false
+          limit-access-to-actor: true
+
+      - name: 🔍 Check Format
+        run: |
+          git config --global --add safe.directory $(pwd) # "set-safe-directory" seems bugged in actions/checkout@v4
+          cmake -B build ${CPM_ViennaLS_SOURCE:+-DCPM_ViennaLS_SOURCE="$CPM_ViennaLS_SOURCE"}
+          cmake --build build --target format-check

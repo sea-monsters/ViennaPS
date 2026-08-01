@@ -1,0 +1,758 @@
+# ViennaPS Vulkan 计算加速开发报告
+
+- 状态：已确认的开发计划
+- 基线：ViennaPS 4.6.2 与 `${MPROCESS_SOURCE_DIR}` 指向的本地研究快照
+- 日期：2026-08-01
+- 决策记录：[ADR-0001](../adr/0001-add-capability-driven-vulkan-backend.md)
+- 领域术语：[CONTEXT.md](../../CONTEXT.md)
+
+## 1. 结论
+
+ViennaPS 适合增加 Vulkan 计算后端，但不应把现有 CUDA/OptiX 文件逐个
+翻译为 Vulkan，也不应只在 ViennaPS 顶层增加一个孤立实现。完整加速链横跨
+ViennaCore 的设备与数值基础设施、ViennaLS 的稀疏 Level Set、ViennaRay 的
+输运与相交，以及 ViennaPS 的物理模型和流程编排，因此应按共享后端契约进行
+四库协同实现。
+
+目标形态为 CPU、CUDA 和 Vulkan 共存。Vulkan 1.2 Compute 是基础能力；
+`VK_KHR_ray_query` 和 `VK_KHR_ray_tracing_pipeline` 是可选的更高光线能力层。
+没有硬件光追的 AMD、Intel 或 NVIDIA 设备仍可加速 Level Set、网格、表面场、
+扩散和线性求解，并可通过计算着色器软件 BVH 执行光线输运。
+
+部署或首次使用时，独立探测器生成持久化的能力档案。运行仿真时，选择器根据
+硬功能阈值、问题规模、精度要求、显存余量和校准结果逐阶段选择最优实现，无需
+用户了解设备细节。用户可以通过 `manual` 配置覆盖所有自动策略；但显式选择
+缺失功能或不安全配置时必须失败并解释原因，不能静默改变算法或精度。
+
+这是一项跨基础库的长期工程。建议先交付可验证的 Compute MVP，再扩展硬件
+光追和完整物理覆盖。全部工作预计为 58--90 人周；可用于真实 Level Set 与
+非光追流程的 MVP 约为 20--30 人周。估算不包含未知的上游合并等待时间。
+
+## 2. 研究范围与事实基线
+
+### 2.1 ViennaPS 当前实现
+
+当前 CMake 只有统一的 `VIENNAPS_USE_GPU` 开关，并把它向 ViennaCore、
+ViennaLS 和 ViennaRay 传播，见 [CMakeLists.txt](../../CMakeLists.txt)。GPU 目录
+通过 CUDA 编译 callable/model 模块，运行时的 GPU 光线引擎是
+`GPU_DISK`、`GPU_TRIANGLE` 和二维 `GPU_LINE`：
+
+- [GPU 构建入口](../../gpu/CMakeLists.txt)
+- [流程选择](../../include/viennaps/process/psProcess.hpp)
+- [Disk 引擎](../../include/viennaps/process/psGPUDiskEngine.hpp)
+- [Triangle 引擎](../../include/viennaps/process/psGPUTriangleEngine.hpp)
+- [Line 引擎](../../include/viennaps/process/psGPULineEngine.hpp)
+
+现有 GPU 的主要覆盖是粒子光线输运和通量，而不是整个仿真循环。以下模型已有
+CUDA/OptiX 模型路径：Faraday Cage Etching、HBr/O2 Etching、Ion Beam
+Etching、Neutral Transport、Multi Particle Process、SF6/O2 Etching、
+Single Particle ALD、SF6/C4F8 Etching、Single Particle Process 和 TEOS
+PECVD。Multi Particle 的现有 GPU 转换还需要核实多离子类型限制。
+
+氧化模型已经通过 ViennaLS 内部线性代数路径利用 GPU BiCGSTAB 求解扩散、
+Stokes、压力和 harmonic extension 的部分系统，但控制循环、装配、边界处理及
+若干场更新仍留在 CPU，见 [psOxidation.hpp](../../include/viennaps/models/psOxidation.hpp)。
+
+CPU 侧仍有高价值并行工作：窄带扩展和重建、法向和曲率、Level Set 对流、
+表面网格/盘/三角形提取、点元映射、覆盖率与速度计算、表面扩散、几何布尔和
+特定模型回调。它们决定了只替换 OptiX 不会得到端到端加速。
+
+### 2.2 mprocess 可借鉴和不可照搬的部分
+
+`${MPROCESS_SOURCE_DIR}` 指向的本地生产后端使用 CuPy、CUDA 12 wheel 和
+NVRTC；
+`DeviceArray` 实际约束为 CuPy 数组，并不是 Vulkan/OpenCL/HIP 抽象。因此它
+证明了更广的 GPU 常驻覆盖可以改善流程，但没有直接解决无 CUDA 环境。
+
+值得参考的具体实现如下：
+
+| 设计经验 | 本地参考 | 对 Vulkan 的用法 |
+|---|---|---|
+| 设备数据跨阶段常驻 | `backend/mprocess/fields.py`、`stack.py` | 建立显式 Device Working Set 和脏标记，不在每个算子边界下载 |
+| Level Set 融合核 | `backend/mprocess/levelset.py` | 把差分、速率和 RK 更新按带宽热点融合为 SPIR-V compute kernel |
+| 稀疏砖块实验 | `backend/mprocess/hybrid/` | 参考砖块分类、邻接、裁剪和 stencil；避免全局稠密 SDF 成为 ViennaPS 权威表示 |
+| 表面扩散 | `backend/mprocess/surface_diffusion.py` | 使用窄带融合 stencil；图拉普拉斯采用 CSR/邻接表路径 |
+| GPU 常驻 BVH8 | `backend/mprocess/physical_etch/disk_bvh.py` | 借鉴数据语义和差分测试；其单线程确定性 builder 不能作为性能实现 |
+| 粒子输运和 scatter | `backend/mprocess/physical_etch/transport.py` | 映射为 compute BVH 或 Vulkan RT shader，并保留守恒 scatter |
+| 氧化 BiCGSTAB | `node_oxidation_diffusion.py`、`node_oxidation_deformation.py` | 借鉴 source-order reduction、收敛标量过主机和 ILU 实验路径 |
+| 运行时治理 | `backend/mprocess/worker.py`、`profiling.py` | 预热上下文、持久 pipeline cache、可疑设备失效、阶段事件计时 |
+| 分层等价性 | `docs/baselines/provisional-verification.md` | 区分严格离散场、独立后端数值等价和最终几何等价 |
+
+mprocess 的物理结果仍是 provisional baseline，且部分代码为复现 Vienna 源顺序
+牺牲了并行度。参考时应移植契约、数据流和诊断方法，不把它当作新的物理真值，
+也不直接把 CUDA 源字符串机械翻译成 Slang。
+
+## 3. 目标架构
+
+```mermaid
+flowchart TD
+  C["Simulation request"] --> M{"manual override?"}
+  M -->|yes| V["Validate explicit configuration"]
+  M -->|no| P["Load or refresh Capability Profile"]
+  P --> W["Classify workload by stage"]
+  W --> E["Filter by functional thresholds"]
+  E --> S["Score eligible implementations"]
+  V --> X["Execution Plan"]
+  S --> X
+  X --> PS["ViennaPS orchestration"]
+  PS --> LS["ViennaLS field kernels"]
+  PS --> R["ViennaRay transport kernels"]
+  PS --> K["ViennaCore runtime and primitives"]
+  LS --> D["Device Working Set"]
+  R --> D
+  K --> D
+  D --> O["Selection Record and stage telemetry"]
+```
+
+### 3.1 构建目标
+
+保留兼容开关，并逐步引入：
+
+```text
+VIENNAPS_ENABLE_CUDA=ON|OFF
+VIENNAPS_ENABLE_VULKAN=ON|OFF
+VIENNAPS_USE_GPU=<deprecated compatibility aggregate>
+```
+
+建议在 ViennaCore 提供可选的已编译目标 `ViennaCore::VulkanRuntime`，而
+ViennaPS 的公共物理 API 继续保持头文件优先。运行时至少包含：
+
+- `DeviceContext`：实例、物理设备、逻辑设备、队列和生命周期；
+- `DeviceBuffer`：VMA 分配、映射、上传、下载和别名视图；
+- `KernelPipeline`：SPIR-V、descriptor layout、specialization 和 cache；
+- `CommandSequence`：记录、同步、批处理和时间戳；
+- `CapabilityProfile`：硬件探测、校准和失效规则；
+- `ExecutionPolicy`：资格过滤、评分、回退和选择说明；
+- `BackendProfiler`：阶段 GPU 时间、传输量、同步次数和峰值显存。
+
+不要设计一个可以表达任意 GPU API 的庞大虚基类。公共契约只表达 ViennaTools
+真正共有的 buffer、dispatch、reduction、scan、sort、sparse matrix 和 ray
+query 需求；CUDA 和 Vulkan 可以在契约下面保留各自优化。
+
+### 3.2 后端与能力层
+
+```cpp
+enum class ComputeBackend { Auto, CPU, CUDA, Vulkan };
+enum class VulkanRayMode { None, ComputeBVH, RayQuery, RayTracingPipeline };
+enum class SelectionMode { Auto, Manual };
+```
+
+能力层不是营销标签，而是由探测结果逐项推导：
+
+| 层 | 硬要求 | 可执行范围 |
+|---|---|---|
+| `VULKAN_COMPUTE` | Vulkan 1.2、compute queue、所需 storage buffer/descriptor/同步限制 | 通用原语、Level Set、网格、表面场、线性求解、软件 BVH |
+| `VULKAN_RAY_QUERY` | Compute 层、acceleration structure、buffer device address、ray query | compute shader 内硬件 BVH 遍历 |
+| `VULKAN_RT_PIPELINE` | Compute 层、acceleration structure、buffer device address、ray-tracing pipeline、SBT、deferred host operations | raygen/intersection/any-hit/closest-hit/miss/callable 风格输运 |
+
+Vulkan 官方定义 compute 为所有实现必须具备的能力，并把 acceleration
+structure、ray query、ray-tracing pipeline 等定义为关联的可选扩展：
+[Compute Shader](https://docs.vulkan.org/tutorial/latest/11_Compute_Shader.html)、
+[Ray Tracing](https://docs.vulkan.org/guide/latest/extensions/ray_tracing.html)。
+
+### 3.3 权威数据与设备数据
+
+初期必须保持 ViennaHRLE/ViennaLS 为 Host Canonical Field。Device Working
+Set 有两种布局：
+
+1. **Sparse Bricked Narrow Band**：Level Set、法向、速度、覆盖率和材料 ID。
+   使用固定尺寸砖块的 SoA payload、活跃砖索引、邻接表和 halo。砖尺寸通过
+   specialization constant 和设备校准选择。
+2. **Dense Structured Field**：氧化、规则域扩散、JFA/EDT 或规模受限的几何
+   算子。只有内存估算通过时才可选。
+
+每个字段维护 host/device generation、owner、dirty range 和 layout version。
+一次流程循环内尽量只发生初始上传、必要的 CPU callback 交互和最终提交；
+不得在每个 kernel 后同步。无法迁移的用户 callback 形成明确的 device detach
+point，并计入选择成本。
+
+## 4. 部署期硬件评价与自动配置
+
+### 4.1 探测入口与生命周期
+
+提供命令行工具和库 API：
+
+```text
+viennaps-device-probe --all --calibrate --write-profile
+viennaps-device-probe --device <uuid> --validate-profile
+viennaps::probeDevices(ProbeOptions)
+```
+
+安装器、容器镜像启动脚本或集群节点准备阶段可预先运行。若没有档案，ViennaPS
+在首次 Auto 执行前惰性探测；只读环境允许使用内存档案，但 Selection Record
+仍必须写入用户提供的结果目录或日志。
+
+默认档案目录遵循操作系统 application-data/cache 约定，并可由
+`VIENNAPS_DEVICE_PROFILE_DIR` 或 API 覆盖。档案不得放进源码树。每个物理设备
+一个 JSON 文件，原子替换写入；未知字段向前兼容。
+
+### 4.2 Capability Profile 最小模式
+
+```json
+{
+  "schemaVersion": 1,
+  "viennaPsVersion": "4.6.2+vulkan-dev",
+  "shaderPackHash": "sha256:...",
+  "createdUtc": "2026-08-01T00:00:00Z",
+  "device": {
+    "uuid": "...",
+    "vendorId": 0,
+    "deviceId": 0,
+    "name": "...",
+    "driverId": 0,
+    "driverVersion": "...",
+    "apiVersion": "1.3.x",
+    "pipelineCacheUuid": "...",
+    "deviceType": "discrete|integrated|virtual|cpu"
+  },
+  "memory": {
+    "deviceLocalBytes": 0,
+    "hostVisibleBytes": 0,
+    "budgetExtension": true,
+    "measuredSafeWorkingSetBytes": 0
+  },
+  "compute": {
+    "queueFamily": 0,
+    "dedicatedQueue": false,
+    "maxWorkGroupInvocations": 0,
+    "subgroupSizes": [32],
+    "shaderFloat64": false,
+    "shaderInt64": false,
+    "atomicFloat32": false,
+    "bufferDeviceAddress": false
+  },
+  "ray": {
+    "accelerationStructure": false,
+    "rayQuery": false,
+    "rayTracingPipeline": false,
+    "maxRayRecursionDepth": 0
+  },
+  "validation": {
+    "primitiveSuite": "pass|fail|not-run",
+    "fp32Suite": "pass|fail|not-run",
+    "fp64Suite": "pass|fail|not-run",
+    "computeBvhSuite": "pass|fail|not-run",
+    "hardwareRaySuite": "pass|fail|not-run"
+  },
+  "calibration": {
+    "uploadGBs": 0.0,
+    "downloadGBs": 0.0,
+    "copyGBs": 0.0,
+    "stencilMcellsPerSecond": 0.0,
+    "spmvMnonzerosPerSecond": 0.0,
+    "reductionGBs": 0.0,
+    "softwareBvhMraysPerSecond": 0.0,
+    "hardwareBvhMraysPerSecond": 0.0
+  },
+  "disabledKernels": []
+}
+```
+
+档案还应保留完整 extension/feature/limit 快照供诊断，但选择器只读取已版本化
+的归一字段。`disabledKernels` 支持针对设备/驱动组合隔离已知错误，而不禁用
+整个 Vulkan 后端。
+
+### 4.3 档案失效和安全规则
+
+出现以下任一变化时重新执行功能测试；标记为校准相关的变化还要重跑微基准：
+
+- device UUID、vendor/device ID 或 driver ID/version 变化；
+- Vulkan API、pipeline cache UUID 或启用的 extension/feature 集变化；
+- capability schema、shader ABI、shader pack hash 或数值契约版本变化；
+- 上次运行报告 device lost、错误结果、超时或显存预算显著下降；
+- 用户显式请求 `--refresh`。
+
+应用版本变化但 shader ABI 和探测 schema 不变时可以复用硬件事实，并只更新
+策略评分。档案读取失败、校验和不符或字段未知时不得崩溃：忽略旧档案并重新
+探测。pipeline cache 与能力档案分开保存，但使用相同设备指纹验证。
+
+### 4.4 功能阈值
+
+资格判断先于性能评分，且不能被 Auto 策略绕过：
+
+| 工作 | 硬功能阈值 | 失败动作 |
+|---|---|---|
+| 任意 Vulkan kernel | Compute 层、primitive suite 通过、buffer/descriptor 大小满足该工作集 | 排除 Vulkan |
+| FP64 氧化/求解 | `shaderFloat64`、FP64 suite 通过、所需原子或替代 reduction 可用 | 该阶段 CPU/CUDA，或 manual 报错 |
+| 稀疏砖块 Level Set | 可容纳砖 payload、邻接、halo 和双缓冲，scan/compaction suite 通过 | 缩小 batch 后重算；仍不足则 CPU |
+| Compute BVH | int/bit 操作、sort/scan、BVH differential suite 通过 | CPU ray 或更高硬件 ray 层 |
+| Ray Query | acceleration structure、BDA、ray query 及对应测试通过 | Compute BVH |
+| RT Pipeline | RT pipeline、SBT alignment/limits、callable/custom intersection 测试通过 | Ray Query 或 Compute BVH |
+| 任意自动 GPU 选择 | 预测总驻留不超过动态显存安全预算 | batch、重建执行计划或 CPU |
+
+安全显存不是物理容量的固定百分比。若支持 `VK_EXT_memory_budget`，使用当前
+预算减去保留量；否则使用探测得到的保守 safe working set。集成 GPU 需把
+主机争用纳入校准，不能只读取 heap size。
+
+### 4.5 自动选择算法
+
+选择单位是仿真阶段组，而不是单 kernel。否则小算子会因上传和提交开销被错误
+选到 GPU。建议算法：
+
+```text
+if selection.mode == manual:
+    validate every explicit stage choice against hard thresholds
+    fail with all violated requirements if any choice is impossible
+else:
+    profile = load_or_probe(device candidates)
+    workload = estimate(cells, active_band, particles, surfaces, nnz,
+                        precision, callbacks, expected_steps)
+    candidates = filter(functional thresholds and memory budget)
+    group adjacent stages that can share a Device Working Set
+    cost(candidate) = calibrated_kernel_time
+                    + predicted_transfer_time
+                    + synchronization_and_rebuild_cost
+                    + instability_penalty
+    choose the lowest-cost complete execution plan
+    retain CPU when GPU speedup is below the policy break-even margin
+write the chosen and rejected reasons to the Selection Record
+```
+
+初始策略使用保守的线性成本模型；收集足够 telemetry 后再按设备族拟合。不得
+以“有 Vulkan”直接等价于“所有步骤使用 Vulkan”。针对短作业，CPU 可能是最佳
+配置；针对长流程，应提高设备常驻收益的权重。
+
+### 4.6 Manual 覆盖
+
+建议配置面：
+
+```yaml
+compute:
+  selection: manual       # auto | manual
+  backend: vulkan         # cpu | cuda | vulkan
+  device: "<device-uuid>"
+  precision: mixed        # fp32 | fp64 | mixed
+  vulkanRayMode: rayQuery # computeBvh | rayQuery | rayTracingPipeline
+  stages:
+    levelSet: vulkan
+    rayTracing: vulkan
+    oxidationLinearSolve: cpu
+  allowStageFallback: false
+```
+
+优先级固定为：API/任务级 manual > 配置文件 manual > 环境变量 manual > Auto
+策略。manual 可以选择较慢但功能正确的实现，不能启用设备未提供的 extension、
+越界工作组、超预算分配或缺失 FP64 的 FP64 kernel。`allowStageFallback` 仅表示
+显式授权列出的阶段回退，默认 false。
+
+Selection Record 至少写入设备指纹、档案 hash、策略版本、工作量估计、逐阶段
+选择、淘汰原因、manual 来源、实际峰值显存和计时，从而可以重放选择。
+
+## 5. Vulkan 功能实现矩阵
+
+阶段编号与第 8 节一致。所有条目均需先有 CPU reference 和独立小规模 oracle。
+
+### 5.1 通用原语与数据管理
+
+| 功能 | Vulkan 实现 | 阶段 |
+|---|---|---|
+| fill/copy/cast/transform | SSBO 一维 dispatch；连续 SoA；小常量用 push constants | P1 |
+| reduction | subgroup + shared memory 两级归约；确定性模式固定归约树 | P1 |
+| prefix scan | subgroup scan、block sums、全局 fix-up；支持 exclusive/inclusive | P1 |
+| compact/partition | predicate + scan + scatter，输出 indirect dispatch count | P1 |
+| radix sort | 32/64-bit key-value，多 workgroup histogram/scan/scatter | P1 |
+| gather/scatter | 边界检查的索引 kernel；守恒 scatter 提供排序归约与 atomic 两种模式 | P1 |
+| histogram | per-workgroup bins 后归并；subgroup size specialization | P1 |
+| RNG | counter-based RNG，以 seed、particle ID、bounce、step 为 counter | P1 |
+| CSR SpMV/AXPY/dot/norm | row-adaptive SpMV，融合向量更新，固定树 reduction 可选 | P2 |
+| staging/transfer | VMA device-local arena + 可复用 host-visible ring；批量提交 | P1 |
+
+排序可以参考 Fuchsia 的
+[RadixSort/VK](https://fuchsia.googlesource.com/fuchsia/+/refs/heads/main/src/graphics/lib/compute/radix_sort/README.md)，
+但集成前必须核实许可证和 ViennaPS 数据布局。小型
+[VkRadixSort](https://github.com/MircoWerner/VkRadixSort) 适合理解 pass 编排，
+不应直接作为多厂商性能基线。
+
+### 5.2 Level Set 与几何场
+
+| 功能 | Vulkan 实现方法 | 关键验证 | 阶段 |
+|---|---|---|---|
+| HRLE → sparse bricks | 活跃 run 分类、Morton key、sort/unique、payload scatter | 索引/符号/材料逐点一致 | P2 |
+| brick halo/邻接 | sort 后建立 2D/3D 邻接；缺失砖采用域边界语义 | 周期/反射/无限边界 | P2 |
+| 窄带 expand/prune | frontier 标记、scan/compact、邻砖生成、generation swap | 宽度和活跃点集合 | P2 |
+| 法向/梯度/曲率 | brick-local stencil + halo；一侧/中心差分 specialization | 平面、球、尖角 | P2 |
+| 速度延拓/插值 | nearest-point/JFA 可选稠密路径；稀疏 fast sweeping/迭代传播 | 符号侧和材料接口 | P3 |
+| Hamilton-Jacobi 速率 | EO/LF/SLLF 各自 kernel；公共 stencil 读路径 | 每 scheme 的局部速率 | P3 |
+| 时间推进 | Euler、RK2、RK3；融合速率与阶段更新，保留中间速度 callback gate | 单步和累计界面误差 | P3 |
+| CFL/自适应步长 | GPU max reduction；只把标量 dt 送回主机 | CPU 步长序列 | P3 |
+| reinitialize/redistance | seed 重建 + iterative sweeping 或 JFA 候选；窄带重构 | 距离误差和零界面不漂移 | P3 |
+| stray point/component | 邻域标记、connected-component label、scan/compact | 连通定义和材料保留 | P3 |
+| Boolean/offset/planarize | 对齐域上的 min/max/offset；非对齐域先显式 resample | CPU 几何等价 | P3 |
+| wet etch/epitaxy anisotropy | 晶向速率放入 Slang 模块，融合到 HJ kernel | 晶向基准和角点演化 | P5 |
+
+不建议首期把 HRLE 容器本身完全搬到设备。P2/P3 的提交边界仍回写 Host
+Canonical Field；P7 才允许跨多个 process step 保持 device authoritative，
+并需加入崩溃恢复和 callback 失效协议。
+
+### 5.3 表面提取、网格和空间结构
+
+| 功能 | Vulkan 实现方法 | 阶段 |
+|---|---|---|
+| active-cell/surface extraction | 单元分类、scan、并行写顶点和元素 | P3 |
+| marching squares/cubes | case table 放只读 buffer；两遍 count/emit；确定索引排序 | P3 |
+| disk mesh | 从零界面节点生成 position/normal/radius/material SoA | P3 |
+| triangle mesh | 并行生成三角形、法向、材料和邻接；退化三角形 compact | P3 |
+| point ↔ element translation | 空间 key sort + 邻接查找；稳定 tie-break | P3 |
+| surface smoothing | 邻接图 Laplacian/加权平均；边界和材料接口锁定 | P3 |
+| LBVH/compute BVH | Morton code、radix sort、并行 hierarchy、bottom-up bounds | P4 |
+| hardware AS | triangle geometry 直接 build；disk/line 使用 AABB + custom intersection | P4 |
+| dynamic update | 拓扑不变 refit，拓扑变化 rebuild；由成本模型选择 | P4/P7 |
+
+Khronos 的 GPU-resident tree 教程给出了 Morton code、radix sort 和并行层级
+构建的基本路径：[GPU-Resident Trees](https://github.khronos.org/Vulkan-Site/tutorial/latest/Advanced_Vulkan_Compute/06_Advanced_Data_Structures/02_gpu_resident_trees.html)。
+mprocess BVH8 用于语义和边界差分，不复用其单线程 builder。
+
+### 5.4 粒子输运与光线追踪
+
+| 功能 | Compute BVH | Ray Query | RT Pipeline | 阶段 |
+|---|---|---|---|---|
+| source sampling | compute kernel 生成粒子队列 | 同左 | raygen 内生成或消费队列 | P4 |
+| triangle hit | 软件 stack/stackless traversal | compute 内 `rayQuery` | 内建 triangle intersection | P4 |
+| disk/line hit | 自定义 primitive test | AABB candidate 后确认交点 | AABB + intersection shader | P4 |
+| periodic/reflective boundary | wrapper traversal，更新 origin/direction/cell | compute 状态机 | raygen 循环或有限 trace 次数 | P4 |
+| closest/any hit 过滤 | traversal 内材料和邻域过滤 | candidate/committed 控制 | any-hit/closest-hit | P4 |
+| reflection/scattering | 命中后更新 particle state，compact 活跃队列 | 同一 compute 循环 | hit/callable 后回到 raygen 状态 | P4 |
+| multi-bounce termination | indirect dispatch queue，roulette counter RNG | 同左 | 控制 recursion 深度，优先迭代式 wavefront | P4 |
+| flux accumulation | deterministic sort-reduce 或 atomic fast mode | 同左 | 写 event buffer 后 compute reduce | P4 |
+| secondary surface flux | 独立 event queue，避免递归 payload 膨胀 | 同左 | wavefront queue 优先 | P5 |
+| multi-particle species | SoA queue + species specialization/dispatch | 同左 | pipeline library/SBT group | P5 |
+
+RT pipeline 可以自然映射现有 OptiX callable 和自定义 intersection，但不应
+把深递归当默认设计。Khronos 指南指出 payload、hit attributes 和 callable
+data 会消耗 driver-managed memory，应保持小型化；因此推荐 wavefront 队列和
+compute reduction。
+
+每种物理模型的 CUDA callable 应拆成后端无关的参数结构、CPU reference 函数
+和 Slang physics module。P4 先覆盖 Single Particle、Ion Beam 和 Neutral；
+P5 再覆盖现有全部十个 GPU 模型并解除 Multi Particle 单离子限制。CPU-only
+Fluorocarbon、Plasma、TEOS Deposition 等模型在 surface algebra 可表达后加入，
+不能仅因模型名相似宣称支持。
+
+### 5.5 覆盖率、表面化学和速度
+
+| 功能 | Vulkan 实现 | 阶段 |
+|---|---|---|
+| flux normalization/smoothing | per-species reduction + graph/stencil smoothing | P5 |
+| coverage 初始化/重映射 | surface key correspondence + gather；新点使用模型初值 | P5 |
+| coverage steady iteration | 每点残差 kernel + max reduction；只回传收敛标量 | P5 |
+| adsorption/desorption/reaction | Slang 模块化逐点代数；species 用 SoA | P5 |
+| material-dependent rates | compact material ranges 或分支 specialization | P5 |
+| calculateVelocities | flux/coverage/normal/material 融合逐点 kernel | P5 |
+| surface-to-level-set velocity | point-element map + gather/scatter + extension | P5 |
+| user surface callback | CPU detach point；未来提供受限 SPIR-V/Slang callback API | P5/P7 |
+
+首期不承诺任意 C++ 用户 callback 在 GPU 执行。选择器必须估算 callback 导致的
+下载/上传；manual 指定全 Vulkan 但 callback 不可迁移时应报告冲突，而不是
+在每步隐式往返。
+
+### 5.6 表面扩散和传输方程
+
+现有 [psSurfaceDiffusion.hpp](../../include/viennaps/process/psSurfaceDiffusion.hpp)
+和 Neutral Transport 内的 diffusion matrix 适合两条路径：
+
+- 规则窄带：融合 Laplacian、源项和显式时间步，halo 共享内存复用；
+- 非规则表面图：CSR/邻接表 SpMV、Jacobi/diagonal preconditioner、BiCGSTAB/CG。
+
+稳定性步长用 GPU reduction 求得。必须验证质量守恒、常数场 Laplacian 为零、
+材料边界 no-flux 和非均匀点间距。VkFFT 只在后续证明规则周期问题适合谱方法时
+评估；当前算法不因存在 [VkFFT](https://github.com/DTolm/VkFFT) 而改写物理离散。
+
+### 5.7 氧化、Stokes、压力和形变
+
+氧化是精度和稀疏求解风险最高的部分，排在 P6：
+
+1. 把规则域/节点字段装入 dense SSBO 或稳定 CSR；并行完成 active node、边界
+   类型、row count、scan 和 row fill。
+2. 提供 FP64 SpMV、dot、infinity norm、AXPY 和 source-order deterministic
+   reduction；用 CPU 小矩阵 oracle 验证。
+3. 先实现 diagonal/Jacobi 预条件的 BiCGSTAB，再评估 ILU0。Vulkan 生态没有
+   可直接替代 cuSPARSE 的成熟通用稀疏求解依赖，因此核心路径必须自有、可测。
+4. 将 oxidant diffusion、pressure、Stokes、harmonic extension 和 deformation
+   逐个迁移；每迁移一个系统都保留阶段级 CPU fallback。
+5. SIMPLE/耦合控制初期留在主机，只传回残差、时间步和少量控制标量。稳定后再
+   把完整 outer iteration 记录为 command sequence。
+6. 压力激活、`exp`、阈值比较和边界装配需要 ULP/分支差分测试，不能只比较
+   最终图像。
+
+FP64 是这些 kernel 的 Functional Threshold。缺失 FP64 的设备仍可运行其他
+Vulkan 阶段，氧化求解自动落回 CPU/CUDA。FP32 或 mixed precision 优化只有在
+P6 parity gate 通过后才能作为显式策略候选。
+
+### 5.8 不优先或不适合 GPU 的功能
+
+- 配置解析、模型构造、日志、元数据和少量控制逻辑；
+- 小规模几何的一次性构造，上传成本高于计算；
+- 文件 I/O、VTK 序列化和文本输出，GPU 只可帮助最终 packing；
+- 任意复杂用户 C++ callback；
+- 极小 CSR 系统和迭代次数很少的求解；
+- 需要频繁 CPU 决策且不能批处理的异常路径。
+
+这些功能仍进入 Execution Plan 的成本模型，但不设“GPU 覆盖率”形式主义目标。
+
+## 6. 着色器、运行时和开源参考
+
+### 6.1 推荐依赖
+
+| 项目 | 采用方式 | 采用内容 | 不采用内容 |
+|---|---|---|---|
+| [Slang](https://github.com/shader-slang/slang) | 构建期工具，锁定版本 | 模块、泛型、specialization、SPIR-V 输出 | 首期不要求运行时 JIT |
+| [SPIRV-Tools](https://github.com/KhronosGroup/SPIRV-Tools) | 构建/CI | `spirv-val`、优化和反汇编诊断 | 不在生产任务动态优化 |
+| [Vulkan Memory Allocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) | 运行时依赖 | memory type、suballocation、budget、统计 | 不让 VMA 决定字段生命周期 |
+| Vulkan loader/Hpp | 运行时/头文件 | API 装载、类型安全和 RAII | 不把 Vulkan 对象暴露给物理模型 |
+
+SPIR-V 在构建期生成并嵌入或随 shader pack 安装。CI 对每个 capability variant
+执行 `spirv-val`。运行时只基于 specialization constants 创建 pipeline，降低
+用户部署对编译器的要求和首任务抖动。
+
+### 6.2 重点参考项目
+
+| 项目 | 可参考的具体实现 | 结论 |
+|---|---|---|
+| [Khronos Vulkan Samples](https://github.com/KhronosGroup/Vulkan-Samples) | feature chain、同步、compute、ray query/RT 样例 | API 正确性首选参考 |
+| [llama.cpp Vulkan](https://github.com/ggml-org/llama.cpp) | 多后端共存、设备枚举、shader 生成、运行时选设备 | 参考后端边界和构建，不参考张量算子 |
+| [ncnn](https://github.com/Tencent/ncnn) | allocator、pipeline cache、设备 quirk、长 command 分段、specialization | 参考跨移动/桌面驱动治理 |
+| [Radeon Rays](https://github.com/GPUOpen-LibrariesAndSDKs/RadeonRays_SDK) | Vulkan AS、异步 intersection API、custom AABB、BVH update | 做原型/对照，不设为强依赖 |
+| [Vulkan Kompute](https://github.com/KomputeProject/kompute) | tensor/algorithm/sequence 的小型 compute 包装 | 只参考易用性；维护状态和 fork 情况不足以承担核心 ABI |
+| `${MPROCESS_SOURCE_DIR}` | GPU 常驻流程、融合 kernel、阶段 parity、worker 预热 | 参考领域实现和测试，不参考后端抽象 |
+
+所有引入代码在实现前必须完成许可证、维护活跃度、平台覆盖和供应链审查，并在
+`THIRD_PARTY_LICENSES.md` 更新。GPL-3.0 的 ViennaPS 可以使用 permissive
+依赖，但复制 shader 源仍需保留原始许可和归属。
+
+### 6.3 驱动差异策略
+
+- 所有可选 feature 通过完整 `pNext` chain 查询，不按 vendor 猜测；
+- workgroup/subgroup、shared memory、descriptor 数量均由 profile specialization；
+- 为已知 driver/kernel 组合维护数据驱动 quirk 表，包含证据和到期版本；
+- device lost、validation error、错误 sentinel 或超时会隔离当前 profile；
+- production 默认不开 validation layer，开发和 CI 必须可开启；
+- pipeline cache 按 device/driver/cache UUID/shader hash 隔离；
+- 大 command sequence 依据校准和 watchdog 风险分段提交。
+
+## 7. 数值、正确性和性能验证
+
+### 7.1 等价性层级
+
+1. **Kernel contract**：小数组、边界和恶意输入逐元素验证。
+2. **Strict discrete parity**：相同离散表示、顺序和随机流；用于定位首个分歧。
+3. **Backend numerical parity**：允许并行归约和独立 BVH 导致的小数差异，但物理
+   守恒量、场范数和界面误差必须在模型阈值内。
+4. **Geometry parity**：最终界面的 Hausdorff/Chamfer、体积、关键 CD/depth。
+5. **Physics acceptance**：氧化厚度、bird's beak、刻蚀率、沉积共形性等模型量。
+
+mprocess 使用的 `1e-4 voxel` strict source parity 和 `1e-2 voxel` 独立 ray
+backend 数值等价可作为初始候选，不直接成为 ViennaPS 全模型统一阈值。P0 必须
+根据现有 CPU/CUDA 的自然方差，为每个模型固定 tolerance manifest。
+
+### 7.2 随机与确定性
+
+- counter RNG 的逻辑坐标不依赖 dispatch 顺序；
+- CPU/CUDA/Vulkan 尽量共享采样变换的测试向量；
+- `deterministic` 模式使用固定排序和归约树，便于 CI 和差分；
+- `fast` 模式可用原子累积和设备最优 subgroup，但必须满足统计验收；
+- 报告 seed、RNG 版本、粒子数、backend 和 mode。
+
+### 7.3 CI 矩阵
+
+| 层 | 环境 | 运行内容 |
+|---|---|---|
+| Build | Windows/Linux，无 Vulkan SDK runtime 假设 | CPU-only 和可选 Vulkan 编译隔离 |
+| Software Vulkan | Mesa Lavapipe | compute primitive、SPIR-V、选择器和小规模 parity |
+| AMD hardware | Windows/Linux | Compute、FP64、Ray Query/RT 按设备能力 |
+| Intel hardware | Windows/Linux | iGPU/UMA 内存、Compute、可用 ray 层 |
+| NVIDIA hardware | Windows/Linux | Vulkan 与现有 CUDA/OptiX 三方 parity/performance |
+| Sanitized dev | validation layer + debug shader | barrier、descriptor、越界和 lifetime |
+
+Lavapipe 是 CPU 软件 Vulkan，只证明 API/着色器正确性，不代表真实 GPU 性能或
+光追支持。硬件 CI 才能提升 Capability Profile 的 `validation` 状态。
+
+### 7.4 性能门禁
+
+P0 固定代表性 2D/3D、小/中/大、ray-heavy、advection-heavy 和 oxidation-heavy
+基准。之后每个工作包同时报告：
+
+- kernel GPU 时间和端到端 wall time；
+- 上传、下载字节和显式同步次数；
+- 峰值与常驻显存；
+- pipeline/AS/BVH 建立和复用成本；
+- CPU、CUDA、Vulkan Compute、Vulkan RT 的同场景结果；
+- Auto 是否选择实际最快的合格计划。
+
+初始合并门：目标阶段在中型基准上至少比 CPU 快 1.5x，或证明它显著减少了
+下一阶段数据搬运；端到端不得比策略预测慢 15% 以上。此门槛在 P0 基准冻结后
+可通过 ADR 调整。正确性优先于速度，未达性能门只表示不进入 Auto 候选，不阻止
+以 experimental/manual 方式保留正确实现。
+
+## 8. 可执行开发计划
+
+### P0：契约、基准和拆分设计（2--3 人周）
+
+- 冻结 CPU/CUDA 场景、tolerance manifest、seed 和输出指标；
+- 在四个仓库确认 backend ownership 与版本兼容矩阵；
+- 记录现有每阶段计时、传输和 GPU 覆盖；
+- 定义 `CapabilityProfile`、`ExecutionPlan`、`SelectionRecord` JSON schema；
+- 为当前十个 GPU 模型建立 callable/参数清单；
+- 输出：三库接口设计 PR、基准数据和 P1 task cards。
+
+退出门：CPU/CUDA baseline 可重放；所有跨库接口有 owner；不存在“Vulkan 支持”
+但没有可测 acceptance 的任务。
+
+### P1：Vulkan runtime、探测与原语（6--9 人周）
+
+- ViennaCore Vulkan runtime、VMA arena、staging ring、command sequence；
+- 离线 Slang/SPIR-V 构建、reflection manifest 和 pipeline cache；
+- 部署探测器、档案持久化/失效、微基准和 quirk 基础设施；
+- fill/reduction/scan/compact/sort/gather/scatter/RNG；
+- Execution Policy、Manual Override 和 Selection Record；
+- Lavapipe + 三厂商 smoke CI。
+
+退出门：在无 CUDA 环境完成 probe → profile → auto plan → compute dispatch；
+修改 driver/profile 后正确失效；manual 不支持项给出完整诊断。
+
+### P2：设备字段与稀疏线性基础（5--8 人周）
+
+- HRLE ↔ sparse brick 转换、halo、邻接、expand/prune；
+- dense structured field、generation/dirty ownership；
+- CSR 装配原语、SpMV、AXPY、dot/norm、Jacobi；
+- 内存估算、batch 和 OOM 前置拒绝；
+- 微型场与矩阵 differential tests。
+
+退出门：2D/3D 字段 round-trip、边界和材料逐点通过；无隐式 device-wide sync；
+profile 可以据显存与 FP64 正确过滤。
+
+### P3：Level Set、网格与几何（8--12 人周）
+
+- normal/curvature、EO/LF/SLLF、Euler/RK2/RK3、CFL；
+- narrow-band rebuild、reinitialize/redistance、stray removal；
+- surface/disk/triangle extraction、mapping 和 smoothing；
+- Boolean、offset、planarize 及常用几何 kernel；
+- 首个端到端 geometric/isotropic/directional process。
+
+退出门：代表性几何满足 tolerance manifest；中型加速达到 Auto 性能门；CPU
+callback detach 可见且不会破坏 field generation。
+
+### P4：Vulkan 光线基础（10--16 人周）
+
+- Compute LBVH/BVH traversal 和 disk/line/triangle 相交；
+- Ray Query 与 RT Pipeline capability variants；
+- source RNG、边界、反射、roulette、event queue、flux reduction；
+- Single Particle、Ion Beam、Neutral 三个纵向模型；
+- AS rebuild/refit 成本进入 Execution Policy。
+
+退出门：无硬件 RT 的 Vulkan 设备可完成 ray process；有 RT 的设备自动比较
+Compute BVH/Ray Query/RT Pipeline；三种实现通过同一 differential suite。
+
+### P5：表面物理与模型覆盖（8--12 人周）
+
+- coverage lifecycle、surface algebra、velocity 和表面扩散；
+- 移植现有全部 CUDA/OptiX 模型；
+- Multi Particle 多离子 species；
+- Fluorocarbon、Plasma、TEOS Deposition 等高价值 CPU 模型；
+- wet etch、selective epitaxy、oxide regrowth 的公共 stencil/field 部分。
+
+退出门：模型支持矩阵逐项有测试，不以编译成功代表支持；覆盖率/质量守恒和
+最终几何同时通过。
+
+### P6：氧化与耦合求解（10--16 人周）
+
+- FP64 matrix assembly、BiCGSTAB/Jacobi、确定性 reduction；
+- oxidant diffusion、pressure、Stokes、harmonic extension、deformation；
+- outer SIMPLE/coupling 的 command batching；
+- ILU0 作为实验优化，收敛不稳时保留 Jacobi/CPU；
+- trench、fin、LOCOS 氧化的场级和物理级验收。
+
+退出门：FP64 合格设备进入 Vulkan Auto；无 FP64 设备只回退相关阶段；所有
+收敛失败包含 residual history 和执行计划，不产生静默错误几何。
+
+### P7：全流程常驻、调优与发布（9--14 人周）
+
+- 跨 process step device-resident execution、callback invalidation；
+- workload cost model 校准、pipeline/AS cache 和 command 分段；
+- Python/C++ 配置、probe CLI、诊断与安装文档；
+- 驱动兼容矩阵、长时 soak、device lost 恢复和 release gates；
+- 对 CUDA/CPU 的回归与旧 `VIENNAPS_USE_GPU` 迁移期兼容。
+
+退出门：Auto 在硬件矩阵上选择合格且接近最快的执行计划；Selection Record
+足以重放；CPU-only 构建和既有 CUDA 使用方式无非预期回归。
+
+### 8.1 依赖关系和并行工作
+
+```mermaid
+flowchart LR
+  P0 --> P1
+  P1 --> P2
+  P2 --> P3
+  P2 --> P4
+  P3 --> P5
+  P4 --> P5
+  P2 --> P6
+  P3 --> P6
+  P5 --> P7
+  P6 --> P7
+```
+
+P3 与 P4 在 P2 后可由不同开发者并行；P6 的线性代数可在 P3 后与 P5 并行。
+建议至少设置 runtime/primitives、Level Set/geometry、ray/physics 三个 owner，
+主线负责 schema、parity 和发布门禁。单人执行应严格按依赖顺序，不并行维护
+多个未过 parity gate 的物理路径。
+
+### 8.2 首个可发布切片
+
+不要等待 P7 才发布。建议三个可独立验收的切片：
+
+1. **Vulkan Compute Preview**：P0--P2，probe/profile/manual、原语和字段工具；
+2. **Vulkan Level Set Preview**：P3，可运行非光线 geometric process；
+3. **Vulkan Process Preview**：P4--P5，至少三个光线模型和表面物理；
+4. **Vulkan Full Physics**：P6--P7，氧化、完整 Auto 和兼容发布。
+
+每个 Preview 都必须标注支持矩阵，不用一个总开关暗示尚未实现的模型可用。
+
+## 9. 风险登记
+
+| 风险 | 影响 | 缓解和触发条件 |
+|---|---|---|
+| 四库接口无法同步发布 | 出现 ViennaPS 内部重复 runtime | P0 冻结接口和兼容版本；不得先复制核心抽象 |
+| 稀疏砖块转换抵消收益 | Auto 错误选择 Vulkan | 阶段组成本模型、跨步常驻、break-even 门 |
+| Vulkan 驱动差异 | 错误结果/device lost | profile validation、quirk、三厂商 CI、单 kernel 隔离 |
+| 并行归约改变分支/收敛 | 物理结果漂移 | deterministic reduction、首分歧测试、分层 tolerance |
+| FP64/原子能力不足 | 氧化无法全 GPU | per-stage eligibility，不降精度，CPU/CUDA fallback |
+| 硬件 RT 覆盖不一致 | 无 RT 设备无法跑模型 | Compute BVH 是基线，RT 是可选优化 |
+| shader 组合爆炸 | 构建/启动和 cache 膨胀 | Slang 模块、有限 capability variants、specialization |
+| 显存预算随系统变化 | OOM 或驱动重置 | 动态 budget、safe working set、batch、执行前估算 |
+| callback 强制往返 | 端到端变慢 | detach telemetry、Auto 排除、未来受限 shader callback |
+| 开源参考维护/许可变化 | 供应链和升级风险 | 参考与依赖分离、锁版本、SBOM/许可审查 |
+
+## 10. 实施记录要求
+
+后续每个工作包在代码文档区维护以下证据：
+
+- 任务边界、owned repositories/files 和不做范围；
+- 前置 schema/ADR、CPU oracle 和代表性场景；
+- RED → GREEN 的 focused tests；
+- CPU/CUDA/Vulkan 字段、几何和物理对比；
+- 实际命令、设备 profile hash、driver 和 shader pack hash；
+- kernel/端到端时间、传输、同步和显存；
+- 未覆盖设备/模型、已知 quirk 和回退路径；
+- 支持矩阵和开发报告阶段状态更新。
+
+实现开始后，应在本报告旁增加一份短的状态表，而不是不断改写本报告中的原始
+决策与估算。架构方向变化使用新的 ADR；阈值调整记录基准证据。
+
+## 11. 完成定义
+
+“ViennaPS 支持 Vulkan 计算加速”只有在以下条件全部成立时才可作为正式声明：
+
+- CPU-only、CUDA 和 Vulkan 可以独立或共存构建；
+- 部署探测、档案失效、Auto 和 Manual 在 C++/Python 都有文档与测试；
+- 所有公开声称支持的模型都通过场级、几何级和物理级验收；
+- 无硬件 RT 但满足 Compute Threshold 的设备至少可运行已声明的 Vulkan
+  Compute/软件 BVH 流程；
+- 缺失 FP64 等能力只排除相关阶段，不错误排除其他 Vulkan 功能；
+- 每次运行产生可解释、可重放的 Selection Record；
+- 自动选择在硬件矩阵上满足正确性、显存和 break-even 规则；
+- device lost、OOM、unsupported feature 和收敛失败均为可诊断结果；
+- 旧 CPU/CUDA 接口有迁移期兼容测试；
+- 支持矩阵、第三方许可、安装、故障诊断和基准文档齐全。
+
+在此之前，应使用 `experimental Vulkan backend` 或对应 Preview 名称，避免总开关
+给用户造成完整功能覆盖的错误预期。

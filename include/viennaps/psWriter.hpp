@@ -1,0 +1,134 @@
+#pragma once
+
+#include "psDomain.hpp"
+#include "psPreCompileMacros.hpp"
+
+#include <fstream>
+#include <string>
+#include <utility>
+
+#include <vcLogger.hpp>
+#include <vcSmartPointer.hpp>
+
+namespace viennaps {
+
+using namespace viennacore;
+
+///  @brief Writer class for serializing and writing a Domain to a file
+///
+///  This class handles serializing a Process Simulation Domain (Domain) to a
+///  binary file. The file format (.vpsd - ViennaPS Domain) contains all
+///  levelSets, cell data, material mappings and domain setup information.
+VIENNAPS_TEMPLATE_ND(NumericType, D) class Writer {
+private:
+  SmartPointer<Domain<NumericType, D>> domain = nullptr;
+  std::string fileName;
+
+public:
+  Writer() = default;
+
+  Writer(SmartPointer<Domain<NumericType, D>> passedDomain)
+      : domain(passedDomain) {}
+
+  Writer(SmartPointer<Domain<NumericType, D>> passedDomain,
+         std::string passedFileName)
+      : domain(passedDomain), fileName(std::move(passedFileName)) {}
+
+  void setDomain(SmartPointer<Domain<NumericType, D>> passedDomain) {
+    domain = passedDomain;
+  }
+
+  /// set file name for file to write
+  void setFileName(std::string passedFileName) {
+    fileName = std::move(passedFileName);
+  }
+
+  void apply() {
+    // check domain
+    if (domain == nullptr) {
+      VIENNACORE_LOG_ERROR("No domain was passed to Writer. Not writing.");
+      return;
+    }
+
+    // check filename
+    if (fileName.empty()) {
+      VIENNACORE_LOG_ERROR("No file name specified for Writer. Not writing.");
+      return;
+    }
+
+    if (fileName.find(".vpsd") != fileName.length() - 5) {
+      VIENNACORE_LOG_INFO("File name does not end in '.vpsd', appending it.");
+      fileName.append(".vpsd");
+    }
+
+    // Open file for writing and save serialized domain
+    std::ofstream fout(fileName, std::ios::binary);
+
+    // Write header identifier
+    fout << "psDomain";
+
+    // Write format version for future compatibility.
+    char formatVersion = 2;
+    fout.write(&formatVersion, 1);
+
+    // Since version 2: write dimension
+    char dimension = static_cast<char>(D);
+    fout.write(&dimension, 1);
+
+    // Write domain setup
+    auto &setup = domain->getSetup();
+    setup.serialize(fout);
+
+    // Write number of level sets
+    auto &levelSets = domain->getLevelSets();
+    uint32_t numLevelSets = levelSets.size();
+    fout.write(reinterpret_cast<const char *>(&numLevelSets), sizeof(uint32_t));
+
+    // Write each level set
+    for (auto &ls : levelSets) {
+      ls->serialize(fout);
+    }
+
+    // Write material map if it exists
+    auto &materialMap = domain->getMaterialMap();
+    char hasMaterialMap = (materialMap == nullptr) ? 0 : 1;
+    fout.write(&hasMaterialMap, 1);
+
+    if (hasMaterialMap) {
+      // Write number of materials
+      uint32_t numMaterials = materialMap->size();
+      fout.write(reinterpret_cast<const char *>(&numMaterials),
+                 sizeof(uint32_t));
+
+      // Write each material by canonical name for stable cross-run I/O.
+      for (size_t i = 0; i < numMaterials; i++) {
+        const auto material = materialMap->getMaterialAtIdx(i);
+        std::string materialName = MaterialMap::toString(material);
+        const auto nameLength = static_cast<uint32_t>(materialName.size());
+        fout.write(reinterpret_cast<const char *>(&nameLength),
+                   sizeof(uint32_t));
+        fout.write(materialName.data(),
+                   static_cast<std::streamsize>(nameLength));
+      }
+    }
+
+    // Write cell set if it exists
+    auto &cellSet = domain->getCellSet();
+    char hasCellSet = (cellSet == nullptr) ? 0 : 1;
+    fout.write(&hasCellSet, 1);
+
+    if (hasCellSet) {
+      // Serialize cell set
+      // This would require implementing serialization for the cell set
+      // For now, just include a placeholder for future implementation
+      VIENNACORE_LOG_WARNING(
+          "CellSet serialization not yet implemented in psWriter.");
+    }
+
+    fout.close();
+  }
+};
+
+PS_PRECOMPILE_PRECISION_DIMENSION(Writer)
+
+} // namespace viennaps

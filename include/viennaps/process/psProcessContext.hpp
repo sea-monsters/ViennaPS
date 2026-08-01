@@ -1,0 +1,174 @@
+#pragma once
+
+#include "../psDomain.hpp"
+#include "psProcessModel.hpp"
+#include "psProcessParams.hpp"
+#include "psTranslationField.hpp"
+
+#include <vcKDTree.hpp>
+
+namespace viennaps {
+
+enum class ProcessResult {
+  SUCCESS,
+  INVALID_INPUT,
+  EARLY_TERMINATION,
+  CONVERGENCE_FAILURE,
+  USER_INTERRUPTED,
+  FAILURE,
+  NOT_IMPLEMENTED
+};
+
+VIENNAPS_TEMPLATE_ND(NumericType, D) struct ProcessContext {
+  // Core components
+  SmartPointer<Domain<NumericType, D>> domain;
+  SmartPointer<ProcessModelBase<NumericType, D>> model;
+
+  // Process parameters
+  double processDuration = 0.0;
+  double processTime = 0.0;
+  double timeStep = 0.0;
+
+  // Configuration
+  AdvectionParameters advectionParams;
+  RayTracingParameters rayTracingParams;
+  CoverageParameters coverageParams;
+  AtomicLayerProcessParameters atomicLayerParams;
+  SurfaceDiffusionParameters surfaceDiffusionParams;
+  std::string intermediateOutputPath = "";
+
+  // Simulation state
+  unsigned currentIteration = 0;
+  SmartPointer<viennals::Mesh<NumericType>> diskMesh;
+  SmartPointer<viennals::Mesh<float>> triangleMesh; // set by triangle engines
+  SmartPointer<TranslationField<NumericType, D>> translationField;
+
+  // Computed flags (derived from model state)
+  struct Flags {
+    bool useFluxEngine = false;
+    bool useAdvectionCallback = false;
+    bool useProcessParams = false;
+    bool useCoverages = false;
+    bool isALP = false;
+    bool isAnalytic = false;
+    bool isGeometric = false;
+    bool domainHasPeriodicBoundaries = false;
+    bool hasSurfaceDiffusion = false;
+    bool hasSurfaceDesorption = false;
+  } flags;
+
+  void updateFlags() {
+    assert(model && "Process model must be set before updating flags.");
+    assert(domain && "Domain must be set before updating flags.");
+    flags.isGeometric = model->getGeometricModel() != nullptr;
+    flags.useFluxEngine = model->useFluxEngine();
+    flags.useAdvectionCallback = model->getAdvectionCallback() != nullptr;
+    flags.useProcessParams =
+        model->getSurfaceModel() &&
+        model->getSurfaceModel()->getProcessParameters() != nullptr;
+    flags.isAnalytic = model->getVelocityField() && !model->useFluxEngine();
+    flags.isALP = model->isALPModel();
+    flags.useCoverages = flags.isALP || flags.useCoverages;
+
+    const auto &grid = domain->getGrid();
+    for (unsigned i = 0; i < D; ++i) {
+      if (grid.getBoundaryConditions(i) ==
+          viennals::BoundaryConditionEnum::PERIODIC_BOUNDARY) {
+        flags.domainHasPeriodicBoundaries = true;
+        break;
+      }
+    }
+
+    if (auto surfaceModel = model->getSurfaceModel()) {
+      auto materialIds = std::vector<NumericType>{};
+      auto desorptionWeights = surfaceModel->getDesorptionWeights(materialIds);
+      flags.hasSurfaceDesorption = desorptionWeights.has_value();
+      auto diffusionCoefficients = surfaceModel->getDiffusionCoefficients();
+      flags.hasSurfaceDiffusion = diffusionCoefficients.has_value();
+    }
+  }
+
+  void printFlags() const {
+    if (!Logger::hasDebug())
+      return;
+
+    std::stringstream stream;
+    stream << "Process Context Flags:";
+    stream << "\n\tisGeometric: " << util::boolString(flags.isGeometric)
+           << "\n\tuseFluxEngine: " << util::boolString(flags.useFluxEngine)
+           << "\n\tuseAdvectionCallback: "
+           << util::boolString(flags.useAdvectionCallback)
+           << "\n\tuseProcessParams: "
+           << util::boolString(flags.useProcessParams)
+           << "\n\tuseCoverages: " << util::boolString(flags.useCoverages)
+           << "\n\tisALP: " << util::boolString(flags.isALP)
+           << "\n\tisAnalytic: " << util::boolString(flags.isAnalytic)
+           << "\n\tdomainHasPeriodicBoundaries: "
+           << util::boolString(flags.domainHasPeriodicBoundaries);
+    if (model) {
+      stream << "\nProcess Name: "
+             << model->getProcessName().value_or("default");
+      stream << "\n\tHas GPU Model: " << util::boolString(model->hasGPUModel());
+    }
+    VIENNACORE_LOG_DEBUG(stream.str());
+  }
+
+  void resetTime() {
+    processTime = 0.0;
+    timeStep = 0.0;
+    currentIteration = 0;
+  }
+
+  std::string getProcessName() const {
+    return model->getProcessName().value_or("default");
+  }
+
+  bool needsExtendedVelocities() const {
+    return advectionParams.spatialScheme ==
+               SpatialScheme::LAX_FRIEDRICHS_1ST_ORDER ||
+           advectionParams.spatialScheme ==
+               SpatialScheme::LAX_FRIEDRICHS_2ND_ORDER ||
+           advectionParams.spatialScheme ==
+               SpatialScheme::LOCAL_LAX_FRIEDRICHS_1ST_ORDER ||
+           advectionParams.spatialScheme ==
+               SpatialScheme::LOCAL_LAX_FRIEDRICHS_2ND_ORDER ||
+           advectionParams.spatialScheme ==
+               SpatialScheme::LOCAL_LAX_FRIEDRICHS_ANALYTICAL_1ST_ORDER ||
+           advectionParams.spatialScheme ==
+               SpatialScheme::STENCIL_LOCAL_LAX_FRIEDRICHS_1ST_ORDER ||
+           advectionParams.temporalScheme ==
+               TemporalScheme::RUNGE_KUTTA_2ND_ORDER ||
+           advectionParams.temporalScheme ==
+               TemporalScheme::RUNGE_KUTTA_3RD_ORDER;
+  }
+
+  auto getPointKdTree() {
+    auto &pointKdTree = translationField->getKdTree();
+    if (!pointKdTree) {
+      pointKdTree = viennacore::SmartPointer<
+          viennacore::KDTree<NumericType, std::array<NumericType, 3>>>::New();
+      translationField->setKdTree(pointKdTree);
+    }
+    if (pointKdTree->getNumberOfPoints() != diskMesh->nodes.size()) {
+      pointKdTree->setPoints(diskMesh->nodes);
+      pointKdTree->build();
+    }
+    return pointKdTree;
+  }
+
+  auto getDiskMeshData() const {
+    const auto &nodes = diskMesh->getNodes();
+    const auto normals = diskMesh->getNormals();
+    const auto materialIds = diskMesh->getMaterialIds();
+    assert(normals && "Disk mesh must have normals.");
+    assert(materialIds && "Disk mesh must have material IDs.");
+    assert(nodes.size() == normals->size() &&
+           "Number of disk mesh nodes must match number of normals.");
+    assert(nodes.size() == materialIds->size() &&
+           "Number of disk mesh nodes must match number of material IDs.");
+
+    return std::tie(nodes, *normals, *materialIds);
+  }
+};
+
+} // namespace viennaps

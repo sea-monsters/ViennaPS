@@ -1,0 +1,308 @@
+<div align="center">
+
+<picture>
+  <source srcset="https://raw.githubusercontent.com/ViennaTools/ViennaPS/master/assets/ViennaPS_title-dark.png" media="(prefers-color-scheme: dark)">
+  <source srcset="https://raw.githubusercontent.com/ViennaTools/ViennaPS/master/assets/ViennaPS_title.png" media="(prefers-color-scheme: light)">
+  <img src="https://raw.githubusercontent.com/ViennaTools/ViennaPS/master/assets/ViennaPS_title.png" alt="ViennaPS" width=500>
+</picture>
+
+---
+ 
+[![🐍 Build Bindings](https://github.com/ViennaTools/ViennaPS/actions/workflows/python.yml/badge.svg)](https://github.com/ViennaTools/ViennaPS/actions/workflows/python.yml)
+[![🧪 Run Tests](https://github.com/ViennaTools/ViennaPS/actions/workflows/build.yml/badge.svg)](https://github.com/ViennaTools/ViennaPS/actions/workflows/build.yml)
+[![PyPi Version](https://img.shields.io/pypi/v/ViennaPS?logo=pypi)](https://pypi.org/project/ViennaPS/)
+
+</div>
+
+ViennaPS is a header-only C++ library for process and topography simulation in microelectronic fabrication. It models the evolution of 2D and 3D surfaces during etching, deposition, oxidation, and related steps, combining advanced level-set methods for surface evolution with Monte Carlo ray tracing for flux calculation and physics-based solvers for coupled processes. The oxidation model simulates LOCOS and trench oxidation through a fully coupled diffusion–viscous flow solver with nitride mask deformation, capturing bird's beak formation and stress-driven oxide redistribution.
+
+ViennaPS supports both physics-based process models and fast emulation approaches, enabling flexible and efficient development of semiconductor processes. It can be easily integrated into existing C++ projects and also provides Python bindings for use in Python-based workflows. The library is actively developed and continuously improved to address the needs of process and topography simulation in microelectronics.
+
+## Quick Start  
+
+To install ViennaPS for Python, simply run:  
+
+```sh
+pip install ViennaPS
+```
+
+To use ViennaPS in C++ follow the CMake instructions below. A ready-to-use CMake template is also available for a quick start: [ViennaPS CMake Template](https://viennatools.github.io/ViennaPS/inst/#cmake-template).
+
+For full documentation, visit [ViennaPS Documentation](https://viennatools.github.io/ViennaPS/).
+
+Forward-looking architecture and development plans maintained with the source
+are indexed in [Development documents](docs/README.md).
+
+## Releases
+
+> [!NOTE]  
+> ViennaPS is under heavy development and improved daily. If you do have suggestions or find bugs, please let us know!
+
+Releases are tagged on the master branch and available in the [releases section](https://github.com/ViennaTools/ViennaPS/releases).
+
+ViennaPS is also available on the [Python Package Index (PyPI)](https://pypi.org/project/ViennaPS/) for most platforms.  
+
+## Building
+
+### Supported Operating Systems
+
+* Linux (g++ / clang)
+
+* macOS (clang)
+
+* Windows (MSVC)
+
+### System Requirements
+
+* C++20 Compiler with OpenMP support
+
+### ViennaTools Dependencies (installed automatically)
+
+ViennaPS is part of the ViennaTools ecosystem and depends on several lightweight, header-only ViennaTools libraries. During configuration, CMake will fetch them automatically as part of the ViennaPS build. No separate installation step is required for these dependencies:
+
+* [ViennaCore](https://github.com/ViennaTools/viennacore) 
+* [ViennaLS](https://github.com/ViennaTools/viennals) 
+* [ViennaHRLE](https://github.com/ViennaTools/viennahrle) 
+* [ViennaRay](https://github.com/ViennaTools/viennaray) 
+* [ViennaCS](https://github.com/ViennaTools/viennacs)
+
+### External Dependencies
+
+The following external dependencies are required to build ViennaPS. On most systems, installing them via a package manager (e.g. `apt`, `brew`, or `vcpkg`) is the fastest option:
+
+* [VTK](https://vtk.org/) (9.0.0+)
+* [Embree](https://www.embree.org/) (4.0.0+)
+
+CMake automatically checks for these dependencies during configuration. If they are not found, they can be built from source as part of the build.
+
+To prefer a specific local installation, point CMake to it via `VIENNAPS_LOOKUP_DIRS` (a semicolon-separated list of prefixes):
+
+```bash
+cmake -B build -DVIENNAPS_LOOKUP_DIRS="/path/to/vtk;/path/to/embree"
+```
+
+Alternatively (or additionally), you can use `CMAKE_PREFIX_PATH` if that better matches your local setup.
+
+## Installing
+
+> [!NOTE]  
+> __For more detailed installation instructions and troubleshooting tips, have a look at the ViennaPS [documentation](https://viennatools.github.io/ViennaPS/inst/).__
+
+ViennaPS is a header-only library, so no formal installation is required. To use ViennaPS in your C++ project, refer to the [Integration in CMake projects](#integration-in-cmake-projects) section below.
+
+## Building the Python package locally
+
+The Python package can be built and installed using the `pip` command:
+
+```bash
+git clone https://github.com/ViennaTools/ViennaPS.git
+cd ViennaPS
+
+pip install .
+```
+
+To build the Python package with **GPU** support, use the install script in `python/scripts` folder. On Linux, e.g., run:
+```bash
+python3 -m venv .venv # create virtual environment (optional, but recommended)
+source .venv/bin/activate # activate virtual environment 
+python python/scripts/install_ViennaPS.py
+```
+A CUDA toolkit and driver compatible with your GPU must be installed on your system to use the GPU functionality.
+
+> Some features of the ViennaPS Python module depend on the ViennaLS Python module. The ViennaLS is installed automatically as a dependency.
+> Note: A locally built ViennaPS Python module is typically not compatible with the ViennaLS package from PyPI. For details and troubleshooting, see [this guide](https://viennatools.github.io/ViennaPS/inst/troubleshooting.html#python-importerror).
+
+## Using the Python package
+
+The ViennaPS Python package can be used by importing it in your Python scripts:
+```python
+import viennaps as vps
+```
+
+By default, ViennaPS operates in two dimensions. You can set the dimension using:
+```python
+vps.setDimension(2)  # For 2D simulations
+vps.setDimension(3)  # For 3D simulations
+```
+
+For more details and examples, refer to the official [documentation](https://viennatools.github.io/ViennaPS/).
+
+## Integration in CMake projects
+
+We recommend using [CPM.cmake](https://github.com/cpm-cmake/CPM.cmake) to consume this library.
+
+* Installation with CPM
+  ```cmake
+  CPMAddPackage("gh:viennatools/viennaps@4.6.2")
+  ```
+
+* With a local installation
+    > In case you have ViennaPS installed in a custom directory, make sure to properly specify the [`CMAKE_PREFIX_PATH`](https://cmake.org/cmake/help/latest/envvar/CMAKE_PREFIX_PATH.html#envvar:CMAKE_PREFIX_PATH).
+
+    ```cmake
+    list(APPEND CMAKE_PREFIX_PATH "/your/local/installation")
+
+    find_package(ViennaPS)
+    target_link_libraries(${PROJECT_NAME} PUBLIC ViennaTools::ViennaPS)
+    ```
+
+    > Note: If you installed ViennaPS to a custom location, GPU kernels can not be built, since the CMake configuration does not support this setup. If you need GPU support, please use CPM.cmake.
+
+### Shared Library
+
+In order to save build time during development, dynamically linked shared libraries can be used if ViennaPS was built with them. This is done by precompiling the most common template specialisations. In order to use shared libraries, use
+
+```bash
+cmake -B build -DVIENNALS_PRECOMPILE_HEADERS=ON
+```
+
+If ViennaPS was built with shared libraries and you use ViennaPS in your project (see above), CMake will automatically link them to your project.
+
+## GPU Acceleration
+
+ViennaPS supports GPU acceleration for the ray tracing part of the library (since v3.4.0) and for the diffusion solver in the physics-based oxidation model. Both GPU features are still experimental. Details on how to enable GPU functionality can be found in the [documentation](https://viennatools.github.io/ViennaPS/inst/gpu.html).
+
+## Basic Examples
+
+### Building
+
+The examples can be built using CMake:
+
+```bash
+git clone https://github.com/ViennaTools/ViennaPS.git
+cd ViennaPS
+
+cmake -B build -DVIENNAPS_BUILD_EXAMPLES=ON
+cmake --build build
+```
+
+The examples can then be executed in their respective build folders with the config files, e.g.:
+```bash
+cd build/examples/exampleName
+./exampleName.bat config.txt # (Windows)
+./exampleName config.txt # (Other)
+```
+
+Individual examples can also be build by calling `make` in their respective build folder. An equivalent Python script, using the ViennaPS Python bindings, is also given for each example. 
+
+### Trench Deposition
+
+This [example](https://github.com/ViennaTools/ViennaPS/tree/master/examples/trenchDeposition) focuses on a particle deposition process within a trench geometry. By default, the simulation presents a 2D representation of the trench. Nevertheless, users have the flexibility to conduct 3D simulations by adjusting the value of the constant _D_ in __trenchDeposition.cpp__ to 3. Customization of process and geometry parameters is achieved through the __config.txt__ file. The accompanying image illustrates instances of the trench deposition process, showcasing variations in the particle sticking probability _s_.
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/ViennaTools/ViennaPS/master/assets/deposition.png" width=700 style="background-color:white;">
+</div>
+
+### SF<sub>6</sub>/O<sub>2</sub> Hole Etching
+
+This [example](https://github.com/ViennaTools/ViennaPS/tree/master/examples/holeEtching) demonstrates a hole etching process with a SF<sub>6</sub>/O<sub>2</sub> plasma etching chemistry with ion bombardment. The process is controlled by various parameters, including geometry and plasma conditions, which can be adjusted in the __config.txt__ file.
+
+The image presents the results of different flux configurations, as tested in _testFluxes.py_. Each structure represents a variation in flux conditions, leading to differences in hole shape, depth, and profile characteristics. The variations highlight the influence of ion and neutral fluxes on the etching process.
+
+> [!NOTE] 
+> The underlying model may change in future releases, so running this example in newer versions of ViennaPS might not always reproduce exactly the same results.  
+> The images shown here were generated using **ViennaPS v3.6.0**.
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/ViennaTools/ViennaPS/master/assets/sf6o2_results.png" width=700 style="background-color:white;">
+</div>
+
+### Bosch Process
+
+This [example](https://github.com/ViennaTools/ViennaPS/tree/master/examples/boschProcess) compares different approaches to simulating the Bosch process, a deep reactive ion etching (DRIE) technique. The three structures illustrate how different modeling methods influence the predicted etch profile.
+
+- Left: The structure generated through process emulation, which captures the characteristic scalloping effect of the Bosch process in a simplified yet effective way.
+- Middle: The result of a simple simulation model, which approximates the etching dynamics but may lack finer physical details.
+- Right: The outcome of a more physical simulation model, leading to a more realistic etch profile.
+  
+This comparison highlights the trade-offs between computational efficiency and physical accuracy in DRIE simulations.
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/ViennaTools/ViennaPS/master/assets/bosch_process.png" width=700 style="background-color:white;">
+</div>
+
+### Wet Etching
+
+This [example](https://github.com/ViennaTools/ViennaPS/tree/master/examples/cantileverWetEtching) demonstrates the wet etching process, specifically focusing on the cantilever structure. The simulation captures the etching dynamics and the influence of crystallographic directions on the etch profile.
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/ViennaTools/ViennaPS/master/assets/wet_etching.png" width=700 style="background-color:white;">
+</div>
+
+### Selective Epitaxy
+
+This [example](https://github.com/ViennaTools/ViennaPS/tree/master/examples/selectiveEpitaxy) demonstrates the selective epitaxy process, focusing on the growth of SiGe on a Si substrate. Similar to wet etching, the process is influenced by crystallographic directions, which can be adjusted in the __config.txt__ file. The simulation captures the growth dynamics and the resulting SiGe structure.
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/ViennaTools/ViennaPS/master/assets/epitaxy.png" width=700 style="background-color:white;">
+</div>
+
+### Redeposition During Selective Etching
+
+This [example](https://github.com/ViennaTools/ViennaPS/tree/master/examples/oxideRegrowth) demonstrates capturing etching byproducts and the subsequent redeposition during a selective etching process in a Si<sub>3</sub>N<sub>4</sub>/SiO<sub>2</sub> stack. The etching byproducts are captured in a cell set description of the etching plasma. To model the dynamics of these etching byproducts, a convection-diffusion equation is solved on the cell set using finite differences. The redeposition is then captured by adding up the byproducts in every step and using this information to generate a velocity field on the etched surface. 
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/ViennaTools/ViennaPS/master/assets/redeposition.gif" width=700 style="background-color:white;">
+</div>
+
+### GDS Mask Import Example
+
+This [example](https://github.com/ViennaTools/ViennaPS/tree/master/examples/GDSReader) tests the full GDS mask import, blurring, rotation, scaling, and flipping as well as the level set conversion pipeline. Shown below is the result after applying proximity correction and extrusion on a simple test.
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/ViennaTools/ViennaPS/master/assets/masks.png" width=1200 style="background-color:white;">
+</div>
+
+### Fin Oxidation
+
+This [example](https://github.com/ViennaTools/ViennaPS/tree/master/examples/finOxidation) simulates thermal oxidation of a silicon fin structure. Oxide grows simultaneously on the fin top, both sidewalls, and the surrounding substrate. The image shows the initial bare Si fin on the left and the oxidized structure on the right (together with the pressure field) after thermal oxidation, with the grown SiO<sub>2</sub> shell visible around the fin. Anisotropic oxidation rates produce a non-uniform oxide shell: the (110)-oriented sidewalls oxidize about 1.45x faster than the (100) top surface. The fin corners progressively round as the oxide thickens.
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/ViennaTools/ViennaPS/master/assets/fin_oxidation.png" width=700 style="background-color:white;">
+</div>
+
+### LOCOS Oxidation
+
+This [example](https://github.com/ViennaTools/ViennaPS/tree/master/examples/locosOxidation) simulates Local Oxidation of Silicon (LOCOS), the classical process for field-oxide isolation in CMOS technology. A silicon nitride (Si<sub>3</sub>N<sub>4</sub>) pad mask blocks oxidation on the protected side; the open window oxidizes freely. At the mask edge, lateral diffusion of oxidant beneath the nitride produces the characteristic **bird's beak**: a wedge-shaped oxide intrusion that tapers from the full field-oxide thickness to nothing under the mask center. The model fully couples a Deal-Grove diffusion solve, a viscous Stokes deformation solver, and a nitride mask bending solver, all iterated to self-consistency at each time step. The image shows the  Si<sub>3</sub>N<sub>4</sub>/SiO<sub>2</sub> material stack on the left half and the corresponding compressive stress in the nitride mask and pressure field in the oxide on the right half, after thermal oxidation.
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/ViennaTools/ViennaPS/master/assets/locos.png" width=700 style="background-color:white;">
+</div>
+
+
+## Tests
+
+ViennaPS uses CTest to run its tests. In order to check whether ViennaPS runs without issues on your system, you can run:
+
+```bash
+git clone https://github.com/ViennaTools/ViennaPS.git
+cd ViennaPS
+
+cmake -B build -DVIENNAPS_BUILD_TESTS=ON
+cmake --build build
+ctest -E "Benchmark|Performance" --test-dir build
+```
+
+## Contributing
+
+If you want to contribute to ViennaPS, make sure to follow the [LLVM Coding guidelines](https://llvm.org/docs/CodingStandards.html).
+
+Make sure to format all files before creating a pull request:
+```bash
+cmake -B build
+cmake --build build --target format
+```
+
+## Authors
+
+Contact us via: viennatools@iue.tuwien.ac.at
+
+ViennaPS was developed under the aegis of the 'Institute for Microelectronics' at the 'TU Wien'.
+http://www.iue.tuwien.ac.at/
+
+## License
+
+Versions < 4.3.0 were released under MIT License. Starting with version 4.3.0, the project is licensed under GPL-3.0 License. For more details, please refer to the [LICENSE](./LICENSE) file in the base directory of the repository.
+
+Some third-party libraries used by ViennaPS are under their own permissive licenses (BSD, Apache-2.0).  
+See [`THIRD_PARTY_LICENSES.md`](./THIRD_PARTY_LICENSES.md) for details.

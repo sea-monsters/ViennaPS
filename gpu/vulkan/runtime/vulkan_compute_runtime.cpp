@@ -880,6 +880,14 @@ bool DescriptorPool::create(VulkanDevice &device,
                             std::uint32_t descriptorSetCount,
                             VkDescriptorType descriptorType,
                             std::string &error) {
+  return create(device, descriptorSetCount, 2u, descriptorType, error);
+}
+
+bool DescriptorPool::create(VulkanDevice &device,
+                            const std::uint32_t descriptorSetCount,
+                            const std::uint32_t descriptorsPerSet,
+                            const VkDescriptorType descriptorType,
+                            std::string &error) {
   if (!device.isValid()) {
     error = "Invalid device passed to DescriptorPool::create.";
     return false;
@@ -887,10 +895,16 @@ bool DescriptorPool::create(VulkanDevice &device,
   if (pool_ != VK_NULL_HANDLE) {
     return true;
   }
+  if (descriptorSetCount == 0u || descriptorsPerSet == 0u ||
+      descriptorSetCount >
+          std::numeric_limits<std::uint32_t>::max() / descriptorsPerSet) {
+    error = "Descriptor pool counts must be non-zero and must not overflow.";
+    return false;
+  }
   device_ = device.get();
   VkDescriptorPoolSize poolSize{};
   poolSize.type = descriptorType;
-  poolSize.descriptorCount = descriptorSetCount * 2u;
+  poolSize.descriptorCount = descriptorSetCount * descriptorsPerSet;
   VkDescriptorPoolCreateInfo info{};
   info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
   info.poolSizeCount = 1;

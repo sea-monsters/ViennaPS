@@ -104,10 +104,8 @@ bool GatherHistogramPrimitives::initialize(const std::string_view spirvPath,
     return failInitialization();
   }
 
-  // DescriptorPool currently sizes storage descriptors as two per requested
-  // set. Request two sets so this four-binding layout has four descriptors.
-  if (!descriptorPool_.create(device_, 2u, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                              error)) {
+  if (!descriptorPool_.create(device_, 1u, 4u,
+                              VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, error)) {
     return failInitialization();
   }
   if (!descriptorPool_.allocate(descriptorSetLayout_.get(), descriptorSet_,

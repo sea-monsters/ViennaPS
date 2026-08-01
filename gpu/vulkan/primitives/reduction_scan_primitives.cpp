@@ -95,10 +95,8 @@ bool ReductionScanPrimitives::initialize(const std::string_view spirvPath,
     return fail();
   }
 
-  // The shared runtime currently allocates two descriptors per requested set.
-  // Three requested sets provide six descriptors for this five-binding layout.
-  if (!descriptorPool_.create(device_, 3u, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                              error) ||
+  if (!descriptorPool_.create(device_, 1u, 5u,
+                              VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, error) ||
       !descriptorPool_.allocate(descriptorSetLayout_.get(), descriptorSet_,
                                 error) ||
       !commandContext_.create(device_, device_.computeQueueFamily(), error) ||

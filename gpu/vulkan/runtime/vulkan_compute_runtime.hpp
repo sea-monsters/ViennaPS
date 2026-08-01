@@ -252,6 +252,11 @@ public:
                             std::uint32_t descriptorSetCount,
                             VkDescriptorType descriptorType,
                             std::string &error);
+  [[nodiscard]] bool create(VulkanDevice &device,
+                            std::uint32_t descriptorSetCount,
+                            std::uint32_t descriptorsPerSet,
+                            VkDescriptorType descriptorType,
+                            std::string &error);
   [[nodiscard]] bool allocate(VkDescriptorSetLayout layout,
                               VkDescriptorSet &set, std::string &error);
   void reset();

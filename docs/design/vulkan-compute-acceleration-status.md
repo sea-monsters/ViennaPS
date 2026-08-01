@@ -134,6 +134,9 @@ machine-local fallback path may enter tracked CMake, presets, tests, or docs.
 the original no-push-constant overload. `ComputePipeline` now accepts an entry
 point and validated specialization-constant map/data through
 `ComputePipelineOptions`, while preserving its original `main` entry overload.
+`DescriptorPool` also accepts an explicit descriptors-per-set count while its
+two-descriptor compatibility overload remains unchanged; multi-binding
+primitive layouts therefore allocate exactly one set with sufficient entries.
 The runtime smoke uses a specialization constant for the multiplier and a push
 constant for the bias, then differentially validates the same 16-value
 `y = 2x + 1` CPU oracle on the Intel Arc device. All values remain bit-exact,

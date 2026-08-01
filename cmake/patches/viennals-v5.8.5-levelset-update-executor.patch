@@ -1,3 +1,5 @@
+diff --git a/include/viennals/lsAdvect.hpp b/include/viennals/lsAdvect.hpp
+index 0d9ad9b..66ab006 100644
 --- a/include/viennals/lsAdvect.hpp
 +++ b/include/viennals/lsAdvect.hpp
 @@ -4,0 +5,2 @@
@@ -6,7 +8,7 @@
 @@ -6,0 +9,2 @@
 +#include <string>
 +#include <utility>
-@@ -58,0 +63,25 @@ template <class T, int D> class Advect {
+@@ -58,0 +63,26 @@ template <class T, int D> class Advect {
 +public:
 +  using LevelSetUpdateRate = std::pair<std::pair<T, T>, T>;
 +  using LevelSetUpdateRates = std::vector<std::vector<LevelSetUpdateRate>>;
@@ -33,20 +35,22 @@
 +      const LevelSetUpdateContext &, LevelSetUpdateOutput &, std::string &)>;
 +
 +private:
-@@ -83,0 +113 @@ template <class T, int D> class Advect {
+@@ -83,0 +114,7 @@ template <class T, int D> class Advect {
 +  LevelSetUpdateExecutor levelSetUpdateExecutor = nullptr;
 +  LevelSetUpdateFailurePolicy levelSetUpdateFailurePolicy =
 +      LevelSetUpdateFailurePolicy::FALLBACK;
 +  bool levelSetUpdateExecutorFailed = false;
 +  std::string levelSetUpdateExecutorError;
-@@ -87 +117 @@ template <class T, int D> class Advect {
++  bool advectionTimeError = false;
++  std::string advectionTimeErrorMessage;
+@@ -87 +124 @@ template <class T, int D> class Advect {
 -  std::vector<std::vector<std::pair<std::pair<T, T>, T>>> storedRates;
 +  LevelSetUpdateRates storedRates;
-@@ -238,0 +269,3 @@ template <class T, int D> class Advect {
+@@ -238,0 +276,3 @@ template <class T, int D> class Advect {
 +    if (levelSetUpdateExecutorFailed)
 +      return;
 +
-@@ -683,0 +714,85 @@ template <class T, int D> class Advect {
+@@ -683,0 +724,90 @@ template <class T, int D> class Advect {
 +  bool tryLevelSetUpdateExecutor(const double dt) {
 +    if (!levelSetUpdateExecutor)
 +      return false;
@@ -137,7 +141,7 @@
 +    return true;
 +  }
 +
-@@ -696,0 +815,10 @@ template <class T, int D> class Advect {
+@@ -697,0 +828,9 @@ template <class T, int D> class Advect {
 +    std::vector<std::vector<T>> originalValues;
 +    if (levelSetUpdateExecutor &&
 +        levelSetUpdateFailurePolicy == LevelSetUpdateFailurePolicy::FAIL) {
@@ -147,7 +151,7 @@
 +      }
 +    }
 +
-@@ -701,0 +830,11 @@ template <class T, int D> class Advect {
+@@ -701,0 +841,11 @@ template <class T, int D> class Advect {
 +    if (tryLevelSetUpdateExecutor(dt)) {
 +      if (levelSetUpdateExecutorFailed) {
 +        for (unsigned p = 0; p < topDomain.getNumberOfSegments(); ++p) {
@@ -159,11 +163,38 @@
 +      return;
 +    }
 +
-@@ -802,0 +942,3 @@ template <class T, int D> class Advect {
+@@ -802,0 +953,3 @@ template <class T, int D> class Advect {
 +    if (levelSetUpdateExecutorFailed)
 +      return;
 +
-@@ -970,0 +1091,20 @@ public:
+@@ -831,0 +985,26 @@ template <class T, int D> class Advect {
++  void setAdvectionTimeError(std::string message) {
++    advectionTimeError = true;
++    advectionTimeErrorMessage = std::move(message);
++  }
++
++  bool isZeroVelocityTimeStep(const double timeStep) const {
++    return timeStep == std::numeric_limits<double>::max() ||
++           timeStep == static_cast<double>(std::numeric_limits<T>::max());
++  }
++
++  bool validateAdvectionTimeBeforeUpdate() {
++    if (isZeroVelocityTimeStep(currentTimeStep))
++      return false;
++
++    if (std::isfinite(currentTimeStep) && currentTimeStep > 0.0)
++      return true;
++
++    if (!performOnlySingleStep) {
++      setAdvectionTimeError(
++          std::isfinite(currentTimeStep) && currentTimeStep == 0.0
++              ? "Advection made no time progress."
++              : "Advection produced an invalid time step.");
++    }
++    return false;
++  }
++
+@@ -970,0 +1150,26 @@ public:
 +  /// Set an optional executor for the value-update phase between rate
 +  /// calculation and sparse-domain rebuild. Returning FALLBACK uses the
 +  /// built-in CPU implementation; ERROR uses it only in FALLBACK policy mode.
@@ -184,17 +215,168 @@
 +    return levelSetUpdateExecutorError;
 +  }
 +
-@@ -1017,1 +1133,3 @@
-   void apply() {
++  bool hasAdvectionTimeError() const { return advectionTimeError; }
++
++  const std::string &getAdvectionTimeError() const {
++    return advectionTimeErrorMessage;
++  }
++
+@@ -1017,0 +1223,5 @@ public:
 +    levelSetUpdateExecutorFailed = false;
 +    levelSetUpdateExecutorError.clear();
++    advectionTimeError = false;
++    advectionTimeErrorMessage.clear();
 +
-@@ -1038 +1175 @@
--        if (performOnlySingleStep)
-+        if (levelSetUpdateExecutorFailed || performOnlySingleStep)
+@@ -1030 +1240,29 @@ public:
+-      advectedTime = advect(std::numeric_limits<double>::max());
++      const double timeStep = advect(std::numeric_limits<double>::max());
++      numberOfTimeSteps = 0;
++      if (levelSetUpdateExecutorFailed) {
++        advectedTime = 0.0;
++        return;
++      }
++      if (advectionTimeError) {
++        advectedTime = 0.0;
++        return;
++      }
++      if (isZeroVelocityTimeStep(timeStep)) {
++        advectedTime = timeStep;
++        numberOfTimeSteps = 1;
++        return;
++      }
++      const double nextTime = timeStep;
++      const bool validTime = std::isfinite(timeStep) && timeStep >= 0.0 &&
++                             std::isfinite(nextTime);
++      const bool madeProgress = nextTime > 0.0;
++      if (!validTime || (!performOnlySingleStep && !madeProgress)) {
++        if (!performOnlySingleStep) {
++          setAdvectionTimeError(
++              validTime ? "Advection made no time progress."
++                        : "Advection produced an invalid time step.");
++          advectedTime = 0.0;
++          return;
++        }
++      }
++      advectedTime = timeStep;
+@@ -1036 +1274,40 @@ public:
+-        currentTime += advect(advectionTime - currentTime);
++        const double timeStep = advect(advectionTime - currentTime);
++        if (levelSetUpdateExecutorFailed)
++          break;
++        if (advectionTimeError)
++          break;
++        if (isZeroVelocityTimeStep(timeStep)) {
++          currentTime = timeStep;
++          ++numberOfTimeSteps;
++          break;
++        }
++        if (!std::isfinite(timeStep) || timeStep < 0.0) {
++          if (performOnlySingleStep) {
++            currentTime = timeStep;
++            ++numberOfTimeSteps;
++            break;
++          }
++          setAdvectionTimeError("Advection produced an invalid time step.");
++          break;
++        }
++        const double nextTime = currentTime + timeStep;
++        if (!std::isfinite(nextTime)) {
++          if (performOnlySingleStep) {
++            currentTime = nextTime;
++            ++numberOfTimeSteps;
++            break;
++          }
++          setAdvectionTimeError(
++              "Advection produced a non-finite accumulated time.");
++          break;
++        }
++        if (!(nextTime > currentTime)) {
++          if (performOnlySingleStep) {
++            currentTime = nextTime;
++            ++numberOfTimeSteps;
++            break;
++          }
++          setAdvectionTimeError("Advection made no time progress.");
++          break;
++        }
++        currentTime = nextTime;
+diff --git a/include/viennals/lsAdvectIntegrationSchemes.hpp b/include/viennals/lsAdvectIntegrationSchemes.hpp
+index dc28b3e..46bf113 100644
 --- a/include/viennals/lsAdvectIntegrationSchemes.hpp
 +++ b/include/viennals/lsAdvectIntegrationSchemes.hpp
-@@ -51,0 +52,3 @@
+@@ -2,0 +3,3 @@
++#include <cmath>
++#include <limits>
 +
+@@ -50,0 +54,6 @@ template <class T, int D> struct AdvectTimeIntegration {
++    if (!kernel.validateAdvectionTimeBeforeUpdate()) {
++      const double rejectedTimeStep = kernel.currentTimeStep;
++      kernel.storedRates.clear();
++      return rejectedTimeStep;
++    }
++
+@@ -52,0 +62,3 @@ template <class T, int D> struct AdvectTimeIntegration {
 +    if (kernel.hasLevelSetUpdateError())
 +      return 0.;
++
+@@ -85 +97,8 @@ template <class T, int D> struct AdvectTimeIntegration {
+-    if (dt1 <= 0.)
++    if (kernel.hasLevelSetUpdateError() ||
++        kernel.hasAdvectionTimeError())
++      return dt1;
++
++    if (!std::isfinite(dt1) || dt1 < 0.)
++      return dt1;
++
++    if (dt1 == 0.)
+@@ -87,0 +107,3 @@ template <class T, int D> struct AdvectTimeIntegration {
++    if (kernel.isZeroVelocityTimeStep(dt1))
++      return dt1;
++
+@@ -95,0 +118,10 @@ template <class T, int D> struct AdvectTimeIntegration {
++    if (kernel.hasLevelSetUpdateError() ||
++        kernel.hasAdvectionTimeError())
++      return 0.;
++
++    if (!std::isfinite(dt2) || dt2 <= 0.)
++      return dt2;
++
++    if (kernel.isZeroVelocityTimeStep(dt2))
++      return dt2;
++
+@@ -126 +158,8 @@ template <class T, int D> struct AdvectTimeIntegration {
+-    if (dt1 <= 0.)
++    if (kernel.hasLevelSetUpdateError() ||
++        kernel.hasAdvectionTimeError())
++      return dt1;
++
++    if (!std::isfinite(dt1) || dt1 < 0.)
++      return dt1;
++
++    if (dt1 == 0.)
+@@ -128,0 +168,3 @@ template <class T, int D> struct AdvectTimeIntegration {
++    if (kernel.isZeroVelocityTimeStep(dt1))
++      return dt1;
++
+@@ -135,0 +178,10 @@ template <class T, int D> struct AdvectTimeIntegration {
++    if (kernel.hasLevelSetUpdateError() ||
++        kernel.hasAdvectionTimeError())
++      return 0.;
++
++    if (!std::isfinite(dt2) || dt2 <= 0.)
++      return dt2;
++
++    if (kernel.isZeroVelocityTimeStep(dt2))
++      return dt2;
++
+@@ -155,0 +208,10 @@ template <class T, int D> struct AdvectTimeIntegration {
++    if (kernel.hasLevelSetUpdateError() ||
++        kernel.hasAdvectionTimeError())
++      return 0.;
++
++    if (!std::isfinite(dt3) || dt3 <= 0.)
++      return dt3;
++
++    if (kernel.isZeroVelocityTimeStep(dt3))
++      return dt3;
++

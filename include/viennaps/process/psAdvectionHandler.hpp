@@ -123,6 +123,15 @@ public:
       return ProcessResult::FAILURE;
     }
 
+    if (advectionKernel_.hasAdvectionTimeError()) {
+      viennacore::Logger::getInstance()
+          .addError("Advection time integration failed: " +
+                        advectionKernel_.getAdvectionTimeError(),
+                    false)
+          .print();
+      return ProcessResult::FAILURE;
+    }
+
     if (context.advectionParams.velocityOutput) {
       auto mesh = viennals::Mesh<NumericType>::New();
       viennals::ToMesh<NumericType, D>(context.domain->getSurface(), mesh)
@@ -134,7 +143,9 @@ public:
     }
 
     context.timeStep = advectionKernel_.getAdvectedTime();
-    if (context.timeStep == std::numeric_limits<double>::max()) {
+    if (context.timeStep == std::numeric_limits<double>::max() ||
+        context.timeStep ==
+            static_cast<double>(std::numeric_limits<NumericType>::max())) {
       VIENNACORE_LOG_WARNING(
           "Process terminated early: Velocities are zero everywhere.");
       context.processTime = context.processDuration;

@@ -808,7 +808,7 @@ step count. Each scenario completed well below its 15-second test timeout.
 ## P3K-A-advection-progress-guard: ViennaPS single-step boundary
 
 - Status: accepted locally for the single-step Analytic and Flux strategy
-  boundary; the ALP inner-loop half remains open
+  boundary; P3K-B supplies the complementary ALP inner-loop guard
 - Date: 2026-08-02
 - Scope: classify the time returned by ViennaLS before ViennaPS accepts a step
   or advances process time
@@ -819,9 +819,10 @@ positive step lost to floating-point rounding returns `EARLY_TERMINATION` with
 no accepted-step or process-time advance. Defensive branches reject a negative
 or non-finite step, or a finite step whose addition overflows process time,
 through a non-throwing error log. These synthetic invalid-value branches are
-compile- and review-validated here; direct injection coverage remains a P3K-B
-test extension. The existing maximum-double all-zero-velocity sentinel is
-checked first and retains its successful completion behavior.
+compile- and review-validated here; direct negative/non-finite injection
+coverage remains a future test extension. The all-zero-velocity sentinel is
+checked first and retains its successful completion behavior for both the
+template numeric type maximum and the double-precision compatibility value.
 
 The focused CPU test uses a small two-dimensional plane. A non-zero velocity
 with `timeStepRatio=0` was a 10-second RED timeout before the guard; it now
@@ -834,25 +835,76 @@ executes all seven P3J routing scenarios.
 |---|---|
 | RED evidence | zero-ratio analytic step exceeded the 10-second watchdog before the guard |
 | Zero progress | returns `EARLY_TERMINATION` without time or accepted-step advance |
-| Zero velocity | maximum-double sentinel remains `SUCCESS` and completes the duration |
+| Zero velocity | numeric-precision maximum sentinel remains `SUCCESS` and completes the duration |
 | Positive progress | the seven existing routing scenarios retain their normal successful step behavior |
 | Invalid-time defense | negative/non-finite step and non-finite accumulated-time branches compile and pass review; direct injection is still open |
 | Regression | focused guard plus seven executor-routing scenarios pass eight of eight |
 | No-SDK behavior | the CPU-only build compiles and runs the same focused guard |
 | Path policy | changed source and tests contain no resolved SDK, dependency, or build path |
 
+## P3K-B-advection-inner-loop-guard: ALP bounded progress
+
+- Status: accepted locally for the ViennaLS non-single-step loop used by ALP
+- Date: 2026-08-02
+- Scope: stop a zero or invalid integration result before ViennaLS can repeat
+  it indefinitely without returning to ViennaPS
+
+`Advect::apply` now resets an independent advection-time error on every call.
+The shared integration helper validates the rate-derived time immediately
+after `computeRates` and before `updateLevelSet`, `Reduce`, or sparse rebuild.
+The zero-velocity success sentinel skips the update without an error. Sentinel
+recognition covers both `numeric_limits<T>::max()` promoted to double and the
+double-precision compatibility value, which is required when ViennaLS runs
+with `float`. A finite positive step proceeds. Zero, negative, and non-finite
+values also skip the update: non-single-step mode records an error, while
+single-step mode retains the value for the P3K-A boundary to classify. The
+outer Advect loop separately validates accumulated time and strict forward
+progress before committing its time or step count. Runge-Kutta stages now stop
+after a strict executor or advection-time error instead of combining or
+entering a later stage. Rejected or terminal stages clear cached rates before
+returning, so a later `apply` on the same handler recomputes them. The current
+time-step getter is left intact for compatibility. `AdvectionHandler` reads
+the error before velocity output, process-time mutation, or accepted-step
+accounting and returns `ProcessResult::FAILURE` through a non-throwing error
+log.
+
+The focused CPU fixture uses the same small two-dimensional plane with ALP
+mode enabled, `disableSingleStep()`, and a bounded advection time. A non-zero
+velocity with `timeStepRatio=0` returns `FAILURE` in under one tenth of a
+second with zero ViennaPS time and accepted steps. Legal zero velocity
+completes the remaining internal time in one step; a normal positive-velocity
+case also remains successful. The zero-progress fixture snapshots sparse
+`definedValues` before and after the call and verifies that pre-update rejection
+leaves them unchanged. The exposed zero-velocity step is the remaining time
+rather than the maximum sentinel because ViennaLS caps the internal rate step
+to `advect(remaining)`; separate unbounded RK2 and RK3 fixtures exercise the
+promoted `NumericType` maximum sentinel. Forward Euler, RK2, and RK3 each have
+an isolated zero-progress CTest, and the recovery fixture changes the ratio
+after an expected failure and succeeds on the same reinitialized handler.
+
+| Gate | Result |
+|---|---|
+| Non-single zero progress | returns `FAILURE` without sparse-value, ViennaPS time, or accepted-step mutation |
+| Legal zero velocity | completes the bounded ALP interval successfully in one internal step |
+| Positive progress | normal positive velocity remains successful |
+| Single-step compatibility | invalid/zero values remain available to the P3K-A outer classifier |
+| Multi-stage exit | RK2/RK3 stop before combine or later stages after strict executor/advection-time errors |
+| Sentinel precision | unbounded RK2/RK3 accept the promoted `NumericType` maximum without entering a large update |
+| Rate-cache recovery | the same handler recomputes rates and succeeds after a prior zero-progress failure |
+| Focused regression | six P3K-B, one P3K-A, and seven P3J routing scenarios pass 14 of 14 |
+| Patch applicability | zero-context ViennaLS patch applies cleanly to both upstream headers |
+| No-SDK behavior | the CPU-only build compiles and runs all focused progress/routing tests |
+| Path policy | changed patch, source, and tests contain no resolved SDK, dependency, or build path |
+
 ## Next slice
 
-P3K-B must apply the equivalent guard inside ViennaLS `Advect::apply` before
-its non-single-step time accumulation. ALP deliberately disables single-step,
-so a zero or invalid integration result can otherwise loop before control
-returns to `AdvectionHandler`. ViennaLS needs a separately observable
-advection-time error which ViennaPS converts to `ProcessResult::FAILURE`, while
-preserving the maximum-double zero-velocity sentinel and normal positive-step
-ALP behavior.
+Add the real controller-to-`Process` strict-fault integration test now that the
+single- and non-single-step loops have bounded exits. Add a wider rollback
+fixture before claiming full transactionality for HRLE segmentation and point
+data; the current P3J oracle proves `definedValues` restoration only. Direct
+negative/non-finite time injection also remains a defensive-branch coverage
+gap.
 
-After that behavior gate is accepted, add the real controller-to-`Process`
-strict-fault integration test and a wider rollback fixture for HRLE topology
-and point data. The Level Set work then advances to HRLE active-run
-classification and sparse rebuild, followed by particle/ray and
+After those production-seam gates, the Level Set work advances to HRLE
+active-run classification and sparse rebuild, followed by particle/ray and
 surface/oxidation stages.

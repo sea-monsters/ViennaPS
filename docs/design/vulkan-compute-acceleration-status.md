@@ -117,10 +117,49 @@ These values live only in the process environment and ignored CMake cache.
 
 ### Open exits before S2B
 
-- Adapt the probe JSON directly into `CapabilityProfileRecord`, add safe
-  working-set calibration, and atomically persist the resulting profile.
 - Remove the bounded 256-block ceiling described below, then add compaction,
   sort, gather/scatter, histogram, and deterministic RNG.
+
+## S2B-profile: deployment probe-to-profile persistence
+
+- Status: accepted locally
+- Date: 2026-08-01
+- Scope: explicit deployment-time generation and validation of the cached
+  capability profile; suite promotion remains a separate gate
+
+### Delivered contracts
+
+- The probe keeps its schema-1 diagnostic JSON output compatible and adds the
+  explicit `--write-deployment-profile <path>` operation. The resulting
+  schema-2 `CapabilityProfileRecord` is written through the existing temporary
+  file plus atomic replacement path and can be read back with
+  `--validate-profile`.
+- Hardware and driver UUIDs, vendor/device identity, compute and ray features,
+  and `shaderFloat64` are copied into the deployment profile. Missing identity
+  fields reject profile adaptation.
+- Safe working-set derivation considers only device-local heaps and uses their
+  current `heapBudget - heapUsage`. It selects the largest available heap,
+  reserves 64 MiB plus ten percent, rejects results below 128 MiB, and caps the
+  persisted result at 4 GiB. If `VK_EXT_memory_budget` is unavailable, the
+  budget remains zero so Auto fails closed.
+- Primitive and FP64 suite flags always remain false at probe time. A probe
+  without a compute queue cannot mark Vulkan available. A build without the
+  Vulkan SDK still emits the disabled diagnostic, but an attempted deployment
+  profile write fails explicitly and does not create a Vulkan-eligible cache.
+- The output path is supplied by the caller or the deployment profile path
+  resolver. No machine-local SDK, library, or cache path is compiled into the
+  program.
+
+### Acceptance evidence
+
+| Gate | Result |
+|---|---|
+| Adapter and budget policy | 11 focused cases pass under MSVC C++20 `/W4 /WX` |
+| Real device profile | Intel Arc schema 2 profile writes atomically and validates through the production parser |
+| Real device gates | compute true; `shaderFloat64`, primitive suite, and FP64 suite false; safe budget capped at 4 GiB |
+| No-SDK diagnostic | normal probe exits 0 with `status=disabled` |
+| No-SDK profile write | exits nonzero and reports that no Vulkan deployment profile is available |
+| Fixed-path audit | local SDK and reference-source paths are absent from tracked source and documentation |
 
 ## S2B-primitive-1: parallel primitive differential slice
 
@@ -171,7 +210,6 @@ These values live only in the process environment and ignored CMake cache.
 
 ## Next slice
 
-S2B removes the current 256-block bound, adds the remaining primitive
-contracts, and delivers calibrated probe-to-profile persistence. It unlocks
-the first Vulkan implementation of the frozen two-dimensional Level Set
-scenario.
+The next S2B slice removes the current 256-block bound and adds the remaining
+primitive contracts. It unlocks the first Vulkan implementation of the frozen
+two-dimensional Level Set scenario.

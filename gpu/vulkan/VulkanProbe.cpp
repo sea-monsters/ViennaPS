@@ -20,16 +20,27 @@
 #include <string_view>
 #include <vector>
 
+#include <compute/probeProfileAdapter.hpp>
+
 #ifdef VIENNAPS_VULKAN_ENABLED
 #include <vulkan/vulkan.h>
 #endif
 
 namespace {
 
+using viennaps::compute::CapabilityProfileRecord;
+
 struct ArgView {
   bool writeProfile = false;
+  bool writeDeploymentProfile = false;
   bool validateProfile = false;
   std::string profilePath;
+  std::string deploymentProfilePath;
+};
+
+struct ProbeResult {
+  std::string rawSummary;
+  std::vector<CapabilityProfileRecord> deploymentProfiles;
 };
 
 [[nodiscard]] std::string escapeJson(std::string_view input) {
@@ -131,9 +142,11 @@ jsonNumberList(const std::vector<std::uint32_t> &value) {
 
 #ifdef VIENNAPS_VULKAN_ENABLED
 
-[[nodiscard]] std::string
+[[nodiscard]] ProbeResult
 makeDeviceProfile(const VkPhysicalDevice physicalDevice,
                   const std::uint32_t deviceIndex) {
+  ProbeResult out;
+
   VkPhysicalDeviceProperties properties{};
   vkGetPhysicalDeviceProperties(physicalDevice, &properties);
   const VkPhysicalDeviceLimits &limits = properties.limits;
@@ -320,25 +333,71 @@ makeDeviceProfile(const VkPhysicalDevice physicalDevice,
   std::uint32_t maxRayRecursionDepth = 0;
 
   if (hasRtPipelineExt) {
-    VkPhysicalDeviceProperties2 props2{};
+    VkPhysicalDeviceProperties2 rayTracingProperties{};
     VkPhysicalDeviceRayTracingPipelinePropertiesKHR rtPipelineProps{};
-    props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    rayTracingProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
     rtPipelineProps.sType =
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR;
-    props2.pNext = &rtPipelineProps;
-    vkGetPhysicalDeviceProperties2(physicalDevice, &props2);
+    rayTracingProperties.pNext = &rtPipelineProps;
+    vkGetPhysicalDeviceProperties2(physicalDevice, &rayTracingProperties);
     maxRayRecursionDepth = rtPipelineProps.maxRayRecursionDepth;
   }
 
-  const std::vector<std::uint32_t> subgroupSizes = {subgroupSize};
+  std::vector<std::uint64_t> memoryBudgetBytes{};
   const bool hasMemoryBudgetExt =
       hasExtension(extensionNames, "VK_EXT_memory_budget");
+#ifdef VK_EXT_MEMORY_BUDGET_SPEC_VERSION
+  if (hasMemoryBudgetExt) {
+    VkPhysicalDeviceMemoryProperties2 memoryProperties2{};
+    VkPhysicalDeviceMemoryBudgetPropertiesEXT memoryBudget{};
+    memoryProperties2.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2;
+    memoryBudget.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT;
+    memoryProperties2.pNext = &memoryBudget;
+    vkGetPhysicalDeviceMemoryProperties2(physicalDevice, &memoryProperties2);
+    const auto &budgetMemoryProperties = memoryProperties2.memoryProperties;
+    memoryBudgetBytes.reserve(budgetMemoryProperties.memoryHeapCount);
+    for (std::uint32_t i = 0; i < budgetMemoryProperties.memoryHeapCount; ++i) {
+      if ((budgetMemoryProperties.memoryHeaps[i].flags &
+           VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) == 0u) {
+        continue;
+      }
+      const auto budget = memoryBudget.heapBudget[i];
+      const auto usage = memoryBudget.heapUsage[i];
+      memoryBudgetBytes.push_back(budget > usage ? budget - usage : 0ULL);
+    }
+  }
+#endif
+
   const auto computeWorkGroupCount = jsonSize3(std::to_array(
       {limits.maxComputeWorkGroupCount[0], limits.maxComputeWorkGroupCount[1],
        limits.maxComputeWorkGroupCount[2]}));
   const auto computeWorkGroupSize = jsonSize3(std::to_array(
       {limits.maxComputeWorkGroupSize[0], limits.maxComputeWorkGroupSize[1],
        limits.maxComputeWorkGroupSize[2]}));
+  const auto safeVulkanWorkingSetBytes =
+      viennaps::compute::deriveSafeVulkanWorkingSetBytes(
+          memoryBudgetBytes, hasMemoryBudgetExt, nullptr);
+
+  viennaps::compute::VulkanProbeDeviceFacts facts{};
+  facts.hardware.deviceUuid = deviceUuid;
+  facts.hardware.driverUuid = driverUuid;
+  facts.hardware.vendorId = properties.vendorID;
+  facts.hardware.deviceId = properties.deviceID;
+  facts.hardware.deviceName = properties.deviceName;
+  facts.hardware.driverVersion = std::to_string(properties.driverVersion);
+  facts.hardware.driverDate = "unknown";
+  facts.supportsVulkan = true;
+  facts.hasDedicatedComputeQueue = hasDedicatedComputeQueueFamily;
+  facts.supportsComputeQueue = !computeQueueFamilies.empty();
+  facts.supportsRayQuery = rayQueryEnabled;
+  facts.supportsRayTracingPipeline = rtPipelineEnabled;
+  facts.supportsShaderFloat64 = features2.features.shaderFloat64;
+  facts.memoryBudgetExtensionAvailable = hasMemoryBudgetExt;
+  facts.deviceLocalBytes = deviceLocalBytes;
+  facts.hostVisibleBytes = hostVisibleBytes;
+  facts.memoryBudgetBytes = memoryBudgetBytes;
 
   std::ostringstream json;
   json << '{';
@@ -365,7 +424,8 @@ makeDeviceProfile(const VkPhysicalDevice physicalDevice,
   json << "\"deviceLocalBytes\":" << deviceLocalBytes << ',';
   json << "\"hostVisibleBytes\":" << hostVisibleBytes << ',';
   json << "\"budgetExtension\":" << boolToJson(hasMemoryBudgetExt) << ',';
-  json << "\"measuredSafeWorkingSetBytes\":0},";
+  json << "\"measuredSafeWorkingSetBytes\":" << safeVulkanWorkingSetBytes
+       << "},";
 
   json << "\"compute\":{";
   json << "\"queueFamily\":" << selectedComputeQueueFamily << ',';
@@ -373,7 +433,8 @@ makeDeviceProfile(const VkPhysicalDevice physicalDevice,
        << ',';
   json << "\"maxWorkGroupInvocations\":"
        << limits.maxComputeWorkGroupInvocations << ',';
-  json << "\"subgroupSizes\":" << jsonNumberList(subgroupSizes) << ',';
+  json << "\"subgroupSizes\":"
+       << jsonNumberList({static_cast<std::uint32_t>(subgroupSize)}) << ',';
   json << "\"shaderFloat64\":" << boolToJson(features2.features.shaderFloat64)
        << ',';
   json << "\"shaderInt64\":" << boolToJson(features2.features.shaderInt64)
@@ -386,14 +447,14 @@ makeDeviceProfile(const VkPhysicalDevice physicalDevice,
        << boolToJson(features2.features.robustBufferAccess) << ',';
   json << "\"geometryShader\":" << boolToJson(features2.features.geometryShader)
        << ',';
-  json << "\"tessellationShader\":"
+  json << "\"tessellationShader\"" << ':'
        << boolToJson(features2.features.tessellationShader) << ',';
   json << "\"shaderInt16\":" << boolToJson(features2.features.shaderInt16)
        << ',';
   json << "\"shaderFloat16\":" << boolToJson(float16Int8Enabled) << ',';
-  json << "\"samplerAnisotropy\":"
+  json << "\"samplerAnisotropy\"" << ':'
        << boolToJson(features2.features.samplerAnisotropy) << ',';
-  json << "\"pipelineStatisticsQuery\":"
+  json << "\"pipelineStatisticsQuery\"" << ':'
        << boolToJson(features2.features.pipelineStatisticsQuery) << '}';
 
   json << ",\"limits\":{";
@@ -424,19 +485,28 @@ makeDeviceProfile(const VkPhysicalDevice physicalDevice,
 
   json << "\"extensions\":[";
   for (std::size_t i = 0; i < extensionNames.size(); ++i) {
-    if (i != 0)
+    if (i != 0) {
       json << ',';
+    }
     json << '"' << escapeJson(extensionNames[i]) << '"';
   }
   json << "],";
 
+  const auto adaptedProfile =
+      viennaps::compute::adaptVulkanProbeFactsToCapabilityProfile(
+          facts, nowUtcTimestamp());
+  if (adaptedProfile.ok) {
+    out.deploymentProfiles.push_back(adaptedProfile.record);
+  }
+
   json << "\"computeQueueFamilyIndices\":"
        << jsonNumberList(computeQueueFamilies);
   json << '}';
-  return json.str();
+  out.rawSummary = json.str();
+  return out;
 }
 
-[[nodiscard]] std::string probeSummary() {
+[[nodiscard]] ProbeResult probeSummary() {
   VkApplicationInfo appInfo{};
   appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
   appInfo.pApplicationName = "ViennaPS Vulkan Device Probe";
@@ -450,9 +520,13 @@ makeDeviceProfile(const VkPhysicalDevice physicalDevice,
   instanceCreateInfo.pApplicationInfo = &appInfo;
   VkInstance instance{};
 
+  const auto createdUtc = nowUtcTimestamp();
+  ProbeResult out;
   if (vkCreateInstance(&instanceCreateInfo, nullptr, &instance) != VK_SUCCESS) {
-    return std::string("{\"schemaVersion\":1,\"status\":\"error\",\"reason\":"
-                       "\"vkCreateInstance failed.\"}");
+    out.rawSummary =
+        std::string("{\"schemaVersion\":1,\"status\":\"error\",\"reason\":"
+                    "\"vkCreateInstance failed.\"}");
+    return out;
   }
 
   std::uint32_t deviceCount = 0;
@@ -460,47 +534,60 @@ makeDeviceProfile(const VkPhysicalDevice physicalDevice,
           VK_SUCCESS ||
       deviceCount == 0) {
     vkDestroyInstance(instance, nullptr);
-    return std::string("{\"schemaVersion\":1,\"status\":\"disabled\","
-                       "\"reason\":\"No Vulkan physical device found.\"}");
+    out.rawSummary =
+        std::string("{\"schemaVersion\":1,\"status\":\"disabled\","
+                    "\"reason\":\"No Vulkan physical device found.\"}");
+    return out;
   }
 
   std::vector<VkPhysicalDevice> devices(deviceCount);
   vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
 
-  std::ostringstream out;
-  out << "{\n";
-  out << "\"schemaVersion\":1,\n";
-  out << "\"viennaPsVersion\":\"4.6.2+vulkan-probe\",\n";
-  out << "\"createdUtc\":\"" << nowUtcTimestamp() << "\",\n";
-  out << "\"status\":\"pass\",\n";
-  out << "\"featuresProfiled\":true,\n";
-  out << "\"devices\":[\n";
+  std::ostringstream outStream;
+  outStream << "{\n";
+  outStream << "\"schemaVersion\":1,\n";
+  outStream << "\"viennaPsVersion\":\"4.6.2+vulkan-probe\",\n";
+  outStream << "\"createdUtc\":\"" << createdUtc << "\",\n";
+  outStream << "\"status\":\"pass\",\n";
+  outStream << "\"featuresProfiled\":true,\n";
+  outStream << "\"devices\":[\n";
   for (std::uint32_t i = 0; i < devices.size(); ++i) {
+    const auto deviceSummary = makeDeviceProfile(devices[i], i);
     if (i != 0)
-      out << ",\n";
-    out << makeDeviceProfile(devices[i], i);
+      outStream << ",\n";
+    outStream << deviceSummary.rawSummary;
+
+    if (!deviceSummary.deploymentProfiles.empty()) {
+      out.deploymentProfiles.push_back(
+          deviceSummary.deploymentProfiles.front());
+    }
   }
-  out << "]\n";
-  out << "}";
+  outStream << "]\n";
+  outStream << "}";
+  out.rawSummary = outStream.str();
+
   vkDestroyInstance(instance, nullptr);
-  return out.str();
+  return out;
 }
 
 #else
 
-[[nodiscard]] std::string probeSummary() {
-  return std::string("{\n"
-                     "\"schemaVersion\":1,\n"
-                     "\"viennaPsVersion\":\"4.6.2+vulkan-probe\",\n"
-                     "\"createdUtc\":\"" +
-                     nowUtcTimestamp() +
-                     "\",\n"
-                     "\"status\":\"disabled\",\n"
-                     "\"reason\":\"Vulkan headers/libraries were not available "
-                     "at build time.\",\n"
-                     "\"devices\":[],\n"
-                     "\"source\":\"build-time-fallback\"\n"
-                     "}");
+[[nodiscard]] ProbeResult probeSummary() {
+  ProbeResult out;
+  out.rawSummary =
+      std::string("{\n"
+                  "\"schemaVersion\":1,\n"
+                  "\"viennaPsVersion\":\"4.6.2+vulkan-probe\",\n"
+                  "\"createdUtc\":\"" +
+                  nowUtcTimestamp() +
+                  "\",\n"
+                  "\"status\":\"disabled\",\n"
+                  "\"reason\":\"Vulkan headers/libraries were not available "
+                  "at build time.\",\n"
+                  "\"devices\":[],\n"
+                  "\"source\":\"build-time-fallback\"\n"
+                  "}");
+  return out;
 }
 
 #endif
@@ -514,11 +601,15 @@ makeDeviceProfile(const VkPhysicalDevice physicalDevice,
     } else if ((arg == "--write-profile" || arg == "--write") && i + 1 < argc) {
       args.writeProfile = true;
       args.profilePath = argv[++i];
+    } else if (arg == "--write-deployment-profile" && i + 1 < argc) {
+      args.writeDeploymentProfile = true;
+      args.deploymentProfilePath = argv[++i];
     } else if (arg == "--validate-profile") {
       args.validateProfile = true;
     } else if (arg == "--help") {
-      std::cout << "viennaps-device-probe --write-profile <path> "
-                   "[--validate-profile]\n";
+      std::cout
+          << "viennaps-device-probe [--write-profile <path>|--write <path>] "
+             "[--write-deployment-profile <path>] [--validate-profile]\n";
     } else {
       std::cerr << "Unknown argument: " << arg << '\n';
     }
@@ -540,20 +631,61 @@ void writeProfile(const std::string &path, const std::string &content) {
   std::cout << "Profile written to " << path << '\n';
 }
 
+[[nodiscard]] bool
+writeDeploymentProfile(const std::string &path,
+                       const std::vector<CapabilityProfileRecord> &profiles) {
+  if (profiles.empty()) {
+    std::cerr << "No generated Vulkan deployment profile available to write.\n";
+    return false;
+  }
+  std::string error;
+  if (!viennaps::compute::writeCapabilityProfileRecordToFile(
+          path, profiles.front(), &error)) {
+    std::cerr << "Failed to write deployment profile to " << path << ": "
+              << error << '\n';
+    return false;
+  }
+  std::cout << "Deployment profile written to " << path << '\n';
+  return true;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
   const ArgView args = parseArgs(argc, argv);
-  const std::string profile = probeSummary();
-  std::cout << profile << '\n';
+  const ProbeResult profile = probeSummary();
+  std::cout << profile.rawSummary << '\n';
+  bool success = true;
+  bool deploymentProfileWritten = false;
 
   if (args.writeProfile && !args.profilePath.empty()) {
-    writeProfile(args.profilePath, profile);
+    writeProfile(args.profilePath, profile.rawSummary);
+  }
+
+  if (args.writeDeploymentProfile && !args.deploymentProfilePath.empty()) {
+    deploymentProfileWritten = writeDeploymentProfile(
+        args.deploymentProfilePath, profile.deploymentProfiles);
+    success = deploymentProfileWritten && success;
   }
 
   if (args.validateProfile) {
-    std::cout << "{\"validation\":\"not-implemented\"}\n";
+    if (!deploymentProfileWritten || args.deploymentProfilePath.empty()) {
+      std::cerr << "Deployment profile validation requires a successful "
+                   "--write-deployment-profile operation.\n";
+      success = false;
+    } else {
+      const auto loaded =
+          viennaps::compute::loadCapabilityProfileRecordFromFile(
+              args.deploymentProfilePath);
+      if (!loaded.ok) {
+        std::cerr << "Deployment profile validation failed: " << loaded.message
+                  << '\n';
+        success = false;
+      } else {
+        std::cout << "{\"deploymentProfileValidation\":\"pass\"}\n";
+      }
+    }
   }
 
-  return 0;
+  return success ? 0 : 1;
 }

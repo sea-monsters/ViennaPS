@@ -65,10 +65,12 @@ endif()
 add_library(viennaps_vulkan_compute_runtime
   vulkan_compute_runtime.cpp
   compute_session.cpp
+  deployment_compute_context.cpp
 )
 target_include_directories(viennaps_vulkan_compute_runtime
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../include/viennaps
 )
 target_link_libraries(viennaps_vulkan_compute_runtime PRIVATE Vulkan::Vulkan)
 target_compile_features(viennaps_vulkan_compute_runtime PRIVATE cxx_std_20)
@@ -77,6 +79,26 @@ if(MSVC)
 else()
   target_compile_options(viennaps_vulkan_compute_runtime
                          PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+if(VIENNAPS_BUILD_VULKAN_SMOKE OR VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE)
+  add_executable(viennaps-deployment-compute-context-smoke
+                 deployment_compute_context_smoke.cpp)
+  target_link_libraries(viennaps-deployment-compute-context-smoke
+    PRIVATE viennaps_vulkan_compute_runtime Vulkan::Vulkan)
+  target_compile_features(viennaps-deployment-compute-context-smoke
+                          PRIVATE cxx_std_20)
+  if(MSVC)
+    target_compile_options(viennaps-deployment-compute-context-smoke
+                           PRIVATE /W4 /WX)
+  else()
+    target_compile_options(viennaps-deployment-compute-context-smoke
+                           PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  endif()
+  if(BUILD_TESTING)
+    add_test(NAME viennaps-deployment-compute-context-smoke
+             COMMAND viennaps-deployment-compute-context-smoke)
+  endif()
 endif()
 
 if(NOT VIENNAPS_BUILD_VULKAN_SMOKE)

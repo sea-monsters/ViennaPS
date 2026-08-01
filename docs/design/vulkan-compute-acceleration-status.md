@@ -536,13 +536,46 @@ ULP/interface tolerance or gate the exact mixed-arithmetic path on
 `shaderFloat64`. FP64 domain support remains CPU-only until its dedicated suite
 passes.
 
+## P3D-deployment-context: cached automatic runtime selection
+
+- Status: accepted locally as the policy-to-session connection layer
+- Date: 2026-08-02
+- Scope: load and validate a recorded hardware profile once, resolve every
+  requested simulation stage, and create a shared Vulkan session only when the
+  resulting plan actually selects Vulkan
+
+`DeploymentComputeContext` preserves the existing fail-closed policy rather
+than duplicating thresholds. A valid profile may unlock Vulkan after primitive,
+precision, memory, callback, and ray-tier gates. Missing, invalid, or stale
+profiles set `requiresProbe` and resolve automatic workloads to CPU. A manual
+backend request has policy precedence but still cannot bypass unavailable
+hardware or a failed validation suite. Manual device index/name/UUID selection
+is applied when the session is created, then the actual device and driver UUID,
+vendor/device IDs, and name are checked against the active profile.
+
+The prepared decision is cached for the process lifetime so simulation tasks do
+not reload the profile or ask the user. Reconfiguration is explicit: call
+`reset()`, apply new manual settings, and call `prepare()` again before worker
+threads start. The context is intentionally not thread-safe during preparation.
+
+| Gate | Result |
+|---|---|
+| Automatic valid profile | Level Set FP32 selects Vulkan and creates one shared session |
+| Manual CPU | overrides automatic ranking and creates no Vulkan session |
+| Cached execution | later prepare calls do not mutate a running simulation decision |
+| Profile staleness | driver fingerprint mismatch requests a probe and falls back to CPU |
+| Unsafe manual Vulkan | unavailable/stale-profile request fails and retains rejection provenance |
+| Manual device | exact current device name succeeds and is rechecked against the profile identity |
+| Strict/runtime validation | MSVC C++20 `/W4 /WX`, CTest, and two validation-layer runs pass |
+| Local path policy | profile location remains caller/environment supplied; no machine path is compiled in |
+
 ## Next slice
 
 The next exit is a dedicated ViennaLS stage-executor seam between
 `computeRates()` and `updateLevelSet()/rebuildLS()`. The existing velocity
 callback fires after a Forward Euler update and cannot replace this phase; the
 new hook must expose a bounded rate view, return handled/fallback/error, and
-leave the unchanged CPU path as the fail-closed default. ViennaPS then connects
-the deployment-profile selection plan and manual overrides to the shared
-session. HRLE active-run classification and sparse rebuild follow after that
-integration seam is proven against the frozen 92-point oracle.
+leave the unchanged CPU path as the fail-closed default. The accepted deployment
+context supplies its selected backend and shared session to that hook. HRLE
+active-run classification and sparse rebuild follow after the integration seam
+is proven against the frozen 92-point oracle.

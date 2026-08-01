@@ -32,3 +32,4 @@ VP_VULKANINFO_*.json
 .cache/
 modeldb/
 _viennals/
+.viennaps-device-profiles/

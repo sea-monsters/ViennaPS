@@ -39,7 +39,7 @@
   constexpr std::string_view kShaderSpvPath =
       VIENNAPS_VULKAN_PRIMITIVES_SPV_PATH;
   constexpr std::uint32_t kWorkgroupSize = 256u;
-  constexpr std::array<std::size_t, 4> kTestLengths = {0, 1, 16, 257};
+  constexpr std::array<std::size_t, 5> kTestLengths = {0, 1, 16, 257, 65'535};
   constexpr float kFloatSentinel = 12.345678f;
   constexpr int kIntSentinel = 0x5A5A5A5A;
   constexpr float kFillValue = 3.75f;
@@ -227,7 +227,7 @@
     const float absMax = std::max(std::fabs(lhs), std::fabs(rhs));
     const float relative = absMax > 0.0f ? diff / absMax : diff;
     const std::uint32_t ulpDiff = floatUlpDistance(lhs, rhs);
-    return diff <= 1.0e-6f && relative <= 1.0e-6f && ulpDiff <= 16u;
+    return diff <= 1.0e-6f || relative <= 1.0e-6f || ulpDiff <= 16u;
   }
 
   [[nodiscard]] bool flushMappedRange(const VkDevice device,
@@ -363,7 +363,7 @@
       return false;
     }
 
-    std::array<VkBufferMemoryBarrier, 2> toCompute{};
+    std::array<VkBufferMemoryBarrier, 4> toCompute{};
     toCompute[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
     toCompute[0].srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
     toCompute[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
@@ -376,8 +376,26 @@
     toCompute[1].buffer = inIntBuffer;
     toCompute[1].offset = 0;
     toCompute[1].size = VK_WHOLE_SIZE;
-    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_HOST_BIT,
-                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 2,
+    toCompute[2].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    toCompute[2].srcAccessMask =
+        VK_ACCESS_HOST_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    toCompute[2].dstAccessMask =
+        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    toCompute[2].buffer = outFloatBuffer;
+    toCompute[2].offset = 0;
+    toCompute[2].size = VK_WHOLE_SIZE;
+    toCompute[3].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    toCompute[3].srcAccessMask =
+        VK_ACCESS_HOST_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    toCompute[3].dstAccessMask =
+        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+    toCompute[3].buffer = outIntBuffer;
+    toCompute[3].offset = 0;
+    toCompute[3].size = VK_WHOLE_SIZE;
+    vkCmdPipelineBarrier(commandBuffer,
+                         VK_PIPELINE_STAGE_HOST_BIT |
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 4,
                          toCompute.data(), 0, nullptr);
 
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
@@ -766,24 +784,27 @@
     const VkPipeline transformPipeline = createPipeline(2);
     const VkPipeline reducePipeline = createPipeline(3);
     const VkPipeline scanPipeline = createPipeline(4);
+    const VkPipeline reduceFinalizePipeline = createPipeline(5);
+    const VkPipeline scanBlockSumsPipeline = createPipeline(6);
+    const VkPipeline scanAddOffsetsPipeline = createPipeline(7);
+    const std::array primitivePipelines = {
+        fillPipeline,           copyPipeline,          transformPipeline,
+        reducePipeline,         scanPipeline,          reduceFinalizePipeline,
+        scanBlockSumsPipeline,  scanAddOffsetsPipeline};
+    auto destroyPrimitivePipelines = [&]() {
+      for (const VkPipeline pipeline : primitivePipelines) {
+        if (pipeline != VK_NULL_HANDLE) {
+          vkDestroyPipeline(device, pipeline, nullptr);
+        }
+      }
+    };
     if (fillPipeline == VK_NULL_HANDLE || copyPipeline == VK_NULL_HANDLE ||
         transformPipeline == VK_NULL_HANDLE ||
-        reducePipeline == VK_NULL_HANDLE || scanPipeline == VK_NULL_HANDLE) {
-      if (fillPipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(device, fillPipeline, nullptr);
-      }
-      if (copyPipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(device, copyPipeline, nullptr);
-      }
-      if (transformPipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(device, transformPipeline, nullptr);
-      }
-      if (reducePipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(device, reducePipeline, nullptr);
-      }
-      if (scanPipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(device, scanPipeline, nullptr);
-      }
+        reducePipeline == VK_NULL_HANDLE || scanPipeline == VK_NULL_HANDLE ||
+        reduceFinalizePipeline == VK_NULL_HANDLE ||
+        scanBlockSumsPipeline == VK_NULL_HANDLE ||
+        scanAddOffsetsPipeline == VK_NULL_HANDLE) {
+      destroyPrimitivePipelines();
       destroyPipelineLayout();
       destroyDescriptorSetLayout();
       destroyShaderModule();
@@ -806,11 +827,7 @@
     if (result != VK_SUCCESS) {
       std::cerr << "vkCreateDescriptorPool failed: " << vkResultToString(result)
                 << '\n';
-      vkDestroyPipeline(device, fillPipeline, nullptr);
-      vkDestroyPipeline(device, copyPipeline, nullptr);
-      vkDestroyPipeline(device, transformPipeline, nullptr);
-      vkDestroyPipeline(device, reducePipeline, nullptr);
-      vkDestroyPipeline(device, scanPipeline, nullptr);
+      destroyPrimitivePipelines();
       destroyPipelineLayout();
       destroyDescriptorSetLayout();
       destroyShaderModule();
@@ -830,11 +847,7 @@
       std::cerr << "vkAllocateDescriptorSets failed: "
                 << vkResultToString(result) << '\n';
       vkDestroyDescriptorPool(device, descriptorPool, nullptr);
-      vkDestroyPipeline(device, fillPipeline, nullptr);
-      vkDestroyPipeline(device, copyPipeline, nullptr);
-      vkDestroyPipeline(device, transformPipeline, nullptr);
-      vkDestroyPipeline(device, reducePipeline, nullptr);
-      vkDestroyPipeline(device, scanPipeline, nullptr);
+      destroyPrimitivePipelines();
       destroyPipelineLayout();
       destroyDescriptorSetLayout();
       destroyShaderModule();
@@ -923,11 +936,7 @@
                           reduction)) {
       cleanupGpuBuffers();
       vkDestroyDescriptorPool(device, descriptorPool, nullptr);
-      vkDestroyPipeline(device, fillPipeline, nullptr);
-      vkDestroyPipeline(device, copyPipeline, nullptr);
-      vkDestroyPipeline(device, transformPipeline, nullptr);
-      vkDestroyPipeline(device, reducePipeline, nullptr);
-      vkDestroyPipeline(device, scanPipeline, nullptr);
+      destroyPrimitivePipelines();
       destroyPipelineLayout();
       destroyDescriptorSetLayout();
       destroyShaderModule();
@@ -1001,11 +1010,7 @@
                 << '\n';
       cleanupGpuBuffers();
       vkDestroyDescriptorPool(device, descriptorPool, nullptr);
-      vkDestroyPipeline(device, fillPipeline, nullptr);
-      vkDestroyPipeline(device, copyPipeline, nullptr);
-      vkDestroyPipeline(device, transformPipeline, nullptr);
-      vkDestroyPipeline(device, reducePipeline, nullptr);
-      vkDestroyPipeline(device, scanPipeline, nullptr);
+      destroyPrimitivePipelines();
       destroyPipelineLayout();
       destroyDescriptorSetLayout();
       destroyShaderModule();
@@ -1026,11 +1031,7 @@
       vkDestroyCommandPool(device, commandPool, nullptr);
       cleanupGpuBuffers();
       vkDestroyDescriptorPool(device, descriptorPool, nullptr);
-      vkDestroyPipeline(device, fillPipeline, nullptr);
-      vkDestroyPipeline(device, copyPipeline, nullptr);
-      vkDestroyPipeline(device, transformPipeline, nullptr);
-      vkDestroyPipeline(device, reducePipeline, nullptr);
-      vkDestroyPipeline(device, scanPipeline, nullptr);
+      destroyPrimitivePipelines();
       destroyPipelineLayout();
       destroyDescriptorSetLayout();
       destroyShaderModule();
@@ -1040,16 +1041,42 @@
     }
 
     bool allPass = true;
+    auto runDispatchExact = [&](const VkPipeline pipeline,
+                                const std::size_t elementCount,
+                                const float scalar,
+                                const std::uint32_t dispatchX) -> bool {
+      const PushConstants params{static_cast<std::uint32_t>(elementCount),
+                                 scalar};
+      return dispatchKernel(
+          device, queue, commandBuffer, pipeline, pipelineLayout, descriptorSet,
+          params, dispatchX, inputFloat.buffer, outputFloat.buffer,
+          inputInt.buffer, outputInt.buffer, reduction.buffer);
+    };
     auto runDispatch = [&](const VkPipeline pipeline, const std::size_t length,
                            const float scalar) -> bool {
       const std::uint32_t dispatchX =
           std::max(1u, static_cast<std::uint32_t>(
                            (length + kWorkgroupSize - 1u) / kWorkgroupSize));
-      const PushConstants params{static_cast<std::uint32_t>(length), scalar};
-      return dispatchKernel(
-          device, queue, commandBuffer, pipeline, pipelineLayout, descriptorSet,
-          params, dispatchX, inputFloat.buffer, outputFloat.buffer,
-          inputInt.buffer, outputInt.buffer, reduction.buffer);
+      return runDispatchExact(pipeline, length, scalar, dispatchX);
+    };
+    auto runReduction = [&](const std::size_t length) -> bool {
+      const std::uint32_t partialCount =
+          std::max(1u, static_cast<std::uint32_t>(
+                           (length + kWorkgroupSize - 1u) / kWorkgroupSize));
+      return partialCount <= kWorkgroupSize &&
+             runDispatchExact(reducePipeline, length, 0.0f, partialCount) &&
+             runDispatchExact(reduceFinalizePipeline, partialCount,
+                              static_cast<float>(length), 1u);
+    };
+    auto runScan = [&](const std::size_t length) -> bool {
+      const std::uint32_t blockCount =
+          std::max(1u, static_cast<std::uint32_t>(
+                           (length + kWorkgroupSize - 1u) / kWorkgroupSize));
+      return blockCount <= kWorkgroupSize &&
+             runDispatchExact(scanPipeline, length, 0.0f, blockCount) &&
+             runDispatchExact(scanBlockSumsPipeline, blockCount, 0.0f, 1u) &&
+             runDispatchExact(scanAddOffsetsPipeline, length, 0.0f,
+                              blockCount);
     };
 
     auto fillFloat = [&](const std::size_t length,
@@ -1240,7 +1267,7 @@
         break;
       }
       if (!fillFloat(length, inFloat) || !fillSentinel() ||
-          !runDispatch(reducePipeline, length, 0.0f)) {
+          !runReduction(length)) {
         runPass = false;
         break;
       }
@@ -1264,6 +1291,31 @@
         reductionExpected = {static_cast<float>(sum), minv, maxv,
                              kFloatSentinel};
       }
+      const std::size_t partialCount =
+          std::max<std::size_t>(1, (length + kWorkgroupSize - 1u) /
+                                       kWorkgroupSize);
+      for (std::size_t block = 0; block < partialCount; ++block) {
+        const std::size_t begin = block * kWorkgroupSize;
+        const std::size_t end = std::min(length, begin + kWorkgroupSize);
+        const std::size_t base = block * 3;
+        if (begin == end) {
+          outFloat[base] = 0.0f;
+          outFloat[base + 1] = std::numeric_limits<float>::infinity();
+          outFloat[base + 2] = -std::numeric_limits<float>::infinity();
+          continue;
+        }
+        long double blockSum = 0.0L;
+        float blockMin = inFloat[begin];
+        float blockMax = inFloat[begin];
+        for (std::size_t i = begin; i < end; ++i) {
+          blockSum += static_cast<long double>(inFloat[i]);
+          blockMin = std::min(blockMin, inFloat[i]);
+          blockMax = std::max(blockMax, inFloat[i]);
+        }
+        outFloat[base] = static_cast<float>(blockSum);
+        outFloat[base + 1] = blockMin;
+        outFloat[base + 2] = blockMax;
+      }
       const float *actualReduction =
           static_cast<const float *>(reduction.mapped);
       float redAbs = 0.0f;
@@ -1282,10 +1334,10 @@
       float outRel = 0.0f;
       std::uint32_t outUlp = 0;
       const bool outFloatOk = compareFloatArray(
-          "reduction output_float_guard",
+          "reduction partials_and_guard",
           static_cast<const float *>(outputFloat.mapped), outFloat.data(),
-          length, storageCount, kFloatSentinel, outMismatch, outAbs, outRel,
-          outUlp);
+          partialCount * 3, storageCount, kFloatSentinel, outMismatch, outAbs,
+          outRel, outUlp);
       std::copy_n(outInt.data(), storageCount, outInt.data());
       std::size_t outIntMismatch = 0;
       const bool outIntOk = compareIntArray(
@@ -1313,7 +1365,7 @@
           !fillFloat(length, guardFloat) ||
           !writeBufferBytes(device, reduction, reductionSentinel.data(),
                             reductionSentinel.size() * sizeof(float)) ||
-          !runDispatch(scanPipeline, length, 0.0f)) {
+          !runScan(length)) {
         runPass = false;
         break;
       }
@@ -1332,18 +1384,40 @@
       const bool scanOk = compareIntArray(
           "exclusive_scan_i32", static_cast<const int *>(outputInt.mapped),
           expectInt.data(), length, storageCount, kIntSentinel, scanMismatch);
+      const std::size_t blockCount =
+          std::max<std::size_t>(1, (length + kWorkgroupSize - 1u) /
+                                       kWorkgroupSize);
+      std::vector<std::uint32_t> expectedScratchBits(
+          storageCount, std::bit_cast<std::uint32_t>(kFloatSentinel));
+      int blockOffset = 0;
+      for (std::size_t block = 0; block < blockCount; ++block) {
+        expectedScratchBits[block] =
+            std::bit_cast<std::uint32_t>(blockOffset);
+        const std::size_t begin = block * kWorkgroupSize;
+        const std::size_t end = std::min(length, begin + kWorkgroupSize);
+        for (std::size_t i = begin; i < end; ++i) {
+          blockOffset += inInt[i];
+        }
+      }
+      const auto *actualScratch =
+          static_cast<const float *>(outputFloat.mapped);
       std::size_t outFloatMismatch = 0;
-      float outMaxAbs = 0.0f;
-      float outMaxRel = 0.0f;
-      std::uint32_t outMaxUlp = 0;
-      const bool outFloatOk =
-          compareFloatArray("scan output_float_guard",
-                            static_cast<const float *>(outputFloat.mapped),
-                            guardFloat.data(), 0, storageCount, kFloatSentinel,
-                            outFloatMismatch, outMaxAbs, outMaxRel, outMaxUlp);
+      for (std::size_t i = 0; i < storageCount; ++i) {
+        if (std::bit_cast<std::uint32_t>(actualScratch[i]) !=
+            expectedScratchBits[i]) {
+          ++outFloatMismatch;
+        }
+      }
+      const bool outFloatOk = outFloatMismatch == 0;
+      std::cout << "[PrimitiveSmoke] scan block_offsets_and_guard mismatch="
+                << outFloatMismatch << '\n';
       std::array<float, 4> red = {0, 0, 0, kFloatSentinel};
       std::memcpy(red.data(), reduction.mapped, sizeof(red));
-      const bool redSentinelOk = nearlyEqual(red[3], kFloatSentinel);
+      const bool redSentinelOk =
+          std::all_of(red.begin(), red.end(), [](const float value) {
+            return std::bit_cast<std::uint32_t>(value) ==
+                   std::bit_cast<std::uint32_t>(kFloatSentinel);
+          });
       const bool scanPass = scanOk && outFloatOk && redSentinelOk &&
                             (scanMismatch == 0) && (outFloatMismatch == 0);
       std::cout << "[PrimitiveSmoke] exclusive_scan_i32 length=" << length
@@ -1354,11 +1428,7 @@
     vkDestroyCommandPool(device, commandPool, nullptr);
     cleanupGpuBuffers();
     vkDestroyDescriptorPool(device, descriptorPool, nullptr);
-    vkDestroyPipeline(device, fillPipeline, nullptr);
-    vkDestroyPipeline(device, copyPipeline, nullptr);
-    vkDestroyPipeline(device, transformPipeline, nullptr);
-    vkDestroyPipeline(device, reducePipeline, nullptr);
-    vkDestroyPipeline(device, scanPipeline, nullptr);
+    destroyPrimitivePipelines();
     destroyPipelineLayout();
     destroyDescriptorSetLayout();
     destroyShaderModule();

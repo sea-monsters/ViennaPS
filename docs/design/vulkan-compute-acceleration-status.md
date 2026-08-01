@@ -119,16 +119,16 @@ These values live only in the process environment and ignored CMake cache.
 
 - Adapt the probe JSON directly into `CapabilityProfileRecord`, add safe
   working-set calibration, and atomically persist the resulting profile.
-- Replace the reduction and scan reference kernels described below with
-  multi-workgroup implementations, then add compaction, sort, gather/scatter,
-  histogram, and deterministic RNG.
+- Remove the bounded 256-block ceiling described below, then add compaction,
+  sort, gather/scatter, histogram, and deterministic RNG.
 
-## S2B-reference: primitive differential scaffold
+## S2B-primitive-1: parallel primitive differential slice
 
-- Status: accepted as a correctness scaffold, not production acceleration
+- Status: accepted as a bounded parallel implementation, not the complete
+  production primitive suite
 - Date: 2026-08-01
 - Scope: optional developer smoke target for the first five primitive
-  contracts; this does not complete the S2B primitive suite
+  contracts; this does not set `vulkanPrimitiveSuitePass`
 
 ### Delivered contracts
 
@@ -136,21 +136,25 @@ These values live only in the process environment and ignored CMake cache.
   `VIENNAPS_BUILD_VULKAN_PRIMITIVES_SMOKE`. When the SDK is unavailable, CMake
   skips the target cleanly and keeps the diagnostic probe usable.
 - Fill, copy, affine transform, sum/min/max reduction, and exclusive signed
-  32-bit scan are compared against CPU results at lengths 0, 1, 16, and 257.
+  32-bit scan are compared against CPU results at lengths 0, 1, 16, 257, and
+  65,535.
 - The checks include output mismatch counts, floating-point absolute/relative/
   ULP error, and guard-region validation around every logical buffer.
-- Fill, copy, and transform dispatch one invocation per element. Reduction and
-  scan currently execute their CPU-equivalent loops in a single GPU invocation.
-  They validate resource binding, dispatch, synchronization, mapping, edge
-  cases, and comparison machinery, but they are deliberately not classified as
-  GPU acceleration.
+- Fill, copy, and transform dispatch one invocation per element. Reduction uses
+  shared-memory block reduction followed by a second shared-memory reduction of
+  partial sum/min/max values; it does not require floating-point atomics.
+- Scan uses block-local Blelloch exclusive scan, a scan of block sums, and a
+  parallel block-offset add. The current implementation supports at most 256
+  blocks, or 65,536 elements at the fixed 256-thread workgroup size. Larger
+  inputs must be rejected or routed to CPU until recursive block-sum scan is
+  implemented.
 
 ### Acceptance evidence
 
 | Gate | Result |
 |---|---|
 | Parent Vulkan configure/build | primitive shader and smoke executable build with the SDK supplied through `VULKAN_SDK` |
-| Differential cases | five operations at four lengths pass; zero mismatches and exact floating-point results |
+| Differential cases | five operations at five lengths pass, including 65,535 elements across 256 workgroups; zero mismatches |
 | Guard regions | unchanged for all operations and lengths |
 | No-SDK regression | primitive target is skipped; diagnostic probe remains buildable and exits 0 |
 | Warning gate | primitive host target builds under MSVC C++20 `/W4` without code warnings |
@@ -158,10 +162,8 @@ These values live only in the process environment and ignored CMake cache.
 
 ### Required promotion work
 
-- Use a shared-memory first stage plus recursive partial reduction without
-  requiring optional floating-point atomics.
-- Use block-local scan, recursively scan block sums, then add block offsets;
-  preserve the exact exclusive-scan and zero-length contracts.
+- Generalize reduction and block-sum scan recursively beyond 256 workgroups;
+  preserve the exact zero-length, sum/min/max, and exclusive-scan contracts.
 - Run the same CPU differential matrix across multiple workgroup boundaries and
   randomized deterministic inputs before setting the corresponding persisted
   profile suite gates.
@@ -169,7 +171,7 @@ These values live only in the process environment and ignored CMake cache.
 
 ## Next slice
 
-S2B promotes reduction and scan to genuinely parallel implementations, adds
-the remaining primitive contracts, and delivers calibrated probe-to-profile
-persistence. It unlocks the first Vulkan implementation of the frozen
-two-dimensional Level Set scenario.
+S2B removes the current 256-block bound, adds the remaining primitive
+contracts, and delivers calibrated probe-to-profile persistence. It unlocks
+the first Vulkan implementation of the frozen two-dimensional Level Set
+scenario.

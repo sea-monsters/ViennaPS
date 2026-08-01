@@ -6,7 +6,7 @@ layout(std430, binding = 0) readonly buffer InputFloat {
   float inputFloat[];
 };
 
-layout(std430, binding = 1) writeonly buffer OutputFloat {
+layout(std430, binding = 1) buffer OutputFloat {
   float outputFloat[];
 };
 
@@ -14,7 +14,7 @@ layout(std430, binding = 2) readonly buffer InputInt {
   int inputInt[];
 };
 
-layout(std430, binding = 3) writeonly buffer OutputInt {
+layout(std430, binding = 3) buffer OutputInt {
   int outputInt[];
 };
 
@@ -30,6 +30,11 @@ layout(push_constant) uniform PushConstants {
 } pc;
 
 layout(constant_id = 0) const uint operation = 0u;
+
+shared float sharedSum[256];
+shared float sharedMin[256];
+shared float sharedMax[256];
+shared int sharedScan[256];
 
 void fill_kernel() {
   const uint idx = gl_GlobalInvocationID.x;
@@ -52,40 +57,137 @@ void transform_kernel() {
   }
 }
 
-void reduce_kernel() {
-  if (gl_GlobalInvocationID.x != 0u) {
-    return;
-  }
-  const uint n = pc.elementCount;
-  if (n == 0u) {
-    sum = 0.0f;
-    minValue = 0.0f;
-    maxValue = 0.0f;
-    return;
+void reduce_blocks_kernel() {
+  const uint localIdx = gl_LocalInvocationID.x;
+  const uint globalIdx = gl_GlobalInvocationID.x;
+  const bool isActive = globalIdx < pc.elementCount;
+  const float value = isActive ? inputFloat[globalIdx] : 0.0f;
+  sharedSum[localIdx] = value;
+  sharedMin[localIdx] = isActive ? value : (1.0f / 0.0f);
+  sharedMax[localIdx] = isActive ? value : (-1.0f / 0.0f);
+  barrier();
+
+  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    if (localIdx < stride) {
+      sharedSum[localIdx] += sharedSum[localIdx + stride];
+      sharedMin[localIdx] =
+          min(sharedMin[localIdx], sharedMin[localIdx + stride]);
+      sharedMax[localIdx] =
+          max(sharedMax[localIdx], sharedMax[localIdx + stride]);
+    }
+    barrier();
   }
 
-  float localSum = 0.0f;
-  float localMin = inputFloat[0u];
-  float localMax = inputFloat[0u];
-  for (uint i = 0u; i < n; ++i) {
-    const float value = inputFloat[i];
-    localSum += value;
-    localMin = min(localMin, value);
-    localMax = max(localMax, value);
+  if (localIdx == 0u) {
+    const uint partialBase = gl_WorkGroupID.x * 3u;
+    outputFloat[partialBase] = sharedSum[0];
+    outputFloat[partialBase + 1u] = sharedMin[0];
+    outputFloat[partialBase + 2u] = sharedMax[0];
   }
-  sum = localSum;
-  minValue = localMin;
-  maxValue = localMax;
 }
 
-void exclusive_scan_i32_kernel() {
-  if (gl_GlobalInvocationID.x != 0u) {
-    return;
+void reduce_finalize_kernel() {
+  const uint localIdx = gl_LocalInvocationID.x;
+  const bool isActive = localIdx < pc.elementCount;
+  sharedSum[localIdx] = isActive ? outputFloat[localIdx * 3u] : 0.0f;
+  sharedMin[localIdx] =
+      isActive ? outputFloat[localIdx * 3u + 1u] : (1.0f / 0.0f);
+  sharedMax[localIdx] =
+      isActive ? outputFloat[localIdx * 3u + 2u] : (-1.0f / 0.0f);
+  barrier();
+
+  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    if (localIdx < stride) {
+      sharedSum[localIdx] += sharedSum[localIdx + stride];
+      sharedMin[localIdx] =
+          min(sharedMin[localIdx], sharedMin[localIdx + stride]);
+      sharedMax[localIdx] =
+          max(sharedMax[localIdx], sharedMax[localIdx + stride]);
+    }
+    barrier();
   }
-  int running = 0;
-  for (uint i = 0u; i < pc.elementCount; ++i) {
-    outputInt[i] = running;
-    running += inputInt[i];
+
+  if (localIdx == 0u) {
+    const bool sourceWasEmpty = pc.scalar == 0.0f;
+    sum = sourceWasEmpty ? 0.0f : sharedSum[0];
+    minValue = sourceWasEmpty ? 0.0f : sharedMin[0];
+    maxValue = sourceWasEmpty ? 0.0f : sharedMax[0];
+  }
+}
+
+void exclusive_scan_blocks_i32_kernel() {
+  const uint localIdx = gl_LocalInvocationID.x;
+  const uint globalIdx = gl_GlobalInvocationID.x;
+  sharedScan[localIdx] =
+      globalIdx < pc.elementCount ? inputInt[globalIdx] : 0;
+  barrier();
+
+  for (uint offset = 1u; offset < 256u; offset <<= 1u) {
+    const uint index = ((localIdx + 1u) * offset * 2u) - 1u;
+    if (index < 256u) {
+      sharedScan[index] += sharedScan[index - offset];
+    }
+    barrier();
+  }
+
+  if (localIdx == 255u) {
+    outputFloat[gl_WorkGroupID.x] = intBitsToFloat(sharedScan[255u]);
+    sharedScan[255u] = 0;
+  }
+  barrier();
+
+  for (uint offset = 128u; offset > 0u; offset >>= 1u) {
+    const uint index = ((localIdx + 1u) * offset * 2u) - 1u;
+    if (index < 256u) {
+      const int left = sharedScan[index - offset];
+      sharedScan[index - offset] = sharedScan[index];
+      sharedScan[index] += left;
+    }
+    barrier();
+  }
+
+  if (globalIdx < pc.elementCount) {
+    outputInt[globalIdx] = sharedScan[localIdx];
+  }
+}
+
+void exclusive_scan_block_sums_i32_kernel() {
+  const uint localIdx = gl_LocalInvocationID.x;
+  sharedScan[localIdx] = localIdx < pc.elementCount
+                             ? floatBitsToInt(outputFloat[localIdx])
+                             : 0;
+  barrier();
+
+  for (uint offset = 1u; offset < 256u; offset <<= 1u) {
+    const uint index = ((localIdx + 1u) * offset * 2u) - 1u;
+    if (index < 256u) {
+      sharedScan[index] += sharedScan[index - offset];
+    }
+    barrier();
+  }
+  if (localIdx == 255u) {
+    sharedScan[255u] = 0;
+  }
+  barrier();
+  for (uint offset = 128u; offset > 0u; offset >>= 1u) {
+    const uint index = ((localIdx + 1u) * offset * 2u) - 1u;
+    if (index < 256u) {
+      const int left = sharedScan[index - offset];
+      sharedScan[index - offset] = sharedScan[index];
+      sharedScan[index] += left;
+    }
+    barrier();
+  }
+  if (localIdx < pc.elementCount) {
+    outputFloat[localIdx] = intBitsToFloat(sharedScan[localIdx]);
+  }
+}
+
+void exclusive_scan_add_offsets_i32_kernel() {
+  const uint globalIdx = gl_GlobalInvocationID.x;
+  if (globalIdx < pc.elementCount) {
+    outputInt[globalIdx] +=
+        floatBitsToInt(outputFloat[gl_WorkGroupID.x]);
   }
 }
 
@@ -101,10 +203,19 @@ void main() {
     transform_kernel();
     break;
   case 3u:
-    reduce_kernel();
+    reduce_blocks_kernel();
     break;
   case 4u:
-    exclusive_scan_i32_kernel();
+    exclusive_scan_blocks_i32_kernel();
+    break;
+  case 5u:
+    reduce_finalize_kernel();
+    break;
+  case 6u:
+    exclusive_scan_block_sums_i32_kernel();
+    break;
+  case 7u:
+    exclusive_scan_add_offsets_i32_kernel();
     break;
   }
 }

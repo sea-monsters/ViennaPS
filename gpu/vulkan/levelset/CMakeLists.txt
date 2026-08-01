@@ -47,6 +47,9 @@ add_custom_target(viennaps-vulkan-levelset-update-spv
                   DEPENDS "${VIENNAPS_LEVELSET_UPDATE_SPV}")
 
 add_library(viennaps_vulkan_levelset_update levelset_update.cpp)
+set_property(TARGET viennaps_vulkan_levelset_update
+             PROPERTY VIENNAPS_LEVELSET_UPDATE_SPV
+                      "${VIENNAPS_LEVELSET_UPDATE_SPV}")
 target_include_directories(viennaps_vulkan_levelset_update
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(viennaps_vulkan_levelset_update

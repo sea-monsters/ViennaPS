@@ -615,12 +615,44 @@ must implement this executor contract; its location remains supplied through
 | Temporal ordering | executor calls are FE=1, RK2=2, RK3=3; RK fallback matches CPU |
 | Path policy | tracked patch, CMake, and tests contain no resolved local dependency path |
 
+## P3F-viennals-vulkan-adapter: FP32 value-update execution
+
+- Status: accepted locally as a direct ViennaLS-to-Vulkan executor adapter
+- Date: 2026-08-02
+- Scope: flatten the P3E const sparse-domain/rate view into the existing Vulkan
+  value-update kernel contract and reconstruct owned per-segment output
+
+`ViennaLsUpdateExecutorFp32` preserves the ViennaLS segment order and converts
+the sentinel-terminated active-point rate stream to CSR arrays. ViennaLS does
+not store rates for defined points outside the integration cutoff; the adapter
+therefore inserts a zero-effect sentinel entry for those points so every Vulkan
+work item retains a valid CSR range. It rejects mismatched segment counts,
+missing or trailing sentinels, scalar/range overflow, and invalid session or
+shader state before returning `HANDLED`.
+
+The shader payload has shared ownership while the compute session remains an
+explicit borrowed lifetime. Velocity-output requests return `FALLBACK` because
+the current kernel produces values only. FP64 remains on CPU. A generated SPIR-V
+target property supplies the test executable's runtime shader path without
+putting any resolved SDK, source, or build path in tracked files.
+
+| Gate | Result |
+|---|---|
+| CPU oracle | one Forward Euler step over the simple FP32 circle matches the CPU surface at 1e-6 quantization |
+| Frozen topology | CPU and Vulkan both produce 92 active points, 68 surface nodes, and 68 lines |
+| Executor contract | called once, returns `HANDLED`, leaves no executor error, and preserves the exact advected time |
+| Vulkan correctness | two consecutive CTest runs pass with the Khronos validation layer enabled |
+| No-SDK behavior | configuration with Vulkan discovery disabled builds and passes the CPU baseline; no Vulkan executor executable is generated |
+| Path policy | all changed tracked/candidate files contain zero fixed local SDK/library paths and zero Windows absolute paths |
+
 ## Next slice
 
-The next exit is the ViennaPS adapter that flattens each const ViennaLS segment
-and sentinel-terminated rate stream into the existing Vulkan kernel CSR input,
-executes through the deployment context's shared session, then returns validated
-segment outputs to the P3E executor. FP32 automatic selection must match the
-frozen 92-point CPU topology oracle; FP64 and unsupported/manual-error cases
-remain fail-closed CPU. HRLE active-run classification and sparse rebuild follow
-after this end-to-end adapter is accepted.
+The next exit is production wiring: let ViennaPS's advection handler install the
+P3F executor only when `DeploymentComputeContext` selects a qualified Vulkan
+device, owns a valid shared session, and loads the installed/generated shader
+asset. Automatic selection must remain threshold-gated and fail closed to CPU;
+manual configuration may override the backend/device choice but must still pass
+runtime safety checks. The wiring also needs explicit lifetime ownership and
+tests for CPU-only, automatic Vulkan, manual Vulkan, stale profile, shader-load
+failure, and `saveVelocities` fallback. HRLE active-run classification and
+sparse rebuild follow after this production boundary is accepted.

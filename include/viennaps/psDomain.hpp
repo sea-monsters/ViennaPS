@@ -644,6 +644,7 @@ public:
   void
   saveVolumeMesh(const std::string &fileName,
                  double wrappingLayerEpsilon = DEFAULT_WRAPPING_EPSILON) const {
+#ifdef VIENNALS_USE_VTK
     viennals::WriteVisualizationMesh<NumericType, D> writer;
     writer.setFileName(fileName);
     writer.setWrappingLayerEpsilon(wrappingLayerEpsilon);
@@ -653,6 +654,11 @@ public:
     writer.setMaterialMap(materialMap_->getMaterialMap());
     writer.setMetaData(metaData_);
     writer.apply();
+#else
+    (void)fileName;
+    (void)wrappingLayerEpsilon;
+    VIENNACORE_LOG_ERROR("Volume-mesh output requires ViennaLS VTK support.");
+#endif
   }
 
   // Write the all Level-Sets in the domain to individual files. The file name

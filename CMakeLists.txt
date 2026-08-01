@@ -217,9 +217,9 @@ set(_VIENNAPS_VIENNALS_PATCH_ARGS "")
 if(NOT CPM_ViennaLS_SOURCE)
   list(APPEND _VIENNAPS_VIENNALS_PATCH_ARGS
        PATCHES
-       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/patches/viennals-v5.8.5-levelset-update-executor.patch"
+       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/patches/viennals-v5.8.5-levelset-update-v2.patch"
        CUSTOM_CACHE_KEY
-       "v5.8.5-levelset-update-executor-v1")
+       "v5.8.5-levelset-update-v2")
 endif()
 
 CPMAddPackage(

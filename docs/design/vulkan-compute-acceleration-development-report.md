@@ -131,9 +131,10 @@ query 需求；CUDA 和 Vulkan 可以在契约下面保留各自优化。
 
 ### 3.1.1 本地路径与同步边界（强约束）
 
-开发期只允许通过环境变量注入 SDK 与外部依赖路径，不得在源代码、CMake cache、
-预设文件、测试脚本、文档示例、安装脚本中写死本机路径。环境差异会导致后续
-接手难以复现配置，任何固定路径都不应进入 Git 同步范围。
+开发期只允许通过环境变量注入 SDK 与外部依赖路径，不得在源代码、受版本控制的
+CMake cache/预设文件、测试脚本、文档示例、安装脚本中写死本机路径。环境差异会
+导致后续接手难以复现配置，任何固定路径都不应进入 Git 同步范围。忽略的构建目录
+和本地 CMake cache 可以保存解析后的值，但不得被加入版本控制。
 
 - 推荐环境变量：
   - `VULKAN_SDK`
@@ -141,6 +142,7 @@ query 需求；CUDA 和 Vulkan 可以在契约下面保留各自优化。
   - `VIENNAPS_VIENNALS_SOURCE_DIR`
   - `VIENNAPS_MPROCESS_SOURCE_DIR`
   - `VIENNAPS_DEVICE_PROFILE_DIR`
+  - `CPM_SOURCE_CACHE`
 - 路径变量不得作为可追踪产物提交到 Git；本地路径只允许通过开发机 shell
   环境、CI 变量或本地 `.gitignore`/配置文件提供。
 - 自动发现失败时仅允许“禁用该后端/仅 CPU”回退，不得隐式拼接绝对路径。

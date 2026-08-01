@@ -62,6 +62,7 @@ The machine-local build uses environment variables, for example:
 set VULKAN_SDK=<local Vulkan SDK>
 set VIENNAPS_VTK_SOURCE_DIR=<local VTK source tree>
 set VIENNAPS_VIENNALS_SOURCE_DIR=<local ViennaLS source tree>
+set CPM_SOURCE_CACHE=<local dependency cache>
 cmake -S . -B build -G Ninja -DVIENNAPS_ENABLE_VULKAN=ON
 ```
 
@@ -896,14 +897,63 @@ after an expected failure and succeeds on the same reinitialized handler.
 | No-SDK behavior | the CPU-only build compiles and runs all focused progress/routing tests |
 | Path policy | changed patch, source, and tests contain no resolved SDK, dependency, or build path |
 
+## P3L-controller-process-transaction: strict fault and full HRLE rollback
+
+- Status: accepted locally
+- Date: 2026-08-02
+- Scope: execute a controller-installed Vulkan callback through
+  `Process::apply`, expose its terminal result without changing the existing
+  void API, and make strict failure transactional across Level Set preparation
+
+`Process` now records the last strategy result and exposes it through
+`getLastProcessResult()`. Invalid input and missing-strategy exits also record
+their explicit result. This keeps existing C++ and Python `apply()` behavior
+compatible while allowing controller tests and future orchestration to inspect
+the terminal state after the logger's established runtime-error boundary.
+
+ViennaLS `FAIL` mode now snapshots every participating Level Set before
+`prepareLS`. On executor failure it restores each existing object in place by
+deep copy, preserving external smart-pointer identity while recovering the
+grid, complete HRLE segmentation and values, Level Set width, and point data.
+The previous partial restoration copied only `definedValues` after `Reduce`
+had already changed the sparse structure; that path was removed. Successful,
+fallback, time-error, and zero-velocity exits discard the snapshot.
+
+The execution smoke configures manual Vulkan using a runtime-generated device
+profile, obtains the controller-installed executor, runs the real Vulkan
+update, and injects `ERROR` only after the Vulkan callback returned `HANDLED`.
+The expected logging exception is caught, the process result remains
+`FAILURE`, the executor is called once, and the pre-transaction Level Set width,
+segment/point counts, HRLE values, and labeled point data are restored exactly.
+The same contract is covered without a Vulkan SDK by eight CPU routing
+scenarios, using the CPU update as the correctness oracle.
+
+Windows test executables copy Embree and TBB runtime dependencies through
+CMake target expressions. SDK, dependency source, cache, shader, and profile
+locations remain environment/caller supplied; no resolved local path is part
+of the target interface or tracked documentation. The complete caller-supplied
+VTK release tree remains an optional `VIENNAPS_VTK_SOURCE_DIR` input. A
+VTK-enabled root configuration currently exposes a ViennaLS/VTK install export
+set conflict, so this Level Set execution gate is validated with VTK disabled;
+that packaging conflict remains a separate follow-up.
+
+| Gate | Result |
+|---|---|
+| Real Vulkan seam | controller executor returns `HANDLED` before injected strict failure |
+| Process propagation | expected runtime error; recorded result is `FAILURE`; one executor call |
+| Full transaction | pre-`prepareLS` snapshot restores width, sparse topology, values, and point data in place |
+| CPU oracle | all eight executor-routing scenarios pass in the no-SDK build |
+| Vulkan oracle | one-step surface and time match the CPU reference before the injected fault |
+| Patch reproducibility | contextual v2 patch applies cleanly to an untouched ViennaLS source worktree |
+| Runtime deployment | Embree/TBB DLLs are copied from imported targets, not resolved paths |
+| Path policy | tracked inputs contain environment-variable names only and no machine-local path |
+
 ## Next slice
 
-Add the real controller-to-`Process` strict-fault integration test now that the
-single- and non-single-step loops have bounded exits. Add a wider rollback
-fixture before claiming full transactionality for HRLE segmentation and point
-data; the current P3J oracle proves `definedValues` restoration only. Direct
+Advance to HRLE active-run classification and sparse rebuild kernels. Direct
 negative/non-finite time injection also remains a defensive-branch coverage
-gap.
+gap. The optional VTK-enabled install/export conflict should be isolated from
+the compute backend before packaging validation.
 
 After those production-seam gates, the Level Set work advances to HRLE
 active-run classification and sparse rebuild, followed by particle/ray and

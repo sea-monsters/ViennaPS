@@ -110,6 +110,17 @@ target_link_libraries(viennaps-vulkan-levelset-process-controller-execution-smok
   PRIVATE ViennaPS viennaps_vulkan_levelset_update)
 target_compile_features(viennaps-vulkan-levelset-process-controller-execution-smoke
                          PRIVATE cxx_std_20)
+if(WIN32)
+  find_package(TBB CONFIG REQUIRED COMPONENTS tbb)
+  add_custom_command(
+    TARGET viennaps-vulkan-levelset-process-controller-execution-smoke
+    POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:viennaps-vulkan-levelset-process-controller-execution-smoke>
+            $<TARGET_FILE:TBB::tbb>
+            $<TARGET_FILE_DIR:viennaps-vulkan-levelset-process-controller-execution-smoke>
+    COMMAND_EXPAND_LISTS)
+endif()
 if(MSVC)
   target_compile_options(viennaps-vulkan-levelset-process-controller-execution-smoke
                           PRIVATE /W4)

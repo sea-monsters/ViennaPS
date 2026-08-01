@@ -107,9 +107,10 @@ run(const ExecutorMode mode,
   viennaps::AdvectionHandler<NumericType, kDimension> handler;
   VC_TEST_ASSERT(handler.initialize(context) ==
                  viennaps::ProcessResult::SUCCESS);
+  // FAIL policy owns the full prepareLS + update transaction.
+  auto beforeValues = snapshot(domain);
   handler.prepareAdvection(context);
   model->getVelocityField()->prepare(domain, nullptr, 0.0F);
-  auto beforeValues = snapshot(domain);
   auto result = handler.performAdvection(context);
   return {std::move(beforeValues), snapshot(domain),
           executorCalls,           result,
@@ -129,6 +130,41 @@ void checkProcessApi() {
   VC_TEST_ASSERT(process.getLevelSetUpdateFailurePolicy() ==
                  FailurePolicy::FAIL);
   process.clearLevelSetUpdateExecutor();
+}
+
+void checkProcessStrictFailure() {
+  auto domain = makeDomain();
+  auto model = viennacore::SmartPointer<AnalyticModel>::New();
+  viennaps::Process<NumericType, kDimension> process(domain, model, 0.05F);
+  viennaps::AdvectionParameters parameters;
+  parameters.spatialScheme =
+      viennals::SpatialSchemeEnum::ENGQUIST_OSHER_1ST_ORDER;
+  parameters.timeStepRatio = 0.4999;
+  parameters.dissipationAlpha = 0.0;
+  parameters.checkDissipation = false;
+  process.setParameters(parameters);
+  process.setLevelSetUpdateFailurePolicy(FailurePolicy::FAIL);
+  unsigned executorCalls = 0U;
+  process.setLevelSetUpdateExecutor(
+      [&executorCalls](const Advect::LevelSetUpdateContext &,
+                       Advect::LevelSetUpdateOutput &, std::string &error) {
+        ++executorCalls;
+        error = "injected process failure";
+        return Advect::LevelSetUpdateStatus::ERROR;
+      });
+
+  const auto beforeValues = snapshot(domain);
+  bool processFailureThrown = false;
+  try {
+    process.apply();
+  } catch (const std::runtime_error &) {
+    processFailureThrown = true;
+  }
+  VC_TEST_ASSERT(processFailureThrown);
+  VC_TEST_ASSERT(process.getLastProcessResult() ==
+                 viennaps::ProcessResult::FAILURE);
+  VC_TEST_ASSERT(executorCalls == 1U);
+  VC_TEST_ASSERT(snapshot(domain) == beforeValues);
 }
 
 void checkFallback(const ExecutorMode mode) {
@@ -172,6 +208,8 @@ int main(const int argc, const char *const argv[]) {
     checkStrictFailure(ExecutorMode::THROW);
   else if (scenario == "strict-invalid")
     checkStrictFailure(ExecutorMode::INVALID);
+  else if (scenario == "process-strict")
+    checkProcessStrictFailure();
   else
     return 2;
   return 0;

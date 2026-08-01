@@ -33,9 +33,11 @@ using ComputeBackend = viennaps::compute::ComputeBackend;
 using HardwareFingerprint = viennaps::compute::HardwareFingerprint;
 using ManualSelectionConfig = viennaps::compute::ManualSelectionConfig;
 using Precision = viennaps::compute::Precision;
+using SelectionMode = viennaps::compute::SelectionMode;
 using Stage = viennaps::compute::Stage;
 using StageWorkload = viennaps::compute::StageWorkload;
 using ComputeSession = viennaps::vulkan::runtime::ComputeSession;
+using ComputeSessionOptions = viennaps::vulkan::runtime::ComputeSessionOptions;
 
 class ConstantVelocityField final : public viennals::VelocityField<float> {
 public:
@@ -49,6 +51,30 @@ public:
 
 private:
   float speed_ = 0.0F;
+};
+
+class ProcessVelocityField final : public viennaps::VelocityField<float, 2> {
+public:
+  explicit ProcessVelocityField(const float speed) : speed_(speed) {}
+
+  float getScalarVelocity(const viennaps::Vec3D<float> &, int,
+                          const viennaps::Vec3D<float> &,
+                          unsigned long) override {
+    return speed_;
+  }
+
+private:
+  float speed_ = 0.0F;
+};
+
+class AnalyticModel final : public viennaps::ProcessModelBase<float, 2> {
+public:
+  explicit AnalyticModel(const float speed) {
+    this->setVelocityField(
+        viennacore::SmartPointer<ProcessVelocityField>::New(speed));
+    this->setSurfaceModel(
+        viennacore::SmartPointer<viennaps::SurfaceModel<float>>::New());
+  }
 };
 
 [[nodiscard]] std::string uuidToHex(const std::uint8_t *bytes) {
@@ -159,6 +185,43 @@ makeProcessDomain() {
   return nodes;
 }
 
+constexpr char kRollbackPointDataLabel[] = "VulkanRollbackProbe";
+
+struct SparseDomainSnapshot {
+  int levelSetWidth = 0;
+  unsigned numberOfSegments = 0U;
+  unsigned numberOfPoints = 0U;
+  unsigned scalarDataArrays = 0U;
+  std::vector<unsigned> segmentPointCounts;
+  std::vector<float> definedValues;
+  std::vector<float> rollbackPointData;
+
+  bool operator==(const SparseDomainSnapshot &) const = default;
+};
+
+[[nodiscard]] SparseDomainSnapshot collectSparseDomainSnapshot(
+    const viennals::SmartPointer<viennals::Domain<float, 2>> &domain) {
+  SparseDomainSnapshot snapshot;
+  snapshot.levelSetWidth = domain->getLevelSetWidth();
+  snapshot.numberOfPoints = domain->getNumberOfPoints();
+  snapshot.scalarDataArrays = domain->getPointData().getScalarDataSize();
+  const auto &sparseDomain = domain->getDomain();
+  snapshot.numberOfSegments = sparseDomain.getNumberOfSegments();
+  for (unsigned segment = 0U; segment < sparseDomain.getNumberOfSegments();
+       ++segment) {
+    const auto &domainSegment = sparseDomain.getDomainSegment(segment);
+    snapshot.segmentPointCounts.push_back(domainSegment.getNumberOfPoints());
+    snapshot.definedValues.insert(snapshot.definedValues.end(),
+                                  domainSegment.definedValues.begin(),
+                                  domainSegment.definedValues.end());
+  }
+  if (const auto *pointData =
+          domain->getPointData().getScalarData(kRollbackPointDataLabel, true)) {
+    snapshot.rollbackPointData = *pointData;
+  }
+  return snapshot;
+}
+
 void assertNear(const std::vector<std::array<float, 3>> &actual,
                 const std::vector<std::array<float, 3>> &expected) {
   VC_TEST_ASSERT(actual.size() == expected.size());
@@ -264,8 +327,72 @@ int main() try {
   VC_TEST_ASSERT(vulkan.advectedTime == cpu.advectedTime);
   assertNear(vulkan.nodes, cpu.nodes);
 
+  auto strictDomain = makeProcessDomain();
+  auto strictModel = viennacore::SmartPointer<AnalyticModel>::New(-0.1F);
+  viennaps::Process<float, 2> strictProcess(strictDomain, strictModel, 0.05F);
+  viennaps::AdvectionParameters parameters;
+  parameters.spatialScheme =
+      viennals::SpatialSchemeEnum::ENGQUIST_OSHER_1ST_ORDER;
+  parameters.timeStepRatio = 0.4999;
+  parameters.dissipationAlpha = 0.0;
+  parameters.checkDissipation = false;
+  strictProcess.setParameters(parameters);
+
+  ManualSelectionConfig manualSelection;
+  manualSelection.selectionMode = SelectionMode::MANUAL;
+  manualSelection.globalBackend = ComputeBackend::VULKAN;
+  ComputeSessionOptions manualDevice;
+  manualDevice.manualDeviceName = hardware.deviceName;
+  Controller strictController;
+  const auto strictConfiguration = strictController.configure(
+      strictProcess, manualSelection, hardware, workload, manualDevice,
+      VIENNAPS_LEVELSET_UPDATE_SPV_PATH, profile.path.string());
+  VC_TEST_ASSERT(strictConfiguration.ok);
+  VC_TEST_ASSERT(strictConfiguration.usingVulkan);
+  VC_TEST_ASSERT(strictProcess.getLevelSetUpdateFailurePolicy() ==
+                 viennaps::LevelSetUpdateFailurePolicy::FAIL);
+
+  const auto controllerExecutor = strictProcess.getLevelSetUpdateExecutor();
+  VC_TEST_ASSERT(static_cast<bool>(controllerExecutor));
+  unsigned strictExecutorCalls = 0U;
+  strictProcess.setLevelSetUpdateExecutor(
+      [controllerExecutor, &strictExecutorCalls](
+          const Advect::LevelSetUpdateContext &context,
+          Advect::LevelSetUpdateOutput &output, std::string &callbackError) {
+        ++strictExecutorCalls;
+        const auto status = controllerExecutor(context, output, callbackError);
+        if (status != Advect::LevelSetUpdateStatus::HANDLED)
+          return status;
+        callbackError = "injected strict controller failure";
+        return Advect::LevelSetUpdateStatus::ERROR;
+      });
+
+  // Match deterministic narrow-band preparation before the external snapshot.
+  // ViennaLS also owns a full pre-prepareLS transaction snapshot in FAIL mode;
+  // this assertion checks that the complete HRLE state is restored.
+  viennals::Expand<float, 2>(strictDomain->getSurface(), 2).apply();
+  auto strictSurface = strictDomain->getSurface();
+  std::vector<float> rollbackPointData(strictSurface->getNumberOfPoints());
+  for (std::size_t i = 0; i < rollbackPointData.size(); ++i)
+    rollbackPointData[i] = static_cast<float>(i) + 0.25F;
+  strictSurface->getPointData().insertNextScalarData(
+      std::move(rollbackPointData), kRollbackPointDataLabel);
+  const auto strictBefore = collectSparseDomainSnapshot(strictSurface);
+  bool strictFailureThrown = false;
+  try {
+    strictProcess.apply();
+  } catch (const std::runtime_error &) {
+    strictFailureThrown = true;
+  }
+  VC_TEST_ASSERT(strictFailureThrown);
+  VC_TEST_ASSERT(strictExecutorCalls == 1U);
+  VC_TEST_ASSERT(strictProcess.getLastProcessResult() ==
+                 viennaps::ProcessResult::FAILURE);
+  VC_TEST_ASSERT(collectSparseDomainSnapshot(strictSurface) == strictBefore);
+
   std::cout
-      << "[LevelSetControllerExecution] callback lifetime CPU/Vulkan PASS\n";
+      << "[LevelSetControllerExecution] callback lifetime and strict Process "
+         "failure CPU/Vulkan PASS\n";
   return EXIT_SUCCESS;
 } catch (const std::exception &error) {
   std::cerr << error.what() << '\n';

@@ -43,6 +43,7 @@ private:
   ProcessContext<NumericType, D> context_;
   std::vector<std::unique_ptr<ProcessStrategy<NumericType, D>>> strategies_;
   FluxEngineType fluxEngineType_ = FluxEngineType::AUTO;
+  ProcessResult lastProcessResult_ = ProcessResult::SUCCESS;
 
 public:
   using LevelSetUpdateExecutor =
@@ -119,14 +120,19 @@ public:
 
   void clearLevelSetUpdateExecutor() { context_.levelSetUpdateExecutor = {}; }
 
-  void apply() {
+  [[nodiscard]] ProcessResult getLastProcessResult() const {
+    return lastProcessResult_;
+  }
 
+  void apply() {
+    lastProcessResult_ = ProcessResult::INVALID_INPUT;
     if (!checkInputUpdateContext())
       return;
 
     // Find appropriate strategy
     auto strategy = findStrategy();
     if (!strategy) {
+      lastProcessResult_ = ProcessResult::NOT_IMPLEMENTED;
       VIENNACORE_LOG_ERROR(
           "No suitable strategy found for process configuration.");
       return;
@@ -141,8 +147,8 @@ public:
 
     // Execute strategy
     context_.resetTime(); // Reset process time and previous time step
-    auto result = strategy->execute(context_);
-    handleProcessResult(result);
+    lastProcessResult_ = strategy->execute(context_);
+    handleProcessResult(lastProcessResult_);
 
     if (static_cast<int>(context_.domain->getMetaDataLevel()) >=
         static_cast<int>(MetaDataLevel::PROCESS)) {

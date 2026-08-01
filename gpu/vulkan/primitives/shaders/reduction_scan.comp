@@ -1,0 +1,123 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(constant_id = 0) const uint operation = 0u;
+
+layout(push_constant) uniform PushConstants {
+  uint elementCount;
+  uint inputIsTriples;
+} pc;
+
+layout(std430, binding = 0) readonly buffer FloatInput {
+  float floatInput[];
+};
+layout(std430, binding = 1) writeonly buffer FloatOutput {
+  float floatOutput[];
+};
+layout(std430, binding = 2) readonly buffer IntInput {
+  uint intInput[];
+};
+layout(std430, binding = 3) buffer IntOutput {
+  uint intOutput[];
+};
+layout(std430, binding = 4) buffer IntAux {
+  uint intAux[];
+};
+
+shared float sharedSum[256];
+shared float sharedMin[256];
+shared float sharedMax[256];
+shared uint sharedScan[256];
+
+void reduce_float_blocks() {
+  const uint localIndex = gl_LocalInvocationID.x;
+  const uint globalIndex = gl_GlobalInvocationID.x;
+  float sumValue = 0.0;
+  float minValue = 1.0 / 0.0;
+  float maxValue = -1.0 / 0.0;
+  if (globalIndex < pc.elementCount) {
+    if (pc.inputIsTriples == 0u) {
+      const float value = floatInput[globalIndex];
+      sumValue = value;
+      minValue = value;
+      maxValue = value;
+    } else {
+      sumValue = floatInput[globalIndex];
+      minValue = floatInput[pc.elementCount + globalIndex];
+      maxValue = floatInput[2u * pc.elementCount + globalIndex];
+    }
+  }
+  sharedSum[localIndex] = sumValue;
+  sharedMin[localIndex] = minValue;
+  sharedMax[localIndex] = maxValue;
+  barrier();
+
+  for (uint stride = 128u; stride > 0u; stride >>= 1u) {
+    if (localIndex < stride) {
+      sharedSum[localIndex] += sharedSum[localIndex + stride];
+      sharedMin[localIndex] =
+          min(sharedMin[localIndex], sharedMin[localIndex + stride]);
+      sharedMax[localIndex] =
+          max(sharedMax[localIndex], sharedMax[localIndex + stride]);
+    }
+    barrier();
+  }
+  if (localIndex == 0u) {
+    const uint outputStride = gl_NumWorkGroups.x;
+    const uint group = gl_WorkGroupID.x;
+    floatOutput[group] = sharedSum[0];
+    floatOutput[outputStride + group] = sharedMin[0];
+    floatOutput[2u * outputStride + group] = sharedMax[0];
+  }
+}
+
+void exclusive_scan_blocks() {
+  const uint localIndex = gl_LocalInvocationID.x;
+  const uint globalIndex = gl_GlobalInvocationID.x;
+  sharedScan[localIndex] =
+      globalIndex < pc.elementCount ? intInput[globalIndex] : 0u;
+  barrier();
+
+  for (uint offset = 1u; offset < 256u; offset <<= 1u) {
+    const uint index = (localIndex + 1u) * offset * 2u - 1u;
+    if (index < 256u) {
+      sharedScan[index] += sharedScan[index - offset];
+    }
+    barrier();
+  }
+  if (localIndex == 0u) {
+    intAux[gl_WorkGroupID.x] = sharedScan[255];
+    sharedScan[255] = 0u;
+  }
+  barrier();
+  for (uint offset = 128u; offset > 0u; offset >>= 1u) {
+    const uint index = (localIndex + 1u) * offset * 2u - 1u;
+    if (index < 256u) {
+      const uint left = sharedScan[index - offset];
+      sharedScan[index - offset] = sharedScan[index];
+      sharedScan[index] += left;
+    }
+    barrier();
+  }
+  if (globalIndex < pc.elementCount) {
+    intOutput[globalIndex] = sharedScan[localIndex];
+  }
+}
+
+void add_scan_offsets() {
+  const uint globalIndex = gl_GlobalInvocationID.x;
+  if (globalIndex < pc.elementCount) {
+    intOutput[globalIndex] += intAux[globalIndex / 256u];
+  }
+}
+
+void main() {
+  if (operation == 0u) {
+    reduce_float_blocks();
+  } else if (operation == 1u) {
+    exclusive_scan_blocks();
+  } else if (operation == 2u) {
+    add_scan_offsets();
+  }
+}

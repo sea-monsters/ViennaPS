@@ -334,6 +334,37 @@ runtime contracts.
 | Repeatability | full Intel Arc smoke passes twice consecutively |
 | Local paths | SDK discovery uses `VULKAN_SDK`; tracked inputs contain no resolved local SDK or reference-tree path |
 
+## S2B-primitive-5: recursive reduction and exclusive scan
+
+- Status: accepted locally
+- Date: 2026-08-01
+- Scope: reusable FP32 sum/min/max reduction and signed-bit-pattern exclusive
+  scan without the former 256-block ceiling; this slice alone does not set
+  `vulkanPrimitiveSuitePass`
+
+Reduction emits contiguous sum/min/max records per 256-thread block, then
+recursively reduces those records until one exact triple remains. Exclusive
+scan recursively scans block sums and applies their offsets, so inputs larger
+than 65,536 elements no longer require a CPU fallback. Scan addition is
+specified as modulo `2^32`; this gives deterministic wrap behavior for signed
+32-bit bit patterns instead of relying on language-specific signed overflow.
+
+All intermediate buffers are scoped through queue completion. Host-visible
+non-coherent buffers use explicit flush/invalidate transitions, descriptor
+ranges remain inside live allocations, and buffer barriers use ignored queue-
+family indices on the selected compute queue.
+
+| Gate | Result |
+|---|---|
+| Warning gate | library and production smoke build under MSVC C++20 `/W4 /WX` |
+| CPU differential | reduction and scan exact at 0, 1, 16, 257, 65,535, and 1,000,003 elements |
+| Recursive depth | 1,000,003 elements exercise 3,907 first-level blocks and a second block-scan level |
+| Reduction order | CPU oracle reproduces the shader's tree order; sum/min/max are bit-exact for finite inputs |
+| Scan semantics | negative values and an explicit modulo-`2^32` wrap case pass exactly |
+| Bounds and aliases | input/output guards remain unchanged; in-place scan rejects by default and passes with explicit opt-in |
+| Validation layers | complete smoke passes twice with `VK_LAYER_KHRONOS_validation` enabled and no diagnostics |
+| Local paths | build and shader discovery use `VULKAN_SDK`; no resolved machine path is tracked |
+
 ## P3-oracle-1: frozen ViennaLS single-step CPU oracle
 
 - Status: accepted locally as a CPU reference, not a Vulkan implementation
@@ -361,6 +392,6 @@ oracle source itself compiles without a warning-specific source workaround.
 
 ## Next slice
 
-The next S2B slice removes the current 256-block reduction/scan bound. P3 can
-then implement the first Vulkan Level Set step against the frozen oracle above.
-Higher-level process integration remains behind the ViennaCS dependency gate.
+The next primitive exits are compaction and sort. P3 can now implement the
+first Vulkan Level Set step against the frozen oracle above. Higher-level
+process integration remains behind the ViennaCS dependency gate.

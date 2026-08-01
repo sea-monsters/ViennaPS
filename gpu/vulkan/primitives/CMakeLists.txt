@@ -370,6 +370,70 @@ target_compile_definitions(viennaps-vulkan-reduction-scan-production-smoke
 target_link_libraries(viennaps-vulkan-reduction-scan-production-smoke
   PRIVATE viennaps_vulkan_reduction_scan_primitives Vulkan::Vulkan)
 
+set(VULKAN_PRIMITIVES_RADIX_SORT_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/radix_sort.comp")
+set(VULKAN_PRIMITIVES_RADIX_SORT_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/radix_sort.comp.spv")
+if("${VIENNAPS_VULKAN_PRIMITIVES_SMOKE_SHADER_COMPILER}" MATCHES
+   ".*glslangValidator.*")
+  add_custom_command(
+    OUTPUT ${VULKAN_PRIMITIVES_RADIX_SORT_SPV}
+    COMMAND ${VIENNAPS_VULKAN_PRIMITIVES_SMOKE_SHADER_COMPILER} -V
+            ${VULKAN_PRIMITIVES_RADIX_SORT_SHADER}
+            -o ${VULKAN_PRIMITIVES_RADIX_SORT_SPV}
+    DEPENDS ${VULKAN_PRIMITIVES_RADIX_SORT_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Generating Vulkan radix-sort SPIR-V shader.")
+else()
+  add_custom_command(
+    OUTPUT ${VULKAN_PRIMITIVES_RADIX_SORT_SPV}
+    COMMAND ${VIENNAPS_VULKAN_PRIMITIVES_SMOKE_SHADER_COMPILER}
+            -o ${VULKAN_PRIMITIVES_RADIX_SORT_SPV}
+            ${VULKAN_PRIMITIVES_RADIX_SORT_SHADER}
+    DEPENDS ${VULKAN_PRIMITIVES_RADIX_SORT_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Generating Vulkan radix-sort SPIR-V shader.")
+endif()
+add_custom_target(viennaps-vulkan-radix-sort-smoke-spv
+  DEPENDS ${VULKAN_PRIMITIVES_RADIX_SORT_SPV})
+
+add_library(viennaps_vulkan_radix_sort_primitives radix_sort_primitives.cpp)
+target_link_libraries(viennaps_vulkan_radix_sort_primitives
+  PRIVATE viennaps_vulkan_compute_runtime Vulkan::Vulkan)
+target_include_directories(viennaps_vulkan_radix_sort_primitives
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(viennaps_vulkan_radix_sort_primitives PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps_vulkan_radix_sort_primitives
+                         PRIVATE /W4 /WX)
+else()
+  target_compile_options(viennaps_vulkan_radix_sort_primitives
+                         PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+string(REPLACE "\\" "/"
+               VIENNAPS_VULKAN_PRIMITIVES_RADIX_SORT_SPV_PATH
+               "${VULKAN_PRIMITIVES_RADIX_SORT_SPV}")
+
+add_executable(viennaps-vulkan-radix-sort-production-smoke
+  radix_sort_production_smoke.cpp)
+add_dependencies(viennaps-vulkan-radix-sort-production-smoke
+  viennaps-vulkan-radix-sort-smoke-spv)
+target_compile_features(viennaps-vulkan-radix-sort-production-smoke
+  PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps-vulkan-radix-sort-production-smoke
+                         PRIVATE /W4 /WX)
+else()
+  target_compile_options(viennaps-vulkan-radix-sort-production-smoke
+                         PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+target_compile_definitions(viennaps-vulkan-radix-sort-production-smoke
+  PRIVATE
+    "VIENNAPS_VULKAN_RADIX_SORT_SPV_PATH=\"${VIENNAPS_VULKAN_PRIMITIVES_RADIX_SORT_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-radix-sort-production-smoke
+  PRIVATE viennaps_vulkan_radix_sort_primitives Vulkan::Vulkan)
+
 add_executable(viennaps-vulkan-compaction-production-smoke
   compaction_production_smoke.cpp)
 add_dependencies(viennaps-vulkan-compaction-production-smoke
@@ -400,6 +464,8 @@ if(BUILD_TESTING)
            COMMAND viennaps-vulkan-gather-histogram-production-smoke)
   add_test(NAME viennaps-vulkan-reduction-scan-production-smoke
            COMMAND viennaps-vulkan-reduction-scan-production-smoke)
+  add_test(NAME viennaps-vulkan-radix-sort-production-smoke
+           COMMAND viennaps-vulkan-radix-sort-production-smoke)
   add_test(NAME viennaps-vulkan-compaction-production-smoke
            COMMAND viennaps-vulkan-compaction-production-smoke)
 endif()

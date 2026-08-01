@@ -408,6 +408,44 @@ the former class size while linking the new library. Acceptance therefore
 requires a real dependent-object rebuild after public primitive layout changes;
 relink-only output is not sufficient evidence.
 
+## S2B-primitive-7: stable uint32 radix sort
+
+- Status: accepted locally
+- Date: 2026-08-02
+- Scope: stable uint32 key/value sorting with eight 4-bit LSD passes; this is a
+  correctness-first primitive and does not yet provide a fully GPU-resident
+  multi-workgroup prefix
+
+Each pass builds a 16-bin histogram per 256-element workgroup. The host reads
+only the workgroup histograms, materializes deterministic bucket and workgroup
+offsets, and writes those offsets back. Scatter remains parallel across
+workgroups; invocation zero in each workgroup consumes its shared 256-element
+tile in input order. This avoids the nondeterministic duplicate-key order of a
+global atomic scatter while keeping all key/value movement in Vulkan shaders.
+
+Out-of-place sorting alternates between the requested output and an internal
+scratch buffer, so the input is never used as a destination. Exact paired
+key/value in-place sorting requires explicit opt-in. Partial aliases,
+cross-key/value aliases, undersized outputs, foreign-device buffers, and
+storage-buffer limit violations fail before submission.
+
+| Gate | Result |
+|---|---|
+| Warning gate | production library and smoke build under MSVC C++20 `/W4 /WX` |
+| CPU differential | stable key/index pairs match `std::stable_sort` at 0, 1, 16, 257, 65,535, and 1,000,003 elements |
+| Key coverage | duplicate-heavy fixed input, all-equal keys, reverse order, zero, and `UINT32_MAX` pass |
+| Stability | original uint32 indices remain ordered inside every equal-key run |
+| Bounds and aliases | input and output-tail guards pass; exact in-place opt-in passes; partial alias and insufficient capacity reject |
+| Device ownership | output buffers owned by another `VkDevice` reject before descriptor update |
+| Validation layers | complete radix smoke passes twice with `VK_LAYER_KHRONOS_validation` enabled and no diagnostics |
+| Existing regressions | stable compaction and recursive reduction/scan production smokes pass |
+| Local paths | shader and SDK discovery use configured targets and `VULKAN_SDK`; no resolved machine path is tracked |
+
+The remaining performance exit is to replace the small host histogram prefix
+with a shared-device recursive GPU scan. The current implementation is suitable
+as a deterministic fallback and as the CPU-differential reference for that
+later optimization.
+
 ## P3-oracle-1: frozen ViennaLS single-step CPU oracle
 
 - Status: accepted locally as a CPU reference, not a Vulkan implementation
@@ -435,9 +473,9 @@ oracle source itself compiles without a warning-specific source workaround.
 
 ## Next slice
 
-The next primitive exit is stable radix sort. P3 can then build HRLE active-run
-classification and index mapping from scan, compaction, sort, and gather against
-the frozen oracle above. A shared compute session and GPU-resident indirect
-count are required before the first end-to-end Level Set task can avoid
-per-wrapper device creation and host count readback. Higher-level process
-integration remains behind the ViennaCS dependency gate.
+The next exit is the first ViennaLS/ViennaPS algorithm-layer Vulkan step: HRLE
+active-run classification and index mapping composed from scan, compaction,
+stable sort, and gather against the frozen oracle above. A shared compute
+session and GPU-resident indirect count are required before the first end-to-end
+Level Set task can avoid per-wrapper device creation and host count readback.
+Higher-level process integration remains behind the ViennaCS dependency gate.

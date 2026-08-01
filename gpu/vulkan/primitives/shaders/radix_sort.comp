@@ -1,0 +1,79 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(constant_id = 0) const uint operation = 0u;
+
+layout(push_constant) uniform PushConstants {
+  uint elementCount;
+  uint bitShift;
+} pc;
+
+layout(std430, binding = 0) readonly buffer InputKeys {
+  uint inputKeys[];
+};
+
+layout(std430, binding = 1) readonly buffer InputValues {
+  uint inputValues[];
+};
+
+layout(std430, binding = 2) buffer OutputKeys {
+  uint outputKeys[];
+};
+
+layout(std430, binding = 3) buffer OutputValues {
+  uint outputValues[];
+};
+
+layout(std430, binding = 4) buffer Histogram {
+  uint histogram[];
+};
+
+shared uint localKeys[256];
+shared uint localValues[256];
+shared uint localBuckets[256];
+
+void histogram_kernel() {
+  const uint idx = gl_GlobalInvocationID.x;
+  if (idx >= pc.elementCount) {
+    return;
+  }
+  const uint bucket = (inputKeys[idx] >> pc.bitShift) & 0xFu;
+  atomicAdd(histogram[gl_WorkGroupID.x * 16u + bucket], 1u);
+}
+
+void scatter_kernel() {
+  const uint idx = gl_GlobalInvocationID.x;
+  const uint lane = gl_LocalInvocationID.x;
+  if (idx < pc.elementCount) {
+    localKeys[lane] = inputKeys[idx];
+    localValues[lane] = inputValues[idx];
+    localBuckets[lane] = (localKeys[lane] >> pc.bitShift) & 0xFu;
+  }
+  barrier();
+
+  if (lane == 0u) {
+    uint localCounts[16];
+    for (uint bucket = 0u; bucket < 16u; ++bucket) {
+      localCounts[bucket] = 0u;
+    }
+    const uint groupStart = gl_WorkGroupID.x * gl_WorkGroupSize.x;
+    const uint activeCount = min(gl_WorkGroupSize.x, pc.elementCount - groupStart);
+    for (uint localIndex = 0u; localIndex < activeCount; ++localIndex) {
+      const uint bucket = localBuckets[localIndex];
+      const uint outputIndex =
+          histogram[gl_WorkGroupID.x * 16u + bucket] + localCounts[bucket];
+      ++localCounts[bucket];
+      outputKeys[outputIndex] = localKeys[localIndex];
+      outputValues[outputIndex] = localValues[localIndex];
+    }
+  }
+}
+
+void main() {
+  if (operation == 0u) {
+    histogram_kernel();
+  } else {
+    scatter_kernel();
+  }
+}

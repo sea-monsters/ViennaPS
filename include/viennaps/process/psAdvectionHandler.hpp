@@ -6,6 +6,8 @@
 
 #include <vcTimer.hpp>
 
+#include <cmath>
+
 namespace viennaps {
 
 VIENNAPS_TEMPLATE_ND(NumericType, D) class AdvectionHandler {
@@ -121,7 +123,6 @@ public:
       return ProcessResult::FAILURE;
     }
 
-    ++totalAdvectionSteps_;
     if (context.advectionParams.velocityOutput) {
       auto mesh = viennals::Mesh<NumericType>::New();
       viennals::ToMesh<NumericType, D>(context.domain->getSurface(), mesh)
@@ -137,10 +138,33 @@ public:
       VIENNACORE_LOG_WARNING(
           "Process terminated early: Velocities are zero everywhere.");
       context.processTime = context.processDuration;
-    } else {
-      context.processTime += context.timeStep;
+      ++totalAdvectionSteps_;
+      return ProcessResult::SUCCESS;
     }
 
+    if (!std::isfinite(context.timeStep) || context.timeStep < 0.0) {
+      viennacore::Logger::getInstance()
+          .addError("Advection produced an invalid time step.", false)
+          .print();
+      return ProcessResult::FAILURE;
+    }
+
+    const double nextProcessTime = context.processTime + context.timeStep;
+    if (!std::isfinite(nextProcessTime)) {
+      viennacore::Logger::getInstance()
+          .addError("Advection produced a non-finite process time.", false)
+          .print();
+      return ProcessResult::FAILURE;
+    }
+    if (context.timeStep == 0.0 ||
+        !(nextProcessTime > context.processTime)) {
+      VIENNACORE_LOG_WARNING(
+          "Process terminated early: Advection made no time progress.");
+      return ProcessResult::EARLY_TERMINATION;
+    }
+
+    context.processTime = nextProcessTime;
+    ++totalAdvectionSteps_;
     return ProcessResult::SUCCESS;
   }
 

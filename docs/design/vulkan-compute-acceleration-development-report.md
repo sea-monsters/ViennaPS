@@ -129,6 +129,23 @@ ViennaPS 的公共物理 API 继续保持头文件优先。运行时至少包含
 真正共有的 buffer、dispatch、reduction、scan、sort、sparse matrix 和 ray
 query 需求；CUDA 和 Vulkan 可以在契约下面保留各自优化。
 
+### 3.1.1 本地路径与同步边界（强约束）
+
+开发期只允许通过环境变量注入 SDK 与外部依赖路径，不得在源代码、CMake cache、
+预设文件、测试脚本、文档示例、安装脚本中写死本机路径。环境差异会导致后续
+接手难以复现配置，任何固定路径都不应进入 Git 同步范围。
+
+- 推荐环境变量：
+  - `VULKAN_SDK`
+  - `VIENNAPS_VTK_SOURCE_DIR`
+  - `VIENNAPS_MPROCESS_SOURCE_DIR`
+  - `VIENNAPS_DEVICE_PROFILE_DIR`
+- 路径变量不得作为可追踪产物提交到 Git；本地路径只允许通过开发机 shell
+  环境、CI 变量或本地 `.gitignore`/配置文件提供。
+- 自动发现失败时仅允许“禁用该后端/仅 CPU”回退，不得隐式拼接绝对路径。
+- 如需本地覆盖，优先在不会被同步的本地层（例如会话级 CMake cache）定义，并
+  在文档里记录环境变量名而非 resolved value。
+
 ### 3.2 后端与能力层
 
 ```cpp

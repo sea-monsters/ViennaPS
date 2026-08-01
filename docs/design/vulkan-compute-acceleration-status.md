@@ -645,14 +645,44 @@ putting any resolved SDK, source, or build path in tracked files.
 | No-SDK behavior | configuration with Vulkan discovery disabled builds and passes the CPU baseline; no Vulkan executor executable is generated |
 | Path policy | all changed tracked/candidate files contain zero fixed local SDK/library paths and zero Windows absolute paths |
 
+## P3G-process-executor-routing: generic production injection
+
+- Status: accepted locally as the strategy-independent ViennaPS injection seam
+- Date: 2026-08-02
+- Scope: carry an optional ViennaLS Level Set update executor through
+  `Process`, `ProcessContext`, and the common `AdvectionHandler`
+
+The executor is empty by default, so existing CPU behavior is unchanged. Each
+advection-handler initialization installs the current context value, including
+an empty value, which prevents an executor from leaking across reused process
+state. Analytic, flux-driven, and atomic-layer strategies all pass through this
+common handler boundary and therefore require no Vulkan-specific strategy
+forks. `Process::setLevelSetUpdateExecutor` and
+`Process::clearLevelSetUpdateExecutor` provide the public injection surface
+without adding Vulkan headers to the always-available CPU API.
+
+The focused routing test performs one simple two-dimensional FP32 plane step.
+It compares every flattened ViennaLS defined value from the default CPU path
+against an injected executor that deliberately returns `FALLBACK`, and also
+compiles the public set/clear API. This test passes in both a Vulkan-configured
+build and a configuration where Vulkan package discovery is disabled.
+
+| Gate | Result |
+|---|---|
+| Default behavior | empty executor leaves the original ViennaLS CPU path active |
+| Fallback identity | injected `FALLBACK` is called and all defined values match CPU exactly |
+| Strategy boundary | the common `AdvectionHandler` carries the executor for analytic, flux, and ALP strategies |
+| Public API | `Process` set/clear calls compile without exposing Vulkan types |
+| No-SDK behavior | focused test builds and passes with Vulkan discovery disabled |
+| Path policy | no fixed local SDK/library path or Windows absolute path is tracked |
+
 ## Next slice
 
-The next exit is production wiring: let ViennaPS's advection handler install the
-P3F executor only when `DeploymentComputeContext` selects a qualified Vulkan
-device, owns a valid shared session, and loads the installed/generated shader
-asset. Automatic selection must remain threshold-gated and fail closed to CPU;
-manual configuration may override the backend/device choice but must still pass
-runtime safety checks. The wiring also needs explicit lifetime ownership and
-tests for CPU-only, automatic Vulkan, manual Vulkan, stale profile, shader-load
+The next exit is the optional Vulkan controller that owns the
+`DeploymentComputeContext`, shared compute-session/shader lifetimes, and the
+P3F executor before installing it through P3G. Automatic selection must remain
+threshold-gated and fail closed to CPU; manual configuration may override the
+backend/device choice but must still pass runtime safety checks. Tests must
+cover CPU-only, automatic Vulkan, manual Vulkan, stale profile, shader-load
 failure, and `saveVelocities` fallback. HRLE active-run classification and
 sparse rebuild follow after this production boundary is accepted.

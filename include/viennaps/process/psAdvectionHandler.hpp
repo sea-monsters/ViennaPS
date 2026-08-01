@@ -55,6 +55,7 @@ public:
     advectionKernel_.setAdaptiveTimeStepping(
         context.advectionParams.adaptiveTimeStepping,
         context.advectionParams.adaptiveTimeStepSubdivisions);
+    advectionKernel_.setLevelSetUpdateExecutor(context.levelSetUpdateExecutor);
 
     advectionKernel_.setVelocityUpdateCallback(nullptr);
 

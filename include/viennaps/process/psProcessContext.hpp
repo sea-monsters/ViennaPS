@@ -20,6 +20,9 @@ enum class ProcessResult {
 };
 
 VIENNAPS_TEMPLATE_ND(NumericType, D) struct ProcessContext {
+  using LevelSetUpdateExecutor =
+      typename viennals::Advect<NumericType, D>::LevelSetUpdateExecutor;
+
   // Core components
   SmartPointer<Domain<NumericType, D>> domain;
   SmartPointer<ProcessModelBase<NumericType, D>> model;
@@ -35,6 +38,7 @@ VIENNAPS_TEMPLATE_ND(NumericType, D) struct ProcessContext {
   CoverageParameters coverageParams;
   AtomicLayerProcessParameters atomicLayerParams;
   SurfaceDiffusionParameters surfaceDiffusionParams;
+  LevelSetUpdateExecutor levelSetUpdateExecutor;
   std::string intermediateOutputPath = "";
 
   // Simulation state

@@ -19,6 +19,8 @@
 #include "psGPULineEngine.hpp"
 #include "psGPUTriangleEngine.hpp"
 
+#include <utility>
+
 namespace viennaps {
 
 using namespace viennacore;
@@ -43,6 +45,9 @@ private:
   FluxEngineType fluxEngineType_ = FluxEngineType::AUTO;
 
 public:
+  using LevelSetUpdateExecutor =
+      typename ProcessContext<NumericType, D>::LevelSetUpdateExecutor;
+
   Process() { initializeStrategies(); }
   Process(SmartPointer<Domain<NumericType, D>> domain) : context_{domain} {
     initializeStrategies();
@@ -93,6 +98,12 @@ public:
   void setIntermediateOutputPath(const std::string &path) {
     context_.intermediateOutputPath = path;
   }
+
+  void setLevelSetUpdateExecutor(LevelSetUpdateExecutor executor) {
+    context_.levelSetUpdateExecutor = std::move(executor);
+  }
+
+  void clearLevelSetUpdateExecutor() { context_.levelSetUpdateExecutor = {}; }
 
   void apply() {
 

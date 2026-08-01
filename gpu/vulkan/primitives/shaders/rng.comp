@@ -1,0 +1,41 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(constant_id = 0) const uint mode = 0u;
+
+layout(push_constant) uniform PushConstants {
+  uint elementCount;
+  uint seed;
+  uint counterOffset;
+} pc;
+
+layout(std430, binding = 0) buffer OutputU32 {
+  uint outUint[];
+};
+
+layout(std430, binding = 1) buffer OutputFloat {
+  float outFloat[];
+};
+
+uint xorshift32(uint value) {
+  value ^= value << 13;
+  value ^= value >> 17;
+  value ^= value << 5;
+  return value;
+}
+
+void main() {
+  const uint idx = gl_GlobalInvocationID.x;
+  if (idx >= pc.elementCount) {
+    return;
+  }
+  const uint counter = idx + pc.counterOffset;
+  const uint mixedSeed = pc.seed ^ (counter * 0x9e3779b9u);
+  const uint state = xorshift32(mixedSeed);
+  if (mode == 0u) {
+    outUint[idx] = state;
+  } else {
+    outFloat[idx] = float(state >> 8) * (1.0 / 16777216.0);
+  }
+}

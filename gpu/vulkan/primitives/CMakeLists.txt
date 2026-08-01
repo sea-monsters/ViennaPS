@@ -183,9 +183,69 @@ target_link_libraries(viennaps-vulkan-primitives-production-smoke
     viennaps_vulkan_primitives
     Vulkan::Vulkan)
 
+set(VULKAN_PRIMITIVES_RNG_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/rng.comp")
+set(VULKAN_PRIMITIVES_RNG_SPV "${CMAKE_CURRENT_BINARY_DIR}/rng.comp.spv")
+if("${VIENNAPS_VULKAN_PRIMITIVES_SMOKE_SHADER_COMPILER}" MATCHES
+   ".*glslangValidator.*")
+  add_custom_command(
+    OUTPUT ${VULKAN_PRIMITIVES_RNG_SPV}
+    COMMAND ${VIENNAPS_VULKAN_PRIMITIVES_SMOKE_SHADER_COMPILER} -V
+            ${VULKAN_PRIMITIVES_RNG_SHADER}
+            -o ${VULKAN_PRIMITIVES_RNG_SPV}
+    DEPENDS ${VULKAN_PRIMITIVES_RNG_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Generating Vulkan RNG SPIR-V shader.")
+else()
+  add_custom_command(
+    OUTPUT ${VULKAN_PRIMITIVES_RNG_SPV}
+    COMMAND ${VIENNAPS_VULKAN_PRIMITIVES_SMOKE_SHADER_COMPILER}
+            -o ${VULKAN_PRIMITIVES_RNG_SPV}
+            ${VULKAN_PRIMITIVES_RNG_SHADER}
+    DEPENDS ${VULKAN_PRIMITIVES_RNG_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Generating Vulkan RNG SPIR-V shader.")
+endif()
+add_custom_target(viennaps-vulkan-rng-smoke-spv
+  DEPENDS ${VULKAN_PRIMITIVES_RNG_SPV})
+
+add_library(viennaps_vulkan_rng_primitives rng_primitives.cpp)
+target_link_libraries(viennaps_vulkan_rng_primitives
+  PUBLIC viennaps_vulkan_compute_runtime Vulkan::Vulkan)
+target_include_directories(viennaps_vulkan_rng_primitives
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(viennaps_vulkan_rng_primitives PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps_vulkan_rng_primitives PRIVATE /W4 /WX)
+else()
+  target_compile_options(viennaps_vulkan_rng_primitives
+                         PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_PRIMITIVES_RNG_SPV_PATH
+               "${VULKAN_PRIMITIVES_RNG_SPV}")
+add_executable(viennaps-vulkan-rng-production-smoke
+  rng_production_smoke.cpp)
+add_dependencies(viennaps-vulkan-rng-production-smoke
+  viennaps-vulkan-rng-smoke-spv)
+target_compile_features(viennaps-vulkan-rng-production-smoke PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps-vulkan-rng-production-smoke PRIVATE /W4 /WX)
+else()
+  target_compile_options(viennaps-vulkan-rng-production-smoke
+                         PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+target_compile_definitions(viennaps-vulkan-rng-production-smoke
+  PRIVATE
+    "VIENNAPS_VULKAN_PRIMITIVES_RNG_SPV_PATH=\"${VIENNAPS_VULKAN_PRIMITIVES_RNG_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-rng-production-smoke
+  PRIVATE viennaps_vulkan_rng_primitives Vulkan::Vulkan)
+
 if(BUILD_TESTING)
   add_test(NAME viennaps-vulkan-primitives-smoke
            COMMAND viennaps-vulkan-primitives-smoke)
   add_test(NAME viennaps-vulkan-primitives-production-smoke
            COMMAND viennaps-vulkan-primitives-production-smoke)
+  add_test(NAME viennaps-vulkan-rng-production-smoke
+           COMMAND viennaps-vulkan-rng-production-smoke)
 endif()

@@ -266,6 +266,30 @@ under MSVC C++20 `/W4` without code warnings.
 | No-SDK regression | primitives are skipped cleanly when `VULKAN_SDK` is absent |
 | Fixed-path audit | no local SDK, VTK, or comparison-tree absolute path occurs in tracked text |
 
+## S2B-primitive-3: deterministic counter-based RNG
+
+- Status: accepted locally
+- Date: 2026-08-01
+- Scope: reusable deterministic uint32 and FP32 `[0, 1)` generation; this
+  slice alone does not set `vulkanPrimitiveSuitePass`
+
+The RNG maps `(seed, uint32 counter)` through a fixed xorshift32 transform.
+Counter offsets make chunked dispatches reproduce the corresponding range of a
+single dispatch, and overflow is rejected before submission. FP32 conversion
+uses the upper 24 random bits times `2^-24`, avoiding the possible `1.0` caused
+by rounding a full uint32 to float. Length, buffer, uint32 counter-range, device
+workgroup-count, and zero-length contracts are checked before GPU execution.
+
+| Gate | Result |
+|---|---|
+| Warning gate | RNG library and smoke build under MSVC C++20 `/W4 /WX` |
+| CPU differential | uint32 and FP32 exact at 0, 1, 16, 257, 65,535, and 1,000,003 elements |
+| Determinism | repeated seed/counter dispatches are exact; seed variation and nonzero offset cases pass |
+| Range and guards | all FP32 values are in `[0, 1)` and inactive output tails remain unchanged |
+| Rejection paths | buffer/length, counter overflow, and device dispatch limits fail before submission |
+| Repeatability | full Intel Arc smoke passes twice consecutively |
+| No-SDK regression | primitive targets remain cleanly skipped without `VULKAN_SDK` |
+
 ## P3-oracle-1: frozen ViennaLS single-step CPU oracle
 
 - Status: accepted locally as a CPU reference, not a Vulkan implementation

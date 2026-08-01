@@ -10,9 +10,15 @@ layout(std430, binding = 1) writeonly buffer Output {
   float outputData[];
 };
 
+layout(constant_id = 0) const float multiplier = 1.0f;
+
+layout(push_constant) uniform PushConstants {
+  float bias;
+} pc;
+
 void main() {
   const uint idx = gl_GlobalInvocationID.x;
   if (idx < 16u) {
-    outputData[idx] = inputData[idx] * 2.0f + 1.0f;
+    outputData[idx] = inputData[idx] * multiplier + pc.bias;
   }
 }

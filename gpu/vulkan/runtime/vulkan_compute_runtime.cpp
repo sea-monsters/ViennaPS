@@ -708,6 +708,13 @@ PipelineLayout &PipelineLayout::operator=(PipelineLayout &&other) noexcept {
 bool PipelineLayout::create(VulkanDevice &device,
                             VkDescriptorSetLayout descriptorSetLayout,
                             std::string &error) {
+  return create(device, descriptorSetLayout, {}, error);
+}
+
+bool PipelineLayout::create(
+    VulkanDevice &device, VkDescriptorSetLayout descriptorSetLayout,
+    std::span<const VkPushConstantRange> pushConstantRanges,
+    std::string &error) {
   if (!device.isValid()) {
     error = "Invalid device passed to PipelineLayout::create.";
     return false;
@@ -715,11 +722,24 @@ bool PipelineLayout::create(VulkanDevice &device,
   if (layout_ != VK_NULL_HANDLE) {
     return true;
   }
+  const auto maxPushConstantBytes =
+      device.selection().properties.limits.maxPushConstantsSize;
+  for (const auto &range : pushConstantRanges) {
+    if (range.stageFlags == 0 || range.size == 0 || (range.offset % 4u) != 0u ||
+        (range.size % 4u) != 0u || range.offset > maxPushConstantBytes ||
+        range.size > maxPushConstantBytes - range.offset) {
+      error = "Invalid or unsupported push-constant range.";
+      return false;
+    }
+  }
   device_ = device.get();
   VkPipelineLayoutCreateInfo info{};
   info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
   info.setLayoutCount = 1;
   info.pSetLayouts = &descriptorSetLayout;
+  info.pushConstantRangeCount =
+      static_cast<std::uint32_t>(pushConstantRanges.size());
+  info.pPushConstantRanges = pushConstantRanges.data();
   const VkResult result =
       vkCreatePipelineLayout(device_, &info, nullptr, &layout_);
   if (result != VK_SUCCESS) {
@@ -761,6 +781,13 @@ ComputePipeline &ComputePipeline::operator=(ComputePipeline &&other) noexcept {
 
 bool ComputePipeline::create(VulkanDevice &device, const ShaderModule &shader,
                              const PipelineLayout &layout, std::string &error) {
+  return create(device, shader, layout, ComputePipelineOptions{}, error);
+}
+
+bool ComputePipeline::create(VulkanDevice &device, const ShaderModule &shader,
+                             const PipelineLayout &layout,
+                             const ComputePipelineOptions &options,
+                             std::string &error) {
   if (!device.isValid()) {
     error = "Invalid device passed to ComputePipeline::create.";
     return false;
@@ -772,13 +799,40 @@ bool ComputePipeline::create(VulkanDevice &device, const ShaderModule &shader,
     error = "Pipeline requires valid shader module and pipeline layout.";
     return false;
   }
+  if (options.entryPoint.empty()) {
+    error = "Compute pipeline entry point must not be empty.";
+    return false;
+  }
+  if (!options.specializationEntries.empty() &&
+      (options.specializationData == nullptr ||
+       options.specializationDataSize == 0)) {
+    error = "Specialization entries require non-empty data.";
+    return false;
+  }
+  for (const auto &entry : options.specializationEntries) {
+    if (entry.offset > options.specializationDataSize ||
+        entry.size > options.specializationDataSize - entry.offset) {
+      error = "Specialization entry exceeds the supplied data.";
+      return false;
+    }
+  }
   VkComputePipelineCreateInfo pipelineInfo{};
   pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
   VkPipelineShaderStageCreateInfo stageInfo{};
   stageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
   stageInfo.stage = VK_SHADER_STAGE_COMPUTE_BIT;
   stageInfo.module = shader.get();
-  stageInfo.pName = "main";
+  const std::string entryPoint(options.entryPoint);
+  stageInfo.pName = entryPoint.c_str();
+  VkSpecializationInfo specializationInfo{};
+  if (!options.specializationEntries.empty()) {
+    specializationInfo.mapEntryCount =
+        static_cast<std::uint32_t>(options.specializationEntries.size());
+    specializationInfo.pMapEntries = options.specializationEntries.data();
+    specializationInfo.dataSize = options.specializationDataSize;
+    specializationInfo.pData = options.specializationData;
+    stageInfo.pSpecializationInfo = &specializationInfo;
+  }
   pipelineInfo.stage = stageInfo;
   pipelineInfo.layout = layout.get();
 

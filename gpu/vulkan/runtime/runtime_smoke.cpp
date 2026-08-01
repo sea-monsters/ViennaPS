@@ -21,6 +21,10 @@ template <typename T>
   return array.size();
 }
 
+struct PushConstants {
+  float bias = 0.0F;
+};
+
 } // namespace
 
 int main() {
@@ -121,13 +125,21 @@ int main() {
   }
 
   PipelineLayout pipelineLayout{};
-  if (!pipelineLayout.create(device, descriptorSetLayout.get(), error)) {
+  const VkPushConstantRange pushConstantRange{VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                                              sizeof(PushConstants)};
+  if (!pipelineLayout.create(device, descriptorSetLayout.get(),
+                             std::span(&pushConstantRange, 1), error)) {
     std::cerr << error << '\n';
     return EXIT_FAILURE;
   }
 
   ComputePipeline pipeline{};
-  if (!pipeline.create(device, module, pipelineLayout, error)) {
+  constexpr float multiplier = 2.0F;
+  const VkSpecializationMapEntry multiplierEntry{0, 0, sizeof(multiplier)};
+  const ComputePipelineOptions pipelineOptions{
+      "main", std::span(&multiplierEntry, 1), &multiplier, sizeof(multiplier)};
+  if (!pipeline.create(device, module, pipelineLayout, pipelineOptions,
+                       error)) {
     std::cerr << error << '\n';
     return EXIT_FAILURE;
   }
@@ -211,6 +223,10 @@ int main() {
   vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                           pipelineLayout.get(), 0, 1, &descriptorSet, 0,
                           nullptr);
+  constexpr PushConstants pushConstants{1.0F};
+  vkCmdPushConstants(commandBuffer, pipelineLayout.get(),
+                     VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pushConstants),
+                     &pushConstants);
   vkCmdDispatch(commandBuffer, 1, 1, 1);
 
   VkBufferMemoryBarrier postBarrier{};

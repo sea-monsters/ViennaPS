@@ -120,6 +120,22 @@ These values live only in the process environment and ignored CMake cache.
 - Remove the bounded 256-block ceiling described below, then add compaction,
   sort, gather/scatter, histogram, and deterministic RNG.
 
+## S2A-runtime-parameters: production pipeline parameter support
+
+- Status: accepted locally
+- Date: 2026-08-01
+- Scope: reusable runtime API required by production primitive pipelines
+
+`PipelineLayout` now accepts validated push-constant ranges, while preserving
+the original no-push-constant overload. `ComputePipeline` now accepts an entry
+point and validated specialization-constant map/data through
+`ComputePipelineOptions`, while preserving its original `main` entry overload.
+The runtime smoke uses a specialization constant for the multiplier and a push
+constant for the bias, then differentially validates the same 16-value
+`y = 2x + 1` CPU oracle on the Intel Arc device. All values remain bit-exact,
+the dedicated compute queue remains selected, and both runtime targets build
+under MSVC C++20 `/W4` without code warnings.
+
 ## S2B-profile: deployment probe-to-profile persistence
 
 - Status: accepted locally

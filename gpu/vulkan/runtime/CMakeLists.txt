@@ -71,6 +71,12 @@ target_include_directories(viennaps_vulkan_compute_runtime
 )
 target_link_libraries(viennaps_vulkan_compute_runtime PRIVATE Vulkan::Vulkan)
 target_compile_features(viennaps_vulkan_compute_runtime PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps_vulkan_compute_runtime PRIVATE /W4)
+else()
+  target_compile_options(viennaps_vulkan_compute_runtime
+                         PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
 if(NOT VIENNAPS_BUILD_VULKAN_SMOKE)
   message(STATUS
@@ -150,3 +156,9 @@ target_link_libraries(viennaps-runtime-compute-smoke
     viennaps_vulkan_compute_runtime
     Vulkan::Vulkan)
 target_compile_features(viennaps-runtime-compute-smoke PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps-runtime-compute-smoke PRIVATE /W4)
+else()
+  target_compile_options(viennaps-runtime-compute-smoke
+                         PRIVATE -Wall -Wextra -Wpedantic)
+endif()

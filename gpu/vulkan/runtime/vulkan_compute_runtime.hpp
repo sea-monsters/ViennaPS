@@ -195,12 +195,23 @@ public:
   [[nodiscard]] bool create(VulkanDevice &device,
                             VkDescriptorSetLayout descriptorSetLayout,
                             std::string &error);
+  [[nodiscard]] bool
+  create(VulkanDevice &device, VkDescriptorSetLayout descriptorSetLayout,
+         std::span<const VkPushConstantRange> pushConstantRanges,
+         std::string &error);
   void reset();
   [[nodiscard]] VkPipelineLayout get() const;
 
 private:
   VkDevice device_{VK_NULL_HANDLE};
   VkPipelineLayout layout_{VK_NULL_HANDLE};
+};
+
+struct ComputePipelineOptions {
+  std::string_view entryPoint = "main";
+  std::span<const VkSpecializationMapEntry> specializationEntries{};
+  const void *specializationData = nullptr;
+  std::size_t specializationDataSize = 0;
 };
 
 class ComputePipeline {
@@ -215,6 +226,10 @@ public:
 
   [[nodiscard]] bool create(VulkanDevice &device, const ShaderModule &shader,
                             const PipelineLayout &layout, std::string &error);
+  [[nodiscard]] bool create(VulkanDevice &device, const ShaderModule &shader,
+                            const PipelineLayout &layout,
+                            const ComputePipelineOptions &options,
+                            std::string &error);
   void reset();
   [[nodiscard]] VkPipeline get() const;
 

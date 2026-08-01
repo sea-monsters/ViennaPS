@@ -676,13 +676,64 @@ build and a configuration where Vulkan package discovery is disabled.
 | No-SDK behavior | focused test builds and passes with Vulkan discovery disabled |
 | Path policy | no fixed local SDK/library path or Windows absolute path is tracked |
 
+## P3H-levelset-process-controller: deployment-driven installation
+
+- Status: accepted locally as the deployment/configuration controller; the
+  final full-`Process::apply` execution gate remains open
+- Date: 2026-08-02
+- Scope: bind one caller-supplied hardware fingerprint and FP32 Level Set
+  workload to `DeploymentComputeContext`, load the selected shader, and install
+  P3F through P3G
+
+`LevelSetProcessController<D>` does not duplicate capability ranking or device
+selection. It passes the hardware fingerprint, actual workload, profile path,
+manual backend policy, and optional device selector to the existing deployment
+context. Profile and shader paths remain caller/environment supplied. A zero or
+invented workload is not accepted implicitly: the caller must provide an FP32
+`LEVEL_SET` workload so memory and feature thresholds retain their meaning.
+
+CPU and automatic failure exits clear the Process executor. Missing/stale
+profiles and configuration-time shader/session failures fail closed to CPU in
+automatic mode with a structured degraded result. Manual CPU remains an
+explicit, non-degraded CPU choice. During configuration, manual Vulkan cannot
+silently downgrade: selection, device, session, and shader failures return an
+error and leave no callback installed. On success the Process callback captures
+shared state containing the deployment context and SPIR-V payload; it retrieves
+the active session from that state on each call, avoiding a dangling borrowed
+session after the controller's stack scope ends. The controller also rejects a
+zero estimated working set and any selection precision that could override the
+FP32 executor with FP64.
+
+The controller smoke creates a temporary profile from the current Vulkan
+device identity. It exercises valid automatic and manual Vulkan configuration,
+exact manual device-name selection, missing/stale profile behavior, automatic
+shader fallback, manual shader failure, and invalid workload rejection. The
+temporary path is generated at runtime and removed by the test; no resolved
+path is tracked. The smoke compiles with MSVC `/W4`; `/WX` is retained on the
+Vulkan runtime and Level Set libraries, but cannot be enabled on this
+Process-including translation unit until existing ViennaPS/ViennaLS/Embree
+header warnings are isolated or fixed.
+
+| Gate | Result |
+|---|---|
+| Automatic Vulkan | valid profile, workload, session, and shader select Vulkan |
+| Manual overrides | manual CPU clears the executor; manual Vulkan and exact device-name selection succeed |
+| Fail-closed auto | missing/stale profile and shader-load failure report degraded CPU |
+| Strict manual configuration | unavailable/manual shader failure returns an error without silent CPU substitution |
+| Validation layers | controller CTest passes twice with `VK_LAYER_KHRONOS_validation` |
+| No-SDK behavior | Vulkan-disabled configuration generates no controller target/test and the CPU routing test passes |
+| Path policy | profile/shader inputs are caller/environment supplied; changed files contain no resolved local paths |
+
 ## Next slice
 
-The next exit is the optional Vulkan controller that owns the
-`DeploymentComputeContext`, shared compute-session/shader lifetimes, and the
-P3F executor before installing it through P3G. Automatic selection must remain
-threshold-gated and fail closed to CPU; manual configuration may override the
-backend/device choice but must still pass runtime safety checks. Tests must
-cover CPU-only, automatic Vulkan, manual Vulkan, stale profile, shader-load
-failure, and `saveVelocities` fallback. HRLE active-run classification and
-sparse rebuild follow after this production boundary is accepted.
+The next exit is a bounded full production execution gate. The controller-
+installed callback must execute a simple ViennaLS step and match the frozen CPU
+oracle after the controller's local scope ends. A direct analytic
+`Process::apply` experiment did not terminate within 120 seconds and was
+reverted; this progress-stall must be diagnosed separately rather than hidden
+inside the controller smoke. P3E currently converts executor `ERROR` outcomes
+to CPU fallback even after a manual Vulkan selection; the production gate must
+therefore define and test a mode-aware runtime failure policy before claiming
+strict manual behavior end to end. Once the lifetime/production gate is
+accepted, the Level Set work advances to HRLE active-run classification and
+sparse rebuild, followed by the particle/ray and surface/oxidation stages.

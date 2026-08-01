@@ -80,6 +80,25 @@ else()
                          PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
+add_executable(viennaps-vulkan-levelset-process-controller-smoke
+               levelset_process_controller_smoke.cpp)
+add_dependencies(viennaps-vulkan-levelset-process-controller-smoke
+                 viennaps-vulkan-levelset-update-spv)
+target_compile_definitions(
+  viennaps-vulkan-levelset-process-controller-smoke PRIVATE
+  "VIENNAPS_LEVELSET_UPDATE_SPV_PATH=\"${_VIENNAPS_LEVELSET_UPDATE_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-levelset-process-controller-smoke
+  PRIVATE ViennaPS viennaps_vulkan_levelset_update)
+target_compile_features(viennaps-vulkan-levelset-process-controller-smoke
+  PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps-vulkan-levelset-process-controller-smoke
+                         PRIVATE /W4)
+else()
+  target_compile_options(viennaps-vulkan-levelset-process-controller-smoke
+                         PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 if(BUILD_TESTING)
   add_test(NAME viennaps-vulkan-levelset-update-smoke
            COMMAND viennaps-vulkan-levelset-update-smoke)

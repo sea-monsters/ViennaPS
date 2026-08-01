@@ -18,9 +18,13 @@ function(viennaps_configure_vulkan_probe)
   if(NOT DEFINED VIENNAPS_BUILD_VULKAN_SMOKE)
     set(VIENNAPS_BUILD_VULKAN_SMOKE OFF)
   endif()
+  if(NOT DEFINED VIENNAPS_BUILD_VULKAN_PRIMITIVES_SMOKE)
+    set(VIENNAPS_BUILD_VULKAN_PRIMITIVES_SMOKE OFF)
+  endif()
 
   if(NOT VIENNAPS_ENABLE_VULKAN AND NOT VIENNAPS_BUILD_VULKAN_PROBE AND
-     NOT VIENNAPS_BUILD_VULKAN_SMOKE)
+     NOT VIENNAPS_BUILD_VULKAN_SMOKE AND
+     NOT VIENNAPS_BUILD_VULKAN_PRIMITIVES_SMOKE)
     set(VIENNAPS_VULKAN_SDK_AVAILABLE OFF PARENT_SCOPE)
     set(VIENNAPS_VULKAN_PROBE_NOTE
         "Vulkan support tools intentionally disabled by CMake options."
@@ -28,7 +32,8 @@ function(viennaps_configure_vulkan_probe)
     message(STATUS
             "[ViennaPS Vulkan Probe] disabled by CMake options: "
             "VIENNAPS_ENABLE_VULKAN=OFF, VIENNAPS_BUILD_VULKAN_PROBE=OFF, and "
-            "VIENNAPS_BUILD_VULKAN_SMOKE=OFF.")
+            "VIENNAPS_BUILD_VULKAN_SMOKE=OFF, and "
+            "VIENNAPS_BUILD_VULKAN_PRIMITIVES_SMOKE=OFF.")
     return()
   endif()
 

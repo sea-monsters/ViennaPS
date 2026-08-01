@@ -119,13 +119,57 @@ These values live only in the process environment and ignored CMake cache.
 
 - Adapt the probe JSON directly into `CapabilityProfileRecord`, add safe
   working-set calibration, and atomically persist the resulting profile.
-- Implement and differentially validate fill/copy, transform, reduction, scan,
-  compaction, sort, gather/scatter, histogram, and deterministic RNG. A failed
-  delegated primitive attempt produced no accepted code and is not counted as
-  progress.
+- Replace the reduction and scan reference kernels described below with
+  multi-workgroup implementations, then add compaction, sort, gather/scatter,
+  histogram, and deterministic RNG.
+
+## S2B-reference: primitive differential scaffold
+
+- Status: accepted as a correctness scaffold, not production acceleration
+- Date: 2026-08-01
+- Scope: optional developer smoke target for the first five primitive
+  contracts; this does not complete the S2B primitive suite
+
+### Delivered contracts
+
+- The parent and standalone Vulkan builds expose
+  `VIENNAPS_BUILD_VULKAN_PRIMITIVES_SMOKE`. When the SDK is unavailable, CMake
+  skips the target cleanly and keeps the diagnostic probe usable.
+- Fill, copy, affine transform, sum/min/max reduction, and exclusive signed
+  32-bit scan are compared against CPU results at lengths 0, 1, 16, and 257.
+- The checks include output mismatch counts, floating-point absolute/relative/
+  ULP error, and guard-region validation around every logical buffer.
+- Fill, copy, and transform dispatch one invocation per element. Reduction and
+  scan currently execute their CPU-equivalent loops in a single GPU invocation.
+  They validate resource binding, dispatch, synchronization, mapping, edge
+  cases, and comparison machinery, but they are deliberately not classified as
+  GPU acceleration.
+
+### Acceptance evidence
+
+| Gate | Result |
+|---|---|
+| Parent Vulkan configure/build | primitive shader and smoke executable build with the SDK supplied through `VULKAN_SDK` |
+| Differential cases | five operations at four lengths pass; zero mismatches and exact floating-point results |
+| Guard regions | unchanged for all operations and lengths |
+| No-SDK regression | primitive target is skipped; diagnostic probe remains buildable and exits 0 |
+| Warning gate | primitive host target builds under MSVC C++20 `/W4` without code warnings |
+| Fixed-path audit | source and documentation contain environment-variable names only, not machine-local SDK or library paths |
+
+### Required promotion work
+
+- Use a shared-memory first stage plus recursive partial reduction without
+  requiring optional floating-point atomics.
+- Use block-local scan, recursively scan block sums, then add block offsets;
+  preserve the exact exclusive-scan and zero-length contracts.
+- Run the same CPU differential matrix across multiple workgroup boundaries and
+  randomized deterministic inputs before setting the corresponding persisted
+  profile suite gates.
+- Complete the remaining primitive list and safe memory-budget calibration.
 
 ## Next slice
 
-S2B delivers calibrated probe-to-profile persistence and the primitive
-differential suite. It unlocks the first Vulkan implementation of the frozen
+S2B promotes reduction and scan to genuinely parallel implementations, adds
+the remaining primitive contracts, and delivers calibrated probe-to-profile
+persistence. It unlocks the first Vulkan implementation of the frozen
 two-dimensional Level Set scenario.

@@ -1,0 +1,110 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer InputFloat {
+  float inputFloat[];
+};
+
+layout(std430, binding = 1) writeonly buffer OutputFloat {
+  float outputFloat[];
+};
+
+layout(std430, binding = 2) readonly buffer InputInt {
+  int inputInt[];
+};
+
+layout(std430, binding = 3) writeonly buffer OutputInt {
+  int outputInt[];
+};
+
+layout(std430, binding = 4) buffer Reduction {
+  float sum;
+  float minValue;
+  float maxValue;
+};
+
+layout(push_constant) uniform PushConstants {
+  uint elementCount;
+  float scalar;
+} pc;
+
+layout(constant_id = 0) const uint operation = 0u;
+
+void fill_kernel() {
+  const uint idx = gl_GlobalInvocationID.x;
+  if (idx < pc.elementCount) {
+    outputFloat[idx] = pc.scalar;
+  }
+}
+
+void copy_kernel() {
+  const uint idx = gl_GlobalInvocationID.x;
+  if (idx < pc.elementCount) {
+    outputFloat[idx] = inputFloat[idx];
+  }
+}
+
+void transform_kernel() {
+  const uint idx = gl_GlobalInvocationID.x;
+  if (idx < pc.elementCount) {
+    outputFloat[idx] = inputFloat[idx] * 2.0f + 1.0f;
+  }
+}
+
+void reduce_kernel() {
+  if (gl_GlobalInvocationID.x != 0u) {
+    return;
+  }
+  const uint n = pc.elementCount;
+  if (n == 0u) {
+    sum = 0.0f;
+    minValue = 0.0f;
+    maxValue = 0.0f;
+    return;
+  }
+
+  float localSum = 0.0f;
+  float localMin = inputFloat[0u];
+  float localMax = inputFloat[0u];
+  for (uint i = 0u; i < n; ++i) {
+    const float value = inputFloat[i];
+    localSum += value;
+    localMin = min(localMin, value);
+    localMax = max(localMax, value);
+  }
+  sum = localSum;
+  minValue = localMin;
+  maxValue = localMax;
+}
+
+void exclusive_scan_i32_kernel() {
+  if (gl_GlobalInvocationID.x != 0u) {
+    return;
+  }
+  int running = 0;
+  for (uint i = 0u; i < pc.elementCount; ++i) {
+    outputInt[i] = running;
+    running += inputInt[i];
+  }
+}
+
+void main() {
+  switch (operation) {
+  case 0u:
+    fill_kernel();
+    break;
+  case 1u:
+    copy_kernel();
+    break;
+  case 2u:
+    transform_kernel();
+    break;
+  case 3u:
+    reduce_kernel();
+    break;
+  case 4u:
+    exclusive_scan_i32_kernel();
+    break;
+  }
+}

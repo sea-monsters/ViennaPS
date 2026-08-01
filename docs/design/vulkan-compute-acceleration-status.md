@@ -51,8 +51,8 @@ replace, the accepted development report and ADR.
 | No-SDK probe | builds and exits 0 with `status=disabled` |
 | Backend policy | 11 focused cases pass under MSVC C++20 `/W4` |
 | Capability profile I/O | 7 focused cases pass, including round-trip and malformed input |
-| CPU Level Set FP32 | 96 active points, 68 surface nodes/lines, fingerprint `0xd3a34f98ceafe71b` |
-| CPU Level Set FP64 | 96 active points, 68 surface nodes/lines, fingerprint `0x39e664622bea5583` |
+| CPU Level Set FP32 | 92 active points, 68 surface nodes/lines, fingerprint `0x51052040fecec990` |
+| CPU Level Set FP64 | 92 active points, 68 surface nodes/lines, fingerprint `0x6af00ac25d8971d0` |
 | Local VTK source override | root configure recognizes the local source and ViennaLS reuses its targets |
 
 The machine-local build uses environment variables, for example:
@@ -500,11 +500,49 @@ Known narrowing/uninitialized-use warnings instantiated inside the current
 ViennaLS headers were suppressed only in the local direct-compile command; the
 oracle source itself compiles without a warning-specific source workaround.
 
+## P3C-levelset-update: Forward Euler value update
+
+- Status: accepted locally as an algorithm-layer component; ViennaLS state
+  extraction and sparse-domain rebuild are not integrated yet
+- Date: 2026-08-02
+- Scope: the `Advect::updateLevelSet()` value-update phase for FP32 CSR-flattened
+  rate data, executed through an externally owned `ComputeSession`
+
+The kernel consumes per-point values and CSR ranges of gradient, dissipation,
+and material stop rates. It preserves the current ViennaLS dissipation-check
+operator precedence, skips values outside `integrationCutoff`, deducts time at
+material boundaries, and keeps the final sentinel contract explicit. Host-side
+validation rejects non-monotonic or empty ranges, unequal rate arrays, missing
+sentinels, non-finite data, and dispatch overflow. A device status word remains
+as a second fail-closed guard, and caller output is replaced only after a clean
+dispatch and readback.
+
+| Gate | Result |
+|---|---|
+| External runtime ownership | uses the caller's `ComputeSession`; creates no instance or logical device |
+| FP32 CPU differential | bit-exact at 0, 1, 257, and 65,535 points |
+| ViennaLS branches | cutoff, both dissipation reversal clauses, and multi-material transition pass exactly |
+| Malformed input | short/empty CSR and missing sentinel rejected; prior output preserved |
+| Validation layers | two consecutive runs pass on the selected Vulkan compute device |
+| CTest | `viennaps-vulkan-levelset-update-smoke` passes |
+| Strict build | MSVC C++20 `/W4 /WX` passes |
+| No-SDK | option-on configure skips the Level Set target cleanly and the build exits 0 |
+
+The CPU differential intentionally uses FP32 time arithmetic to define this
+widely supported shader contract. ViennaLS currently keeps the remaining time
+as `double` even for an FP32 domain; end-to-end integration must therefore
+measure the single-step topology oracle above and either accept a documented
+ULP/interface tolerance or gate the exact mixed-arithmetic path on
+`shaderFloat64`. FP64 domain support remains CPU-only until its dedicated suite
+passes.
+
 ## Next slice
 
-The next exit is the first ViennaLS/ViennaPS algorithm-layer Vulkan step: HRLE
-active-run classification and index mapping composed from scan, compaction,
-stable sort, and gather against the frozen oracle above. A shared compute
-session and GPU-resident indirect count are required before the first end-to-end
-Level Set task can avoid per-wrapper device creation and host count readback.
-Higher-level process integration remains behind the ViennaCS dependency gate.
+The next exit is a dedicated ViennaLS stage-executor seam between
+`computeRates()` and `updateLevelSet()/rebuildLS()`. The existing velocity
+callback fires after a Forward Euler update and cannot replace this phase; the
+new hook must expose a bounded rate view, return handled/fallback/error, and
+leave the unchanged CPU path as the fail-closed default. ViennaPS then connects
+the deployment-profile selection plan and manual overrides to the shared
+session. HRLE active-run classification and sparse rebuild follow after that
+integration seam is proven against the frozen 92-point oracle.

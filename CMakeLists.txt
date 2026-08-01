@@ -34,6 +34,8 @@ option(VIENNAPS_BUILD_VULKAN_SMOKE "Build the Vulkan compute smoke test"
        ${VIENNAPS_ENABLE_VULKAN})
 option(VIENNAPS_BUILD_VULKAN_PRIMITIVES_SMOKE
        "Build the Vulkan primitive differential smoke test" OFF)
+option(VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE
+       "Build the Vulkan Level Set update differential smoke test" OFF)
 
 option(VIENNAPS_BUILD_EXAMPLES "Build examples" OFF)
 option(VIENNAPS_BUILD_TESTS "Build tests" OFF)
@@ -296,7 +298,8 @@ include("cmake/ViennaPSVulkan.cmake")
 viennaps_configure_vulkan_probe()
 
 if(VIENNAPS_BUILD_VULKAN_PROBE OR VIENNAPS_BUILD_VULKAN_SMOKE OR
-   VIENNAPS_BUILD_VULKAN_PRIMITIVES_SMOKE)
+   VIENNAPS_BUILD_VULKAN_PRIMITIVES_SMOKE OR
+   VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE)
   add_subdirectory(gpu/vulkan)
 endif()
 

@@ -1,0 +1,93 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) buffer Values { float values[]; };
+layout(set = 0, binding = 1, std430) readonly buffer RateOffsets {
+  uint rateOffsets[];
+};
+struct RateEntry {
+  float gradient;
+  float dissipation;
+  float stopValue;
+  float padding;
+};
+layout(set = 0, binding = 2, std430) readonly buffer Rates {
+  RateEntry rates[];
+};
+layout(set = 0, binding = 3, std430) buffer Status { uint status; };
+
+layout(push_constant) uniform Parameters {
+  uint pointCount;
+  float timeStep;
+  float integrationCutoff;
+  uint checkDissipation;
+}
+parameters;
+
+const uint STATUS_ZERO_VELOCITY_CROSSING = 1u;
+const uint STATUS_RATE_RANGE_EXHAUSTED = 2u;
+const uint STATUS_NON_FINITE_RESULT = 3u;
+
+bool shouldClamp(float gradient, float velocity) {
+  // Preserve ViennaLS operator precedence exactly:
+  // (check && negative-gradient reversal) || positive-gradient reversal.
+  return (parameters.checkDissipation != 0u && gradient < 0.0 &&
+          velocity > 0.0) ||
+         (gradient > 0.0 && velocity < 0.0);
+}
+
+void main() {
+  const uint point = gl_GlobalInvocationID.x;
+  if (point >= parameters.pointCount) {
+    return;
+  }
+
+  const float originalValue = values[point];
+  if (abs(originalValue) > parameters.integrationCutoff) {
+    return;
+  }
+
+  uint current = rateOffsets[point];
+  const uint end = rateOffsets[point + 1u];
+  if (current >= end) {
+    atomicMax(status, STATUS_RATE_RANGE_EXHAUSTED);
+    return;
+  }
+
+  float value = originalValue;
+  float remainingTime = parameters.timeStep;
+  float gradient = rates[current].gradient;
+  float velocity = gradient - rates[current].dissipation;
+  if (shouldClamp(gradient, velocity)) {
+    velocity = 0.0;
+  }
+  float rate = remainingTime * velocity;
+
+  while (abs(rates[current].stopValue - value) < abs(rate)) {
+    if (velocity == 0.0) {
+      atomicMax(status, STATUS_ZERO_VELOCITY_CROSSING);
+      return;
+    }
+    remainingTime -= abs((rates[current].stopValue - value) / velocity);
+    value = rates[current].stopValue;
+    ++current;
+    if (current >= end) {
+      atomicMax(status, STATUS_RATE_RANGE_EXHAUSTED);
+      return;
+    }
+    gradient = rates[current].gradient;
+    velocity = gradient - rates[current].dissipation;
+    if (shouldClamp(gradient, velocity)) {
+      velocity = 0.0;
+    }
+    rate = remainingTime * velocity;
+  }
+
+  const float result = value - rate;
+  if (isnan(result) || isinf(result)) {
+    atomicMax(status, STATUS_NON_FINITE_RESULT);
+    return;
+  }
+  values[point] = result;
+}

@@ -39,6 +39,15 @@ if(NOT DEFINED VIENNAPS_BUILD_VULKAN_PRIMITIVES_SMOKE)
   endif()
 endif()
 
+if(NOT DEFINED VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE)
+  if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    set(VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE OFF CACHE BOOL
+        "Build the Vulkan Level Set update differential smoke utility.")
+  else()
+    set(VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE OFF)
+  endif()
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/../../cmake/ViennaPSVulkan.cmake")
 if(NOT DEFINED VIENNAPS_VULKAN_SDK_AVAILABLE)
   viennaps_configure_vulkan_probe()
@@ -110,12 +119,22 @@ set(VULKAN_SMOKE_SHADER "${CMAKE_CURRENT_SOURCE_DIR}/shaders/compute_smoke.comp"
 set(VULKAN_SMOKE_SPV "${CMAKE_CURRENT_BINARY_DIR}/compute_smoke.comp.spv")
 
 if(VIENNAPS_VULKAN_SDK_AVAILABLE AND
-   (VIENNAPS_ENABLE_VULKAN OR VIENNAPS_BUILD_VULKAN_SMOKE))
+   (VIENNAPS_ENABLE_VULKAN OR VIENNAPS_BUILD_VULKAN_SMOKE OR
+    VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE))
   add_subdirectory(runtime)
 endif()
 
 if(VIENNAPS_BUILD_VULKAN_PRIMITIVES_SMOKE)
   add_subdirectory(primitives)
+endif()
+
+if(VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE)
+  if(VIENNAPS_VULKAN_SDK_AVAILABLE)
+    add_subdirectory(levelset)
+  else()
+    message(STATUS
+            "[ViennaPS Vulkan Level Set] Vulkan SDK unavailable; skipping smoke.")
+  endif()
 endif()
 
 if(VIENNAPS_BUILD_VULKAN_PROBE)

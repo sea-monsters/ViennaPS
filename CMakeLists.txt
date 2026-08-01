@@ -53,6 +53,10 @@ set(VIENNAPS_LOOKUP_DIRS
 set(VIENNAPS_VTK_SOURCE_DIR
     "$ENV{VIENNAPS_VTK_SOURCE_DIR}"
     CACHE PATH "Use an existing VTK source tree instead of finding or downloading VTK")
+set(VIENNAPS_VIENNALS_SOURCE_DIR
+    "$ENV{VIENNAPS_VIENNALS_SOURCE_DIR}"
+    CACHE PATH
+          "Use an existing ViennaLS source tree instead of downloading ViennaLS")
 
 list(APPEND CMAKE_PREFIX_PATH ${VIENNAPS_LOOKUP_DIRS})
 
@@ -190,6 +194,23 @@ endif()
 
 if(VIENNAPS_BUILD_PYTHON)
   set(CMAKE_SKIP_INSTALL_RULES TRUE)
+endif()
+
+if(VIENNAPS_VIENNALS_SOURCE_DIR AND NOT CPM_ViennaLS_SOURCE)
+  get_filename_component(_VIENNAPS_VIENNALS_SOURCE_DIR
+                         "${VIENNAPS_VIENNALS_SOURCE_DIR}" ABSOLUTE)
+  if(NOT EXISTS "${_VIENNAPS_VIENNALS_SOURCE_DIR}/CMakeLists.txt")
+    message(
+      FATAL_ERROR
+        "[ViennaPS] VIENNAPS_VIENNALS_SOURCE_DIR does not contain CMakeLists.txt: ${_VIENNAPS_VIENNALS_SOURCE_DIR}"
+    )
+  endif()
+  set(CPM_ViennaLS_SOURCE
+      "${_VIENNAPS_VIENNALS_SOURCE_DIR}"
+      CACHE PATH "Local ViennaLS source override used by CPM")
+  message(
+    STATUS
+      "[ViennaPS] Using ViennaLS source from VIENNAPS_VIENNALS_SOURCE_DIR.")
 endif()
 
 CPMAddPackage(

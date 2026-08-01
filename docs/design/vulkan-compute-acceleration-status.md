@@ -54,12 +54,14 @@ replace, the accepted development report and ADR.
 | CPU Level Set FP32 | 92 active points, 68 surface nodes/lines, fingerprint `0x51052040fecec990` |
 | CPU Level Set FP64 | 92 active points, 68 surface nodes/lines, fingerprint `0x6af00ac25d8971d0` |
 | Local VTK source override | root configure recognizes the local source and ViennaLS reuses its targets |
+| Local ViennaLS source override | root configure consumes `VIENNAPS_VIENNALS_SOURCE_DIR` through CPM without tracking its resolved path |
 
 The machine-local build uses environment variables, for example:
 
 ```bat
 set VULKAN_SDK=<local Vulkan SDK>
 set VIENNAPS_VTK_SOURCE_DIR=<local VTK source tree>
+set VIENNAPS_VIENNALS_SOURCE_DIR=<local ViennaLS source tree>
 cmake -S . -B build -G Ninja -DVIENNAPS_ENABLE_VULKAN=ON
 ```
 
@@ -68,6 +70,11 @@ The same rule applies to external comparison trees used during development:
 automation may read them through environment variables such as
 `VIENNAPS_MPROCESS_SOURCE_DIR`, but neither their resolved value nor a
 machine-local fallback path may enter tracked CMake, presets, tests, or docs.
+The normal ViennaLS dependency remains the versioned remote declared in
+`CMakeLists.txt`; `VIENNAPS_VIENNALS_SOURCE_DIR` only supplies an optional
+local-development override through the ignored build cache. An explicit
+`CPM_ViennaLS_SOURCE` CMake argument retains higher priority for CI and
+packaging.
 
 ### Open exits before S2
 

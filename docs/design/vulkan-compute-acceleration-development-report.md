@@ -138,6 +138,7 @@ query 需求；CUDA 和 Vulkan 可以在契约下面保留各自优化。
 - 推荐环境变量：
   - `VULKAN_SDK`
   - `VIENNAPS_VTK_SOURCE_DIR`
+  - `VIENNAPS_VIENNALS_SOURCE_DIR`
   - `VIENNAPS_MPROCESS_SOURCE_DIR`
   - `VIENNAPS_DEVICE_PROFILE_DIR`
 - 路径变量不得作为可追踪产物提交到 Git；本地路径只允许通过开发机 shell

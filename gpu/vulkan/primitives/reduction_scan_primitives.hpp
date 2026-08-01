@@ -20,6 +20,10 @@ enum class ReductionScanOperation : std::uint32_t {
   reduceFloatBlocks = 0u,
   exclusiveScanIntBlocks = 1u,
   exclusiveScanIntAddOffsets = 2u,
+  normalizeFlags = 3u,
+  writeCompactionCount = 4u,
+  compactFloat = 5u,
+  compactUInt32 = 6u,
 };
 
 struct ReductionScanStats {
@@ -46,9 +50,9 @@ public:
   void reset();
   [[nodiscard]] bool isInitialized() const;
 
-  [[nodiscard]] bool
-  createFloatBuffer(std::size_t elementCount,
-                    runtime::HostVisibleBuffer &buffer, std::string &error);
+  [[nodiscard]] bool createFloatBuffer(std::size_t elementCount,
+                                       runtime::HostVisibleBuffer &buffer,
+                                       std::string &error);
   [[nodiscard]] bool createIntBuffer(std::size_t elementCount,
                                      runtime::HostVisibleBuffer &buffer,
                                      std::string &error);
@@ -57,10 +61,23 @@ public:
                                      std::size_t elementCount,
                                      ReductionScanStats &stats,
                                      std::string &error);
-  [[nodiscard]] bool exclusiveScanInt(
+  [[nodiscard]] bool exclusiveScanInt(runtime::HostVisibleBuffer &input,
+                                      std::size_t inputElementCount,
+                                      runtime::HostVisibleBuffer &output,
+                                      std::size_t outputElementCount,
+                                      std::string &error,
+                                      ReductionScanOptions options = {});
+
+  [[nodiscard]] bool stableCompactFloat(
       runtime::HostVisibleBuffer &input, std::size_t inputElementCount,
-      runtime::HostVisibleBuffer &output, std::size_t outputElementCount,
-      std::string &error, ReductionScanOptions options = {});
+      runtime::HostVisibleBuffer &flags, std::size_t flagElementCount,
+      runtime::HostVisibleBuffer &output, std::size_t outputElementCapacity,
+      std::size_t &selectedCount, std::string &error);
+  [[nodiscard]] bool stableCompactUInt32(
+      runtime::HostVisibleBuffer &input, std::size_t inputElementCount,
+      runtime::HostVisibleBuffer &flags, std::size_t flagElementCount,
+      runtime::HostVisibleBuffer &output, std::size_t outputElementCapacity,
+      std::size_t &selectedCount, std::string &error);
 
   [[nodiscard]] const runtime::VulkanDevice &device() const;
 
@@ -86,46 +103,65 @@ private:
                                   std::size_t elementSize,
                                   runtime::HostVisibleBuffer &buffer,
                                   std::string &error);
-  [[nodiscard]] bool validateFloatLength(
-      std::string_view label, const runtime::HostVisibleBuffer &buffer,
-      std::size_t elementCount, std::string &error) const;
-  [[nodiscard]] bool validateIntLength(
-      std::string_view label, const runtime::HostVisibleBuffer &buffer,
-      std::size_t elementCount, std::string &error) const;
+  [[nodiscard]] bool
+  validateFloatLength(std::string_view label,
+                      const runtime::HostVisibleBuffer &buffer,
+                      std::size_t elementCount, std::string &error) const;
+  [[nodiscard]] bool validateIntLength(std::string_view label,
+                                       const runtime::HostVisibleBuffer &buffer,
+                                       std::size_t elementCount,
+                                       std::string &error) const;
   [[nodiscard]] bool validateAlias(std::string_view label,
                                    const runtime::HostVisibleBuffer &input,
                                    const runtime::HostVisibleBuffer &output,
-                                   bool allowInPlace,
-                                   std::string &error) const;
+                                   bool allowInPlace, std::string &error) const;
   [[nodiscard]] bool ensureMapped(runtime::HostVisibleBuffer &buffer,
                                   std::string_view label,
                                   std::string &error) const;
   [[nodiscard]] bool ensureDummyBuffers(std::string &error);
-  [[nodiscard]] bool updateDescriptors(
-      runtime::HostVisibleBuffer &floatInput,
-      runtime::HostVisibleBuffer &floatOutput,
-      runtime::HostVisibleBuffer &intInput,
-      runtime::HostVisibleBuffer &intOutput,
-      runtime::HostVisibleBuffer &intAux, std::string &error);
-  [[nodiscard]] bool dispatchKernel(
-      runtime::ComputePipeline &pipeline, std::size_t dispatchX,
-      const PushConstants &constants,
-      std::span<const VkBufferMemoryBarrier> preBarriers,
-      std::span<const VkBufferMemoryBarrier> postBarriers,
-      std::string &error);
+  [[nodiscard]] bool updateDescriptors(runtime::HostVisibleBuffer &floatInput,
+                                       runtime::HostVisibleBuffer &floatOutput,
+                                       runtime::HostVisibleBuffer &intInput,
+                                       runtime::HostVisibleBuffer &intOutput,
+                                       runtime::HostVisibleBuffer &intAux,
+                                       std::string &error);
+  [[nodiscard]] bool
+  dispatchKernel(runtime::ComputePipeline &pipeline, std::size_t dispatchX,
+                 const PushConstants &constants,
+                 std::span<const VkBufferMemoryBarrier> preBarriers,
+                 std::span<const VkBufferMemoryBarrier> postBarriers,
+                 std::string &error);
   [[nodiscard]] bool dispatchReduce(runtime::HostVisibleBuffer &input,
                                     runtime::HostVisibleBuffer &output,
                                     std::size_t elementCount,
-                                    bool inputIsTriples,
-                                    std::string &error);
-  [[nodiscard]] bool dispatchScanBlocks(
+                                    bool inputIsTriples, std::string &error);
+  [[nodiscard]] bool dispatchScanBlocks(runtime::HostVisibleBuffer &input,
+                                        runtime::HostVisibleBuffer &output,
+                                        runtime::HostVisibleBuffer &blockSums,
+                                        std::size_t elementCount,
+                                        std::string &error);
+  [[nodiscard]] bool
+  dispatchScanAddOffsets(runtime::HostVisibleBuffer &output,
+                         runtime::HostVisibleBuffer &blockOffsets,
+                         std::size_t elementCount, std::string &error);
+  [[nodiscard]] bool
+  dispatchNormalizeFlags(runtime::HostVisibleBuffer &flags,
+                         runtime::HostVisibleBuffer &normalizedFlags,
+                         std::size_t elementCount, std::string &error);
+  [[nodiscard]] bool dispatchCompactionCount(
+      runtime::HostVisibleBuffer &normalizedFlags,
+      runtime::HostVisibleBuffer &offsets, runtime::HostVisibleBuffer &count,
+      std::size_t elementCount, std::size_t &selectedCount, std::string &error);
+  [[nodiscard]] bool dispatchCompactionScatter(
       runtime::HostVisibleBuffer &input, runtime::HostVisibleBuffer &output,
-      runtime::HostVisibleBuffer &blockSums, std::size_t elementCount,
-      std::string &error);
-  [[nodiscard]] bool dispatchScanAddOffsets(
-      runtime::HostVisibleBuffer &output,
-      runtime::HostVisibleBuffer &blockOffsets, std::size_t elementCount,
-      std::string &error);
+      runtime::HostVisibleBuffer &normalizedFlags,
+      runtime::HostVisibleBuffer &offsets, std::size_t elementCount,
+      bool inputIsFloat, std::string &error);
+  [[nodiscard]] bool stableCompact(
+      runtime::HostVisibleBuffer &input, std::size_t inputElementCount,
+      runtime::HostVisibleBuffer &flags, std::size_t flagElementCount,
+      runtime::HostVisibleBuffer &output, std::size_t outputElementCapacity,
+      std::size_t &selectedCount, bool inputIsFloat, std::string &error);
   [[nodiscard]] bool scanIntRecursive(runtime::HostVisibleBuffer &input,
                                       std::size_t elementCount,
                                       runtime::HostVisibleBuffer &output,
@@ -139,6 +175,10 @@ private:
   runtime::ComputePipeline reducePipeline_{};
   runtime::ComputePipeline scanBlocksPipeline_{};
   runtime::ComputePipeline scanAddOffsetsPipeline_{};
+  runtime::ComputePipeline normalizeFlagsPipeline_{};
+  runtime::ComputePipeline compactionCountPipeline_{};
+  runtime::ComputePipeline compactFloatPipeline_{};
+  runtime::ComputePipeline compactUInt32Pipeline_{};
   runtime::DescriptorPool descriptorPool_{};
   runtime::CommandContext commandContext_{};
   runtime::Fence fence_{};

@@ -128,6 +128,7 @@ public:
   [[nodiscard]] VkDeviceSize size() const;
   [[nodiscard]] void *mappedPtr() const;
   [[nodiscard]] bool hostCoherent() const;
+  [[nodiscard]] VkDevice ownerDevice() const;
 
 private:
   VkDevice device_{VK_NULL_HANDLE};

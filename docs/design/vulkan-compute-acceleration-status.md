@@ -368,6 +368,46 @@ family indices on the selected compute queue.
 | Validation layers | complete smoke passes twice with `VK_LAYER_KHRONOS_validation` enabled and no diagnostics |
 | Local paths | build and shader discovery use `VULKAN_SDK`; no resolved machine path is tracked |
 
+## S2B-primitive-6: stable stream compaction
+
+- Status: accepted locally
+- Date: 2026-08-02
+- Scope: stable FP32 and uint32 compaction by uint32 flags on the same Vulkan
+  device as the recursive scan; GPU-resident indirect dispatch remains a later
+  shared-session exit
+
+Compaction now extends `ReductionScanPrimitives` instead of creating another
+device-owning wrapper. A GPU normalization pass maps every nonzero flag to one,
+the existing recursive exclusive scan produces stable destinations, a one-
+workgroup GPU pass writes the exact selected count, and a final scatter copies
+FP32 values or preserves all uint32 bits. The count is read before scatter so an
+undersized output is rejected without an out-of-bounds shader write.
+
+`HostVisibleBuffer` exposes its owning `VkDevice` for validation. Reduction,
+scan, and compaction therefore reject buffers created by another primitive
+instance before descriptor update. Input/output aliasing and flag aliasing are
+also rejected because a parallel stable scatter cannot safely overwrite unread
+input elements.
+
+| Gate | Result |
+|---|---|
+| Warning gate | production library and compaction smoke build under MSVC C++20 `/W4 /WX` |
+| FP32 CPU differential | exact stable order at 0, 1, 16, 257, 65,535, and 1,000,003 elements |
+| uint32 CPU differential | bit-exact at 0, 1, 257, and 1,000,003 elements |
+| Flag semantics | zero rejects an element; every nonzero uint32 value selects exactly once |
+| Count and guards | GPU count is exact; input, flags, inactive output tail, and zero-selection output remain unchanged |
+| Rejection paths | mismatched lengths, insufficient capacity, input/output alias, flag alias, and cross-device buffers fail before scatter |
+| Validation layers | complete compaction smoke passes twice with `VK_LAYER_KHRONOS_validation` enabled and no diagnostics |
+| Existing regressions | low-level primitive, recursive reduction/scan, RNG, and runtime smokes pass after dependent objects are rebuilt |
+| No-SDK regression | primitive targets skip cleanly when Vulkan package discovery and `VULKAN_SDK` are unavailable |
+| Local paths | tracked text contains no resolved SDK, VTK, or comparison-tree path |
+
+The localized MSVC `/showIncludes` output can prevent Ninja from noticing a
+changed public header. This slice exposed that an old smoke object may allocate
+the former class size while linking the new library. Acceptance therefore
+requires a real dependent-object rebuild after public primitive layout changes;
+relink-only output is not sufficient evidence.
+
 ## P3-oracle-1: frozen ViennaLS single-step CPU oracle
 
 - Status: accepted locally as a CPU reference, not a Vulkan implementation
@@ -395,6 +435,9 @@ oracle source itself compiles without a warning-specific source workaround.
 
 ## Next slice
 
-The next primitive exits are compaction and sort. P3 can now implement the
-first Vulkan Level Set step against the frozen oracle above. Higher-level
-process integration remains behind the ViennaCS dependency gate.
+The next primitive exit is stable radix sort. P3 can then build HRLE active-run
+classification and index mapping from scan, compaction, sort, and gather against
+the frozen oracle above. A shared compute session and GPU-resident indirect
+count are required before the first end-to-end Level Set task can avoid
+per-wrapper device creation and host count readback. Higher-level process
+integration remains behind the ViennaCS dependency gate.

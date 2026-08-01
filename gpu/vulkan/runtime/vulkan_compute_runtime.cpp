@@ -571,6 +571,7 @@ VkDeviceMemory HostVisibleBuffer::memory() const { return memory_; }
 VkDeviceSize HostVisibleBuffer::size() const { return bytes_; }
 void *HostVisibleBuffer::mappedPtr() const { return mapped_; }
 bool HostVisibleBuffer::hostCoherent() const { return hostCoherent_; }
+VkDevice HostVisibleBuffer::ownerDevice() const { return device_; }
 
 ShaderModule::~ShaderModule() { reset(); }
 

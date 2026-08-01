@@ -370,6 +370,25 @@ target_compile_definitions(viennaps-vulkan-reduction-scan-production-smoke
 target_link_libraries(viennaps-vulkan-reduction-scan-production-smoke
   PRIVATE viennaps_vulkan_reduction_scan_primitives Vulkan::Vulkan)
 
+add_executable(viennaps-vulkan-compaction-production-smoke
+  compaction_production_smoke.cpp)
+add_dependencies(viennaps-vulkan-compaction-production-smoke
+  viennaps-vulkan-reduction-scan-smoke-spv)
+target_compile_features(viennaps-vulkan-compaction-production-smoke
+  PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps-vulkan-compaction-production-smoke
+                         PRIVATE /W4 /WX)
+else()
+  target_compile_options(viennaps-vulkan-compaction-production-smoke
+                         PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+target_compile_definitions(viennaps-vulkan-compaction-production-smoke
+  PRIVATE
+    "VIENNAPS_VULKAN_REDUCTION_SCAN_SPV_PATH=\"${VIENNAPS_VULKAN_REDUCTION_SCAN_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-compaction-production-smoke
+  PRIVATE viennaps_vulkan_reduction_scan_primitives Vulkan::Vulkan)
+
 if(BUILD_TESTING)
   add_test(NAME viennaps-vulkan-primitives-smoke
            COMMAND viennaps-vulkan-primitives-smoke)
@@ -381,4 +400,6 @@ if(BUILD_TESTING)
            COMMAND viennaps-vulkan-gather-histogram-production-smoke)
   add_test(NAME viennaps-vulkan-reduction-scan-production-smoke
            COMMAND viennaps-vulkan-reduction-scan-production-smoke)
+  add_test(NAME viennaps-vulkan-compaction-production-smoke
+           COMMAND viennaps-vulkan-compaction-production-smoke)
 endif()

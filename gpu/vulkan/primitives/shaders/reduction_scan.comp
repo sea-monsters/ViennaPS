@@ -10,10 +10,10 @@ layout(push_constant) uniform PushConstants {
 } pc;
 
 layout(std430, binding = 0) readonly buffer FloatInput {
-  float floatInput[];
+  uint rawInput[];
 };
-layout(std430, binding = 1) writeonly buffer FloatOutput {
-  float floatOutput[];
+layout(std430, binding = 1) buffer FloatOutput {
+  uint rawOutput[];
 };
 layout(std430, binding = 2) readonly buffer IntInput {
   uint intInput[];
@@ -38,14 +38,14 @@ void reduce_float_blocks() {
   float maxValue = -1.0 / 0.0;
   if (globalIndex < pc.elementCount) {
     if (pc.inputIsTriples == 0u) {
-      const float value = floatInput[globalIndex];
+      const float value = uintBitsToFloat(rawInput[globalIndex]);
       sumValue = value;
       minValue = value;
       maxValue = value;
     } else {
-      sumValue = floatInput[globalIndex];
-      minValue = floatInput[pc.elementCount + globalIndex];
-      maxValue = floatInput[2u * pc.elementCount + globalIndex];
+      sumValue = uintBitsToFloat(rawInput[globalIndex]);
+      minValue = uintBitsToFloat(rawInput[pc.elementCount + globalIndex]);
+      maxValue = uintBitsToFloat(rawInput[2u * pc.elementCount + globalIndex]);
     }
   }
   sharedSum[localIndex] = sumValue;
@@ -66,9 +66,9 @@ void reduce_float_blocks() {
   if (localIndex == 0u) {
     const uint outputStride = gl_NumWorkGroups.x;
     const uint group = gl_WorkGroupID.x;
-    floatOutput[group] = sharedSum[0];
-    floatOutput[outputStride + group] = sharedMin[0];
-    floatOutput[2u * outputStride + group] = sharedMax[0];
+    rawOutput[group] = floatBitsToUint(sharedSum[0]);
+    rawOutput[outputStride + group] = floatBitsToUint(sharedMin[0]);
+    rawOutput[2u * outputStride + group] = floatBitsToUint(sharedMax[0]);
   }
 }
 
@@ -112,6 +112,34 @@ void add_scan_offsets() {
   }
 }
 
+void normalize_flags() {
+  const uint globalIndex = gl_GlobalInvocationID.x;
+  if (globalIndex < pc.elementCount) {
+    intOutput[globalIndex] = intInput[globalIndex] == 0u ? 0u : 1u;
+  }
+}
+
+void write_compaction_count() {
+  if (gl_GlobalInvocationID.x == 0u) {
+    const uint last = pc.elementCount - 1u;
+    intAux[0] = intOutput[last] + intInput[last];
+  }
+}
+
+void compact_float() {
+  const uint globalIndex = gl_GlobalInvocationID.x;
+  if (globalIndex < pc.elementCount && intInput[globalIndex] != 0u) {
+    rawOutput[intOutput[globalIndex]] = rawInput[globalIndex];
+  }
+}
+
+void compact_uint32() {
+  const uint globalIndex = gl_GlobalInvocationID.x;
+  if (globalIndex < pc.elementCount && intInput[globalIndex] != 0u) {
+    rawOutput[intOutput[globalIndex]] = rawInput[globalIndex];
+  }
+}
+
 void main() {
   if (operation == 0u) {
     reduce_float_blocks();
@@ -119,5 +147,13 @@ void main() {
     exclusive_scan_blocks();
   } else if (operation == 2u) {
     add_scan_offsets();
+  } else if (operation == 3u) {
+    normalize_flags();
+  } else if (operation == 4u) {
+    write_compaction_count();
+  } else if (operation == 5u) {
+    compact_float();
+  } else if (operation == 6u) {
+    compact_uint32();
   }
 }

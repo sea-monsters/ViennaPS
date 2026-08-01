@@ -112,6 +112,14 @@ bool ReductionScanPrimitives::initialize(const std::string_view spirvPath,
       !createPipeline(scanAddOffsetsPipeline_,
                       ReductionScanOperation::exclusiveScanIntAddOffsets,
                       error) ||
+      !createPipeline(normalizeFlagsPipeline_,
+                      ReductionScanOperation::normalizeFlags, error) ||
+      !createPipeline(compactionCountPipeline_,
+                      ReductionScanOperation::writeCompactionCount, error) ||
+      !createPipeline(compactFloatPipeline_,
+                      ReductionScanOperation::compactFloat, error) ||
+      !createPipeline(compactUInt32Pipeline_,
+                      ReductionScanOperation::compactUInt32, error) ||
       !ensureDummyBuffers(error)) {
     return fail();
   }
@@ -124,6 +132,10 @@ void ReductionScanPrimitives::reset() {
   fence_.destroy();
   commandContext_.reset();
   descriptorPool_.reset();
+  compactUInt32Pipeline_.reset();
+  compactFloatPipeline_.reset();
+  compactionCountPipeline_.reset();
+  normalizeFlagsPipeline_.reset();
   scanAddOffsetsPipeline_.reset();
   scanBlocksPipeline_.reset();
   reducePipeline_.reset();
@@ -144,6 +156,10 @@ bool ReductionScanPrimitives::isInitialized() const {
          reducePipeline_.get() != VK_NULL_HANDLE &&
          scanBlocksPipeline_.get() != VK_NULL_HANDLE &&
          scanAddOffsetsPipeline_.get() != VK_NULL_HANDLE &&
+         normalizeFlagsPipeline_.get() != VK_NULL_HANDLE &&
+         compactionCountPipeline_.get() != VK_NULL_HANDLE &&
+         compactFloatPipeline_.get() != VK_NULL_HANDLE &&
+         compactUInt32Pipeline_.get() != VK_NULL_HANDLE &&
          descriptorPool_.get() != VK_NULL_HANDLE &&
          descriptorSet_ != VK_NULL_HANDLE && commandBuffer_ != VK_NULL_HANDLE &&
          fence_.get() != VK_NULL_HANDLE &&
@@ -183,9 +199,10 @@ bool ReductionScanPrimitives::createPipeline(
                          error);
 }
 
-bool ReductionScanPrimitives::createBuffer(
-    const std::size_t elementCount, const std::size_t elementSize,
-    runtime::HostVisibleBuffer &buffer, std::string &error) {
+bool ReductionScanPrimitives::createBuffer(const std::size_t elementCount,
+                                           const std::size_t elementSize,
+                                           runtime::HostVisibleBuffer &buffer,
+                                           std::string &error) {
   if (!isReady(error)) {
     return false;
   }
@@ -195,6 +212,10 @@ bool ReductionScanPrimitives::createBuffer(
   }
   const auto allocatedCount = std::max<std::size_t>(1u, elementCount);
   const auto bytes = static_cast<VkDeviceSize>(allocatedCount * elementSize);
+  if (bytes > device_.selection().properties.limits.maxStorageBufferRange) {
+    return setError(error, "buffer creation",
+                    "requested size exceeds maxStorageBufferRange");
+  }
   return buffer.create(device_, bytes, kBufferUsage, kMemoryFlags, error);
 }
 
@@ -217,6 +238,15 @@ bool ReductionScanPrimitives::validateFloatLength(
     return setError(error, "validation",
                     std::string(label) + " buffer is not initialized");
   }
+  if (buffer.ownerDevice() != device_.get()) {
+    return setError(error, "validation",
+                    std::string(label) + " belongs to a different device");
+  }
+  if (buffer.size() >
+      device_.selection().properties.limits.maxStorageBufferRange) {
+    return setError(error, "validation",
+                    std::string(label) + " exceeds maxStorageBufferRange");
+  }
   const auto capacity = static_cast<std::size_t>(buffer.size() / sizeof(float));
   if (elementCount > capacity) {
     return setError(error, "validation",
@@ -231,6 +261,15 @@ bool ReductionScanPrimitives::validateIntLength(
   if (!buffer.isValid()) {
     return setError(error, "validation",
                     std::string(label) + " buffer is not initialized");
+  }
+  if (buffer.ownerDevice() != device_.get()) {
+    return setError(error, "validation",
+                    std::string(label) + " belongs to a different device");
+  }
+  if (buffer.size() >
+      device_.selection().properties.limits.maxStorageBufferRange) {
+    return setError(error, "validation",
+                    std::string(label) + " exceeds maxStorageBufferRange");
   }
   const auto capacity =
       static_cast<std::size_t>(buffer.size() / sizeof(std::int32_t));
@@ -273,8 +312,7 @@ bool ReductionScanPrimitives::ensureDummyBuffers(std::string &error) {
 bool ReductionScanPrimitives::updateDescriptors(
     runtime::HostVisibleBuffer &floatInput,
     runtime::HostVisibleBuffer &floatOutput,
-    runtime::HostVisibleBuffer &intInput,
-    runtime::HostVisibleBuffer &intOutput,
+    runtime::HostVisibleBuffer &intInput, runtime::HostVisibleBuffer &intOutput,
     runtime::HostVisibleBuffer &intAux, std::string &error) {
   const std::array<runtime::HostVisibleBuffer *, 5u> buffers{
       &floatInput, &floatOutput, &intInput, &intOutput, &intAux};
@@ -294,7 +332,8 @@ bool ReductionScanPrimitives::updateDescriptors(
     writes[index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[index].pBufferInfo = &infos[index];
   }
-  vkUpdateDescriptorSets(device_.get(), static_cast<std::uint32_t>(writes.size()),
+  vkUpdateDescriptorSets(device_.get(),
+                         static_cast<std::uint32_t>(writes.size()),
                          writes.data(), 0u, nullptr);
   return true;
 }
@@ -326,11 +365,10 @@ bool ReductionScanPrimitives::dispatchKernel(
   if (vkBeginCommandBuffer(commandBuffer_, &begin) != VK_SUCCESS) {
     return setError(error, "dispatch", "vkBeginCommandBuffer failed");
   }
-  vkCmdPipelineBarrier(
-      commandBuffer_, VK_PIPELINE_STAGE_HOST_BIT,
-      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0u, 0u, nullptr,
-      static_cast<std::uint32_t>(preBarriers.size()), preBarriers.data(), 0u,
-      nullptr);
+  vkCmdPipelineBarrier(commandBuffer_, VK_PIPELINE_STAGE_HOST_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0u, 0u, nullptr,
+                       static_cast<std::uint32_t>(preBarriers.size()),
+                       preBarriers.data(), 0u, nullptr);
   vkCmdBindPipeline(commandBuffer_, VK_PIPELINE_BIND_POINT_COMPUTE,
                     pipeline.get());
   vkCmdBindDescriptorSets(commandBuffer_, VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -340,11 +378,10 @@ bool ReductionScanPrimitives::dispatchKernel(
                      VK_SHADER_STAGE_COMPUTE_BIT, 0u, sizeof(constants),
                      &constants);
   vkCmdDispatch(commandBuffer_, static_cast<std::uint32_t>(dispatchX), 1u, 1u);
-  vkCmdPipelineBarrier(
-      commandBuffer_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-      VK_PIPELINE_STAGE_HOST_BIT, 0u, 0u, nullptr,
-      static_cast<std::uint32_t>(postBarriers.size()), postBarriers.data(), 0u,
-      nullptr);
+  vkCmdPipelineBarrier(commandBuffer_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                       VK_PIPELINE_STAGE_HOST_BIT, 0u, 0u, nullptr,
+                       static_cast<std::uint32_t>(postBarriers.size()),
+                       postBarriers.data(), 0u, nullptr);
   if (vkEndCommandBuffer(commandBuffer_) != VK_SUCCESS) {
     return setError(error, "dispatch", "vkEndCommandBuffer failed");
   }
@@ -364,18 +401,19 @@ bool ReductionScanPrimitives::dispatchKernel(
   return true;
 }
 
-bool ReductionScanPrimitives::dispatchReduce(
-    runtime::HostVisibleBuffer &input, runtime::HostVisibleBuffer &output,
-    const std::size_t elementCount, const bool inputIsTriples,
-    std::string &error) {
+bool ReductionScanPrimitives::dispatchReduce(runtime::HostVisibleBuffer &input,
+                                             runtime::HostVisibleBuffer &output,
+                                             const std::size_t elementCount,
+                                             const bool inputIsTriples,
+                                             std::string &error) {
   const auto blockCount = ceilDiv(elementCount, kWorkgroupSize);
   const auto inputElements = inputIsTriples ? elementCount * 3u : elementCount;
   if (!validateFloatLength("reduction input", input, inputElements, error) ||
       !validateFloatLength("reduction output", output, blockCount * 3u,
                            error) ||
       !ensureMapped(input, "reduction input", error) ||
-      !ensureMapped(output, "reduction output", error) ||
-      !input.flush(error) || !output.flush(error) ||
+      !ensureMapped(output, "reduction output", error) || !input.flush(error) ||
+      !output.flush(error) ||
       !updateDescriptors(input, output, dummyInt_, dummyInt_, dummyInt_,
                          error)) {
     return false;
@@ -385,13 +423,13 @@ bool ReductionScanPrimitives::dispatchReduce(
                   VK_ACCESS_SHADER_READ_BIT),
       makeBarrier(output.handle(), output.size(), VK_ACCESS_HOST_WRITE_BIT,
                   VK_ACCESS_SHADER_WRITE_BIT)};
-  const std::array post{
-      makeBarrier(output.handle(), output.size(), VK_ACCESS_SHADER_WRITE_BIT,
-                  VK_ACCESS_HOST_READ_BIT)};
-  if (!dispatchKernel(reducePipeline_, blockCount,
-                      {static_cast<std::uint32_t>(elementCount),
-                       inputIsTriples ? 1u : 0u},
-                      pre, post, error)) {
+  const std::array post{makeBarrier(output.handle(), output.size(),
+                                    VK_ACCESS_SHADER_WRITE_BIT,
+                                    VK_ACCESS_HOST_READ_BIT)};
+  if (!dispatchKernel(
+          reducePipeline_, blockCount,
+          {static_cast<std::uint32_t>(elementCount), inputIsTriples ? 1u : 0u},
+          pre, post, error)) {
     return false;
   }
   return output.invalidate(error);
@@ -408,8 +446,7 @@ bool ReductionScanPrimitives::dispatchScanBlocks(
       !ensureMapped(input, "scan input", error) ||
       !ensureMapped(output, "scan output", error) ||
       !ensureMapped(blockSums, "scan block sums", error) ||
-      !input.flush(error) || !output.flush(error) ||
-      !blockSums.flush(error) ||
+      !input.flush(error) || !output.flush(error) || !blockSums.flush(error) ||
       !updateDescriptors(dummyFloat_, dummyFloat_, input, output, blockSums,
                          error)) {
     return false;
@@ -418,9 +455,9 @@ bool ReductionScanPrimitives::dispatchScanBlocks(
   std::array<VkBufferMemoryBarrier, 3u> pre{};
   std::size_t preCount = 0u;
   if (input.handle() == output.handle()) {
-    pre[preCount++] = makeBarrier(
-        input.handle(), input.size(), VK_ACCESS_HOST_WRITE_BIT,
-        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+    pre[preCount++] =
+        makeBarrier(input.handle(), input.size(), VK_ACCESS_HOST_WRITE_BIT,
+                    VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
   } else {
     pre[preCount++] =
         makeBarrier(input.handle(), input.size(), VK_ACCESS_HOST_WRITE_BIT,
@@ -465,10 +502,133 @@ bool ReductionScanPrimitives::dispatchScanAddOffsets(
                   VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT),
       makeBarrier(blockOffsets.handle(), blockOffsets.size(),
                   VK_ACCESS_HOST_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT)};
-  const std::array post{
-      makeBarrier(output.handle(), output.size(), VK_ACCESS_SHADER_WRITE_BIT,
-                  VK_ACCESS_HOST_READ_BIT)};
+  const std::array post{makeBarrier(output.handle(), output.size(),
+                                    VK_ACCESS_SHADER_WRITE_BIT,
+                                    VK_ACCESS_HOST_READ_BIT)};
   if (!dispatchKernel(scanAddOffsetsPipeline_, blockCount,
+                      {static_cast<std::uint32_t>(elementCount), 0u}, pre, post,
+                      error)) {
+    return false;
+  }
+  return output.invalidate(error);
+}
+
+bool ReductionScanPrimitives::dispatchNormalizeFlags(
+    runtime::HostVisibleBuffer &flags,
+    runtime::HostVisibleBuffer &normalizedFlags, const std::size_t elementCount,
+    std::string &error) {
+  const auto blockCount = ceilDiv(elementCount, kWorkgroupSize);
+  if (!validateIntLength("compaction flags", flags, elementCount, error) ||
+      !validateIntLength("normalized compaction flags", normalizedFlags,
+                         elementCount, error) ||
+      !validateAlias("flag normalization", flags, normalizedFlags, false,
+                     error) ||
+      !ensureMapped(flags, "compaction flags", error) ||
+      !ensureMapped(normalizedFlags, "normalized compaction flags", error) ||
+      !flags.flush(error) || !normalizedFlags.flush(error) ||
+      !updateDescriptors(dummyFloat_, dummyFloat_, flags, normalizedFlags,
+                         dummyInt_, error)) {
+    return false;
+  }
+  const std::array pre{
+      makeBarrier(flags.handle(), flags.size(), VK_ACCESS_HOST_WRITE_BIT,
+                  VK_ACCESS_SHADER_READ_BIT),
+      makeBarrier(normalizedFlags.handle(), normalizedFlags.size(),
+                  VK_ACCESS_HOST_WRITE_BIT, VK_ACCESS_SHADER_WRITE_BIT)};
+  const std::array post{
+      makeBarrier(normalizedFlags.handle(), normalizedFlags.size(),
+                  VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT)};
+  if (!dispatchKernel(normalizeFlagsPipeline_, blockCount,
+                      {static_cast<std::uint32_t>(elementCount), 0u}, pre, post,
+                      error)) {
+    return false;
+  }
+  return normalizedFlags.invalidate(error);
+}
+
+bool ReductionScanPrimitives::dispatchCompactionCount(
+    runtime::HostVisibleBuffer &normalizedFlags,
+    runtime::HostVisibleBuffer &offsets, runtime::HostVisibleBuffer &count,
+    const std::size_t elementCount, std::size_t &selectedCount,
+    std::string &error) {
+  if (!validateIntLength("normalized compaction flags", normalizedFlags,
+                         elementCount, error) ||
+      !validateIntLength("compaction offsets", offsets, elementCount, error) ||
+      !validateIntLength("compaction count", count, 1u, error) ||
+      !ensureMapped(normalizedFlags, "normalized compaction flags", error) ||
+      !ensureMapped(offsets, "compaction offsets", error) ||
+      !ensureMapped(count, "compaction count", error) ||
+      !normalizedFlags.flush(error) || !offsets.flush(error) ||
+      !count.flush(error) ||
+      !updateDescriptors(dummyFloat_, dummyFloat_, normalizedFlags, offsets,
+                         count, error)) {
+    return false;
+  }
+  const std::array pre{
+      makeBarrier(normalizedFlags.handle(), normalizedFlags.size(),
+                  VK_ACCESS_HOST_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT),
+      makeBarrier(offsets.handle(), offsets.size(), VK_ACCESS_HOST_WRITE_BIT,
+                  VK_ACCESS_SHADER_READ_BIT),
+      makeBarrier(count.handle(), count.size(), VK_ACCESS_HOST_WRITE_BIT,
+                  VK_ACCESS_SHADER_WRITE_BIT)};
+  const std::array post{makeBarrier(count.handle(), count.size(),
+                                    VK_ACCESS_SHADER_WRITE_BIT,
+                                    VK_ACCESS_HOST_READ_BIT)};
+  if (!dispatchKernel(compactionCountPipeline_, 1u,
+                      {static_cast<std::uint32_t>(elementCount), 0u}, pre, post,
+                      error) ||
+      !count.invalidate(error)) {
+    return false;
+  }
+  std::uint32_t result = 0u;
+  std::memcpy(&result, count.mappedPtr(), sizeof(result));
+  selectedCount = result;
+  if (selectedCount > elementCount) {
+    return setError(error, "compaction",
+                    "GPU selected count exceeds the input length");
+  }
+  return true;
+}
+
+bool ReductionScanPrimitives::dispatchCompactionScatter(
+    runtime::HostVisibleBuffer &input, runtime::HostVisibleBuffer &output,
+    runtime::HostVisibleBuffer &normalizedFlags,
+    runtime::HostVisibleBuffer &offsets, const std::size_t elementCount,
+    const bool inputIsFloat, std::string &error) {
+  const auto blockCount = ceilDiv(elementCount, kWorkgroupSize);
+  const bool validInput =
+      inputIsFloat
+          ? validateFloatLength("compaction input", input, elementCount, error)
+          : validateIntLength("compaction input", input, elementCount, error);
+  if (!validInput ||
+      !validateIntLength("normalized compaction flags", normalizedFlags,
+                         elementCount, error) ||
+      !validateIntLength("compaction offsets", offsets, elementCount, error) ||
+      !ensureMapped(input, "compaction input", error) ||
+      !ensureMapped(output, "compaction output", error) ||
+      !ensureMapped(normalizedFlags, "normalized compaction flags", error) ||
+      !ensureMapped(offsets, "compaction offsets", error) ||
+      !input.flush(error) || !output.flush(error) ||
+      !normalizedFlags.flush(error) || !offsets.flush(error) ||
+      !updateDescriptors(input, output, normalizedFlags, offsets, dummyInt_,
+                         error)) {
+    return false;
+  }
+  const std::array pre{
+      makeBarrier(input.handle(), input.size(), VK_ACCESS_HOST_WRITE_BIT,
+                  VK_ACCESS_SHADER_READ_BIT),
+      makeBarrier(normalizedFlags.handle(), normalizedFlags.size(),
+                  VK_ACCESS_HOST_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT),
+      makeBarrier(offsets.handle(), offsets.size(), VK_ACCESS_HOST_WRITE_BIT,
+                  VK_ACCESS_SHADER_READ_BIT),
+      makeBarrier(output.handle(), output.size(), VK_ACCESS_HOST_WRITE_BIT,
+                  VK_ACCESS_SHADER_WRITE_BIT)};
+  const std::array post{makeBarrier(output.handle(), output.size(),
+                                    VK_ACCESS_SHADER_WRITE_BIT,
+                                    VK_ACCESS_HOST_READ_BIT)};
+  auto &pipeline =
+      inputIsFloat ? compactFloatPipeline_ : compactUInt32Pipeline_;
+  if (!dispatchKernel(pipeline, blockCount,
                       {static_cast<std::uint32_t>(elementCount), 0u}, pre, post,
                       error)) {
     return false;
@@ -496,9 +656,10 @@ bool ReductionScanPrimitives::scanIntRecursive(
   return dispatchScanAddOffsets(output, blockOffsets, elementCount, error);
 }
 
-bool ReductionScanPrimitives::reduceSumMinMax(
-    runtime::HostVisibleBuffer &input, const std::size_t elementCount,
-    ReductionScanStats &stats, std::string &error) {
+bool ReductionScanPrimitives::reduceSumMinMax(runtime::HostVisibleBuffer &input,
+                                              const std::size_t elementCount,
+                                              ReductionScanStats &stats,
+                                              std::string &error) {
   if (!isReady(error) ||
       !validateFloatLength("reduction input", input, elementCount, error)) {
     return false;
@@ -564,6 +725,91 @@ bool ReductionScanPrimitives::exclusiveScanInt(
     return setError(error, "validation", "scan length exceeds uint32");
   }
   return scanIntRecursive(input, inputElementCount, output, error);
+}
+
+bool ReductionScanPrimitives::stableCompact(
+    runtime::HostVisibleBuffer &input, const std::size_t inputElementCount,
+    runtime::HostVisibleBuffer &flags, const std::size_t flagElementCount,
+    runtime::HostVisibleBuffer &output, const std::size_t outputElementCapacity,
+    std::size_t &selectedCount, const bool inputIsFloat, std::string &error) {
+  selectedCount = 0u;
+  if (!isReady(error)) {
+    return false;
+  }
+  if (inputElementCount != flagElementCount) {
+    return setError(error, "validation",
+                    "compaction input and flag lengths must match");
+  }
+  if (inputElementCount > std::numeric_limits<std::uint32_t>::max()) {
+    return setError(error, "validation", "compaction length exceeds uint32");
+  }
+
+  const bool validInput = inputIsFloat
+                              ? validateFloatLength("compaction input", input,
+                                                    inputElementCount, error)
+                              : validateIntLength("compaction input", input,
+                                                  inputElementCount, error);
+  const bool validOutput =
+      inputIsFloat ? validateFloatLength("compaction output", output,
+                                         outputElementCapacity, error)
+                   : validateIntLength("compaction output", output,
+                                       outputElementCapacity, error);
+  if (!validInput || !validOutput ||
+      !validateIntLength("compaction flags", flags, flagElementCount, error) ||
+      !validateAlias("compaction", input, output, false, error)) {
+    return false;
+  }
+  if (flags.handle() == input.handle() || flags.handle() == output.handle()) {
+    return setError(error, "validation",
+                    "compaction flags must not alias input or output");
+  }
+  if (inputElementCount == 0u) {
+    return true;
+  }
+
+  runtime::HostVisibleBuffer normalizedFlags{};
+  runtime::HostVisibleBuffer offsets{};
+  runtime::HostVisibleBuffer count{};
+  if (!createIntBuffer(inputElementCount, normalizedFlags, error) ||
+      !createIntBuffer(inputElementCount, offsets, error) ||
+      !createIntBuffer(1u, count, error) ||
+      !dispatchNormalizeFlags(flags, normalizedFlags, inputElementCount,
+                              error) ||
+      !scanIntRecursive(normalizedFlags, inputElementCount, offsets, error) ||
+      !dispatchCompactionCount(normalizedFlags, offsets, count,
+                               inputElementCount, selectedCount, error)) {
+    return false;
+  }
+  if (selectedCount > outputElementCapacity) {
+    return setError(
+        error, "validation",
+        "compaction output capacity is smaller than selected count");
+  }
+  if (selectedCount == 0u) {
+    return true;
+  }
+  return dispatchCompactionScatter(input, output, normalizedFlags, offsets,
+                                   inputElementCount, inputIsFloat, error);
+}
+
+bool ReductionScanPrimitives::stableCompactFloat(
+    runtime::HostVisibleBuffer &input, const std::size_t inputElementCount,
+    runtime::HostVisibleBuffer &flags, const std::size_t flagElementCount,
+    runtime::HostVisibleBuffer &output, const std::size_t outputElementCapacity,
+    std::size_t &selectedCount, std::string &error) {
+  return stableCompact(input, inputElementCount, flags, flagElementCount,
+                       output, outputElementCapacity, selectedCount, true,
+                       error);
+}
+
+bool ReductionScanPrimitives::stableCompactUInt32(
+    runtime::HostVisibleBuffer &input, const std::size_t inputElementCount,
+    runtime::HostVisibleBuffer &flags, const std::size_t flagElementCount,
+    runtime::HostVisibleBuffer &output, const std::size_t outputElementCapacity,
+    std::size_t &selectedCount, std::string &error) {
+  return stableCompact(input, inputElementCount, flags, flagElementCount,
+                       output, outputElementCapacity, selectedCount, false,
+                       error);
 }
 
 const runtime::VulkanDevice &ReductionScanPrimitives::device() const {

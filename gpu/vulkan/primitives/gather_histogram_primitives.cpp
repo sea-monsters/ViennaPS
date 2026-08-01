@@ -141,7 +141,7 @@ void GatherHistogramPrimitives::reset() {
   dummyFloatBuffer_.reset();
   dummyUInt32Buffer_.reset();
   dummyBuffersReady_ = false;
-  fence_.reset();
+  fence_.destroy();
   commandContext_.reset();
   descriptorPool_.reset();
   scatterPipeline_.reset();

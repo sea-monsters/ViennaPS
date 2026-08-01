@@ -298,6 +298,7 @@ public:
   [[nodiscard]] bool wait(std::uint64_t timeoutNs, std::string &error) const;
   void reset() const;
   void reset(VulkanDevice &device);
+  void destroy();
 
   [[nodiscard]] VkFence get() const;
 

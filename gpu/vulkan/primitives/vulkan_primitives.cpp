@@ -124,7 +124,7 @@ bool ElementwisePrimitives::initialize(const std::string_view spirvPath,
 }
 
 void ElementwisePrimitives::reset() {
-  fence_.reset();
+  fence_.destroy();
   commandContext_.reset();
   descriptorPool_.reset();
   fillPipeline_.reset();

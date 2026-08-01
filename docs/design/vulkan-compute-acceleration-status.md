@@ -140,6 +140,19 @@ constant for the bias, then differentially validates the same 16-value
 the dedicated compute queue remains selected, and both runtime targets build
 under MSVC C++20 `/W4` without code warnings.
 
+## S2A-runtime-lifecycle: fence destruction correction
+
+- Status: accepted locally
+- Date: 2026-08-01
+- Scope: shared runtime resource-lifetime correction
+
+Fence rearming and object destruction now have separate operations. Dispatch
+continues to call `vkResetFences` after a completed wait, while destructors,
+move assignment, and owning primitive `reset()` paths call `vkDestroyFence`
+before the logical device is released. Runtime, elementwise, RNG, and
+gather/scatter/histogram smokes all rebuild under MSVC C++20 `/W4 /WX` and
+pass on the real device after this change.
+
 ## S2B-profile: deployment probe-to-profile persistence
 
 - Status: accepted locally

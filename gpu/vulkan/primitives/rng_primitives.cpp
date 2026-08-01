@@ -124,7 +124,7 @@ bool RNGPrimitives::initialize(const std::string_view spirvPath,
 }
 
 void RNGPrimitives::reset() {
-  fence_.reset();
+  fence_.destroy();
   commandContext_.reset();
   descriptorPool_.reset();
   u32Pipeline_.reset();

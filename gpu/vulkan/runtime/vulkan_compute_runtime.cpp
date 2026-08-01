@@ -1010,7 +1010,7 @@ bool CommandContext::allocatePrimary(VkCommandBuffer &commandBuffer,
 
 VkCommandPool CommandContext::pool() const { return pool_; }
 
-Fence::~Fence() { reset(); }
+Fence::~Fence() { destroy(); }
 
 Fence::Fence(Fence &&other) noexcept
     : device_(other.device_), fence_(other.fence_) {
@@ -1020,7 +1020,7 @@ Fence::Fence(Fence &&other) noexcept
 
 Fence &Fence::operator=(Fence &&other) noexcept {
   if (this != &other) {
-    reset();
+    destroy();
     device_ = other.device_;
     fence_ = other.fence_;
     other.device_ = VK_NULL_HANDLE;
@@ -1073,6 +1073,14 @@ void Fence::reset(VulkanDevice &device) {
   if (fence_ != VK_NULL_HANDLE && device.get() != VK_NULL_HANDLE) {
     vkResetFences(device.get(), 1, &fence_);
   }
+}
+
+void Fence::destroy() {
+  if (fence_ != VK_NULL_HANDLE && device_ != VK_NULL_HANDLE) {
+    vkDestroyFence(device_, fence_, nullptr);
+  }
+  fence_ = VK_NULL_HANDLE;
+  device_ = VK_NULL_HANDLE;
 }
 
 VkFence Fence::get() const { return fence_; }

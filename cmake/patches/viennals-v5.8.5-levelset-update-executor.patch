@@ -1,0 +1,139 @@
+--- a/include/viennals/lsAdvect.hpp
++++ b/include/viennals/lsAdvect.hpp
+@@ -4,0 +5,2 @@
++#include <cmath>
++#include <exception>
+@@ -6,0 +9,2 @@
++#include <string>
++#include <utility>
+@@ -58,0 +63,25 @@ template <class T, int D> class Advect {
++public:
++  using LevelSetUpdateRate = std::pair<std::pair<T, T>, T>;
++  using LevelSetUpdateRates = std::vector<std::vector<LevelSetUpdateRate>>;
++
++  enum class LevelSetUpdateStatus { FALLBACK, HANDLED, ERROR };
++
++  struct LevelSetUpdateContext {
++    const typename Domain<T, D>::DomainType &domain;
++    const LevelSetUpdateRates &rates;
++    double timeStep;
++    double integrationCutoff;
++    bool checkDissipation;
++    bool saveVelocities;
++  };
++
++  struct LevelSetUpdateOutput {
++    std::vector<std::vector<T>> values;
++    std::vector<std::vector<T>> velocities;
++    std::vector<std::vector<T>> dissipations;
++  };
++
++  using LevelSetUpdateExecutor = std::function<LevelSetUpdateStatus(
++      const LevelSetUpdateContext &, LevelSetUpdateOutput &, std::string &)>;
++
++private:
+@@ -83,0 +113 @@ template <class T, int D> class Advect {
++  LevelSetUpdateExecutor levelSetUpdateExecutor = nullptr;
+@@ -87 +117 @@ template <class T, int D> class Advect {
+-  std::vector<std::vector<std::pair<std::pair<T, T>, T>>> storedRates;
++  LevelSetUpdateRates storedRates;
+@@ -683,0 +714,85 @@ template <class T, int D> class Advect {
++  bool tryLevelSetUpdateExecutor(const double dt) {
++    if (!levelSetUpdateExecutor)
++      return false;
++
++    auto &topDomain = levelSets.back()->getDomain();
++    LevelSetUpdateOutput output;
++    std::string executorError;
++    LevelSetUpdateStatus status = LevelSetUpdateStatus::ERROR;
++    try {
++      const LevelSetUpdateContext context{
++          topDomain,         storedRates,      dt,
++          integrationCutoff, checkDissipation, saveAdvectionVelocities};
++      status = levelSetUpdateExecutor(context, output, executorError);
++    } catch (const std::exception &exception) {
++      executorError = exception.what();
++    } catch (...) {
++      executorError = "unknown exception";
++    }
++
++    if (status == LevelSetUpdateStatus::FALLBACK)
++      return false;
++
++    bool validOutput = status == LevelSetUpdateStatus::HANDLED &&
++                       output.values.size() == topDomain.getNumberOfSegments();
++    if (saveAdvectionVelocities) {
++      validOutput =
++          validOutput &&
++          output.velocities.size() == topDomain.getNumberOfSegments() &&
++          output.dissipations.size() == topDomain.getNumberOfSegments();
++    }
++
++    for (unsigned p = 0; validOutput && p < topDomain.getNumberOfSegments();
++         ++p) {
++      const auto pointCount = topDomain.getDomainSegment(p).getNumberOfPoints();
++      validOutput = output.values[p].size() == pointCount;
++      if (saveAdvectionVelocities) {
++        validOutput = validOutput &&
++                      output.velocities[p].size() == pointCount &&
++                      output.dissipations[p].size() == pointCount;
++      }
++      for (const auto value : output.values[p])
++        validOutput = validOutput && std::isfinite(value);
++      if (saveAdvectionVelocities) {
++        for (const auto velocity : output.velocities[p])
++          validOutput = validOutput && std::isfinite(velocity);
++        for (const auto dissipation : output.dissipations[p])
++          validOutput = validOutput && std::isfinite(dissipation);
++      }
++    }
++
++    if (!validOutput) {
++      if (executorError.empty())
++        executorError = "invalid output shape or non-finite value";
++      VIENNACORE_LOG_WARNING(
++          "Level Set update executor failed; using CPU fallback: " +
++          executorError);
++      return false;
++    }
++
++    typename PointData<T>::ScalarDataType velocities;
++    typename PointData<T>::ScalarDataType dissipations;
++    if (saveAdvectionVelocities) {
++      for (unsigned p = 0; p < output.velocities.size(); ++p) {
++        velocities.insert(velocities.end(),
++                          std::make_move_iterator(output.velocities[p].begin()),
++                          std::make_move_iterator(output.velocities[p].end()));
++        dissipations.insert(
++            dissipations.end(),
++            std::make_move_iterator(output.dissipations[p].begin()),
++            std::make_move_iterator(output.dissipations[p].end()));
++      }
++    }
++
++    for (unsigned p = 0; p < topDomain.getNumberOfSegments(); ++p) {
++      topDomain.getDomainSegment(p).definedValues = std::move(output.values[p]);
++    }
++    if (saveAdvectionVelocities) {
++      auto &pointData = levelSets.back()->getPointData();
++      pointData.insertReplaceScalarData(std::move(velocities), velocityLabel);
++      pointData.insertReplaceScalarData(std::move(dissipations),
++                                        dissipationLabel);
++    }
++    return true;
++  }
++
+@@ -701,0 +817,5 @@ template <class T, int D> class Advect {
++    if (tryLevelSetUpdateExecutor(dt)) {
++      storedRates.clear();
++      return;
++    }
++
+@@ -970,0 +1091,7 @@ public:
++  /// Set an optional executor for the value-update phase between rate
++  /// calculation and sparse-domain rebuild. Returning FALLBACK or ERROR leaves
++  /// the domain values untouched and executes the built-in CPU implementation.
++  void setLevelSetUpdateExecutor(LevelSetUpdateExecutor executor) {
++    levelSetUpdateExecutor = std::move(executor);
++  }
++

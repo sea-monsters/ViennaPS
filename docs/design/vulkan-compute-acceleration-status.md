@@ -576,13 +576,51 @@ threads start. The context is intentionally not thread-safe during preparation.
 | Strict/runtime validation | MSVC C++20 `/W4 /WX`, CTest, and two validation-layer runs pass |
 | Local path policy | profile location remains caller/environment supplied; no machine path is compiled in |
 
+## P3E-viennals-stage-executor: transactional integration seam
+
+- Status: accepted locally as the upstream-compatible ViennaLS value-update
+  seam
+- Date: 2026-08-02
+- Scope: insert a caller-supplied executor after ViennaLS reduces the top level
+  set to one layer and before the existing sparse rebuild
+
+The pinned ViennaLS v5.8.5 dependency receives a deterministic tracked patch
+when the normal remote dependency path is used. A versioned CPM cache key keeps
+that patched checkout separate from unmodified ViennaLS caches. The patch adds
+an optional
+`LevelSetUpdateExecutor` with `HANDLED`, `FALLBACK`, and `ERROR` results. Its
+context exposes the reduced sparse domain and stored rates as const references,
+plus time step, cutoff, dissipation, and velocity-output flags. The executor
+returns separately owned value/velocity/dissipation arrays; ViennaLS validates
+all segment sizes and finite values before committing any domain value.
+
+No executor preserves the original CPU implementation. `FALLBACK`, thrown
+exceptions, explicit `ERROR`, malformed output, and non-finite output also run
+the unchanged CPU phase. A valid `HANDLED` result skips only the value-update
+loop; ViennaLS still clears rates, rebuilds the sparse level set, combines
+Runge-Kutta stages, and adjusts lower layers in its original order.
+
+Local ViennaLS overrides deliberately skip automatic patching, because they are
+development sources and may already contain the upstream API. Such a source
+must implement this executor contract; its location remains supplied through
+`VIENNAPS_VIENNALS_SOURCE_DIR` and is never tracked.
+
+| Gate | Result |
+|---|---|
+| Patch drift | `patch --dry-run -p1` succeeds exactly against ViennaLS v5.8.5 |
+| Public API compile | MSVC C++20 `/W4 /WX` compile smoke passes |
+| Default CPU | frozen FP32/FP64 92-point fingerprints and times remain exact |
+| Fail-closed behavior | `FALLBACK`, injected `ERROR`, and invalid `HANDLED` output match CPU exactly |
+| Successful handling | valid echo output is accepted and bypasses the CPU value update |
+| Temporal ordering | executor calls are FE=1, RK2=2, RK3=3; RK fallback matches CPU |
+| Path policy | tracked patch, CMake, and tests contain no resolved local dependency path |
+
 ## Next slice
 
-The next exit is a dedicated ViennaLS stage-executor seam between
-`computeRates()` and `updateLevelSet()/rebuildLS()`. The existing velocity
-callback fires after a Forward Euler update and cannot replace this phase; the
-new hook must expose a bounded rate view, return handled/fallback/error, and
-leave the unchanged CPU path as the fail-closed default. The accepted deployment
-context supplies its selected backend and shared session to that hook. HRLE
-active-run classification and sparse rebuild follow after the integration seam
-is proven against the frozen 92-point oracle.
+The next exit is the ViennaPS adapter that flattens each const ViennaLS segment
+and sentinel-terminated rate stream into the existing Vulkan kernel CSR input,
+executes through the deployment context's shared session, then returns validated
+segment outputs to the P3E executor. FP32 automatic selection must match the
+frozen 92-point CPU topology oracle; FP64 and unsupported/manual-error cases
+remain fail-closed CPU. HRLE active-run classification and sparse rebuild follow
+after this end-to-end adapter is accepted.

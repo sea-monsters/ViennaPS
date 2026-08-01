@@ -133,7 +133,10 @@ template <class NumericType> struct LevelSetOracle {
   std::size_t step = 0;
   double advectedTime = 0.0;
   std::uint64_t fingerprint = 0;
+  unsigned executorCalls = 0;
 };
+
+enum class ExecutorMode { NONE, FALLBACK, ERROR, INVALID_OUTPUT, HANDLED_ECHO };
 
 template <class NumericType>
 [[nodiscard]] std::uint64_t
@@ -217,18 +220,54 @@ runScenario(const NumericType radius = static_cast<NumericType>(4)) {
 template <class NumericType>
 [[nodiscard]] LevelSetOracle<NumericType>
 runOneStep(const NumericType processDuration = static_cast<NumericType>(1),
-           const NumericType advectionSpeed = static_cast<NumericType>(0.5)) {
+           const NumericType advectionSpeed = static_cast<NumericType>(0.5),
+           const ExecutorMode executorMode = ExecutorMode::NONE,
+           const ls::TemporalSchemeEnum temporalScheme =
+               ls::TemporalSchemeEnum::FORWARD_EULER) {
   auto domain = runScenario<NumericType>();
   auto velocity =
       ls::SmartPointer<ConstantVelocityField<NumericType>>::New(advectionSpeed);
+  using AdvectType = ls::Advect<NumericType, 2>;
+  using ExecutorStatus = typename AdvectType::LevelSetUpdateStatus;
   ls::Advect<NumericType, 2> advect;
   advect.insertNextLevelSet(domain);
   advect.setVelocityField(velocity);
   advect.setSpatialScheme(ls::SpatialSchemeEnum::ENGQUIST_OSHER_1ST_ORDER);
-  advect.setTemporalScheme(ls::TemporalSchemeEnum::FORWARD_EULER);
+  advect.setTemporalScheme(temporalScheme);
   advect.setAdvectionTime(processDuration);
   advect.setTimeStepRatio(static_cast<NumericType>(0.49));
   advect.setSingleStep(true);
+
+  unsigned executorCalls = 0;
+  if (executorMode != ExecutorMode::NONE) {
+    advect.setLevelSetUpdateExecutor(
+        [&executorCalls, executorMode](
+            const typename AdvectType::LevelSetUpdateContext &context,
+            typename AdvectType::LevelSetUpdateOutput &output,
+            std::string &error) {
+          ++executorCalls;
+          VC_TEST_ASSERT(context.timeStep > 0.0);
+          VC_TEST_ASSERT(context.rates.size() ==
+                         context.domain.getNumberOfSegments());
+          if (executorMode == ExecutorMode::ERROR) {
+            error = "injected executor failure";
+            return ExecutorStatus::ERROR;
+          }
+          if (executorMode == ExecutorMode::INVALID_OUTPUT) {
+            return ExecutorStatus::HANDLED;
+          }
+          if (executorMode == ExecutorMode::HANDLED_ECHO) {
+            output.values.resize(context.domain.getNumberOfSegments());
+            for (unsigned p = 0; p < context.domain.getNumberOfSegments();
+                 ++p) {
+              output.values[p] =
+                  context.domain.getDomainSegment(p).definedValues;
+            }
+            return ExecutorStatus::HANDLED;
+          }
+          return ExecutorStatus::FALLBACK;
+        });
+  }
 
   const auto before = summarize(domain);
   const auto beforeFingerprint = fingerprint(before);
@@ -249,14 +288,34 @@ runOneStep(const NumericType processDuration = static_cast<NumericType>(1),
           after.surfaceTriangleCount,
           1ull,
           advectedTime,
-          afterFingerprint ^ beforeFingerprint};
+          afterFingerprint ^ beforeFingerprint,
+          executorCalls};
 };
+
+template <class NumericType>
+void assertSameOracle(const LevelSetOracle<NumericType> &left,
+                      const LevelSetOracle<NumericType> &right) {
+  VC_TEST_ASSERT(left.activePointCount == right.activePointCount);
+  VC_TEST_ASSERT(left.surfaceNodeCount == right.surfaceNodeCount);
+  VC_TEST_ASSERT(left.surfaceLineCount == right.surfaceLineCount);
+  VC_TEST_ASSERT(left.surfaceTriangleCount == right.surfaceTriangleCount);
+  VC_TEST_ASSERT(left.advectedTime == right.advectedTime);
+  VC_TEST_ASSERT(left.fingerprint == right.fingerprint);
+}
 
 template <class NumericType>
 void runBaseline(const char *label, const std::uint64_t expected,
                  const double expectedAdvectedTime) {
   auto first = runOneStep<NumericType>();
   auto second = runOneStep<NumericType>();
+  auto fallback = runOneStep<NumericType>(NumericType(1), NumericType(0.5),
+                                          ExecutorMode::FALLBACK);
+  auto error = runOneStep<NumericType>(NumericType(1), NumericType(0.5),
+                                       ExecutorMode::ERROR);
+  auto invalidOutput = runOneStep<NumericType>(NumericType(1), NumericType(0.5),
+                                               ExecutorMode::INVALID_OUTPUT);
+  auto handledEcho = runOneStep<NumericType>(NumericType(1), NumericType(0.5),
+                                             ExecutorMode::HANDLED_ECHO);
 
   std::cout << "CPU Level Set step oracle (" << label
             << ") advected time = " << std::setprecision(17)
@@ -275,11 +334,33 @@ void runBaseline(const char *label, const std::uint64_t expected,
   VC_TEST_ASSERT(first.activePointCount == second.activePointCount);
   VC_TEST_ASSERT(first.fingerprint == second.fingerprint);
   VC_TEST_ASSERT(first.advectedTime == second.advectedTime);
+  assertSameOracle(first, fallback);
+  assertSameOracle(first, error);
+  assertSameOracle(first, invalidOutput);
+  VC_TEST_ASSERT(fallback.executorCalls == 1);
+  VC_TEST_ASSERT(error.executorCalls == 1);
+  VC_TEST_ASSERT(invalidOutput.executorCalls == 1);
+  VC_TEST_ASSERT(handledEcho.executorCalls == 1);
+  VC_TEST_ASSERT(handledEcho.fingerprint != first.fingerprint);
   VC_TEST_ASSERT(first.activePointCount == 92);
   VC_TEST_ASSERT(first.surfaceNodeCount == 68);
   VC_TEST_ASSERT(first.surfaceLineCount == 68);
   VC_TEST_ASSERT(first.advectedTime == expectedAdvectedTime);
   VC_TEST_ASSERT(first.fingerprint == expected);
+}
+
+template <class NumericType> void runTemporalFallbackParity() {
+  const auto verify = [](const ls::TemporalSchemeEnum scheme,
+                         const unsigned expectedCalls) {
+    const auto cpu = runOneStep<NumericType>(NumericType(1), NumericType(0.5),
+                                             ExecutorMode::NONE, scheme);
+    const auto fallback = runOneStep<NumericType>(
+        NumericType(1), NumericType(0.5), ExecutorMode::FALLBACK, scheme);
+    assertSameOracle(cpu, fallback);
+    VC_TEST_ASSERT(fallback.executorCalls == expectedCalls);
+  };
+  verify(ls::TemporalSchemeEnum::RUNGE_KUTTA_2ND_ORDER, 2);
+  verify(ls::TemporalSchemeEnum::RUNGE_KUTTA_3RD_ORDER, 3);
 }
 
 } // namespace viennacore
@@ -294,6 +375,8 @@ int main() try {
                                         0.40459004530160253);
   viennacore::runBaseline<NumericTypeD>("FP64", 0x6af00ac25d8971d0ULL,
                                         0.40459001562216945);
+  viennacore::runTemporalFallbackParity<NumericTypeF>();
+  viennacore::runTemporalFallbackParity<NumericTypeD>();
   return 0;
 } catch (const std::exception &error) {
   std::cerr << error.what() << '\n';

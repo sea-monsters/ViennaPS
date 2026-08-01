@@ -213,10 +213,20 @@ if(VIENNAPS_VIENNALS_SOURCE_DIR AND NOT CPM_ViennaLS_SOURCE)
       "[ViennaPS] Using ViennaLS source from VIENNAPS_VIENNALS_SOURCE_DIR.")
 endif()
 
+set(_VIENNAPS_VIENNALS_PATCH_ARGS "")
+if(NOT CPM_ViennaLS_SOURCE)
+  list(APPEND _VIENNAPS_VIENNALS_PATCH_ARGS
+       PATCHES
+       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/patches/viennals-v5.8.5-levelset-update-executor.patch"
+       CUSTOM_CACHE_KEY
+       "v5.8.5-levelset-update-executor-v1")
+endif()
+
 CPMAddPackage(
   NAME ViennaLS
   GIT_REPOSITORY "https://github.com/ViennaTools/ViennaLS"
   GIT_TAG v5.8.5
+  ${_VIENNAPS_VIENNALS_PATCH_ARGS}
   EXCLUDE_FROM_ALL ${VIENNAPS_BUILD_PYTHON}
   OPTIONS "VIENNALS_PRECOMPILE_HEADERS ${VIENNAPS_PRECOMPILE_HEADERS}"
           "VIENNALS_USE_VTK ${VIENNAPS_USE_VTK}"

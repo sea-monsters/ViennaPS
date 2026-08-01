@@ -1,6 +1,7 @@
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   cmake_minimum_required(VERSION 3.20 FATAL_ERROR)
   project(viennaps_vulkan_probe LANGUAGES CXX)
+  include(CTest)
 endif()
 
 set(VULKAN_PROBE_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/VulkanProbe.cpp")

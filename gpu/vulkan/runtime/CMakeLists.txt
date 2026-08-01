@@ -64,6 +64,7 @@ endif()
 
 add_library(viennaps_vulkan_compute_runtime
   vulkan_compute_runtime.cpp
+  compute_session.cpp
 )
 target_include_directories(viennaps_vulkan_compute_runtime
   PUBLIC
@@ -72,10 +73,10 @@ target_include_directories(viennaps_vulkan_compute_runtime
 target_link_libraries(viennaps_vulkan_compute_runtime PRIVATE Vulkan::Vulkan)
 target_compile_features(viennaps_vulkan_compute_runtime PRIVATE cxx_std_20)
 if(MSVC)
-  target_compile_options(viennaps_vulkan_compute_runtime PRIVATE /W4)
+  target_compile_options(viennaps_vulkan_compute_runtime PRIVATE /W4 /WX)
 else()
   target_compile_options(viennaps_vulkan_compute_runtime
-                         PRIVATE -Wall -Wextra -Wpedantic)
+                         PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
 if(NOT VIENNAPS_BUILD_VULKAN_SMOKE)
@@ -157,8 +158,34 @@ target_link_libraries(viennaps-runtime-compute-smoke
     Vulkan::Vulkan)
 target_compile_features(viennaps-runtime-compute-smoke PRIVATE cxx_std_20)
 if(MSVC)
-  target_compile_options(viennaps-runtime-compute-smoke PRIVATE /W4)
+  target_compile_options(viennaps-runtime-compute-smoke PRIVATE /W4 /WX)
 else()
   target_compile_options(viennaps-runtime-compute-smoke
-                         PRIVATE -Wall -Wextra -Wpedantic)
+                         PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+add_executable(viennaps-runtime-compute-session-smoke
+  compute_session_smoke.cpp
+)
+add_dependencies(viennaps-runtime-compute-session-smoke
+  viennaps-runtime-compute-smoke-spv)
+target_compile_definitions(viennaps-runtime-compute-session-smoke PRIVATE
+  "VIENNAPS_RUNTIME_SMOKE_SPV_PATH=\"${_VIENNAPS_RUNTIME_SMOKE_SPV_PATH}\"")
+target_link_libraries(viennaps-runtime-compute-session-smoke
+  PRIVATE
+    viennaps_vulkan_compute_runtime
+    Vulkan::Vulkan)
+target_compile_features(viennaps-runtime-compute-session-smoke PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps-runtime-compute-session-smoke PRIVATE /W4 /WX)
+else()
+  target_compile_options(viennaps-runtime-compute-session-smoke
+                         PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+if(BUILD_TESTING)
+  add_test(NAME viennaps-runtime-compute-smoke
+           COMMAND viennaps-runtime-compute-smoke)
+  add_test(NAME viennaps-runtime-compute-session-smoke
+           COMMAND viennaps-runtime-compute-session-smoke)
 endif()

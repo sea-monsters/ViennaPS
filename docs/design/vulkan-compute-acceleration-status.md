@@ -446,6 +446,35 @@ with a shared-device recursive GPU scan. The current implementation is suitable
 as a deterministic fallback and as the CPU-differential reference for that
 later optimization.
 
+## P3B-runtime-session: reusable compute session and smoke validation
+
+- Status: accepted locally
+- Date: 2026-08-02
+- Scope: move Vulkan lifetime ownership from one-time wrappers to a reusable
+  session object suitable for higher-level primitive orchestration
+
+- `ComputeSession` now owns `VulkanInstance`, `VulkanDevice`, and
+  `CommandContext` under one move-only RAII object.
+- The wrapper exposes explicit manual selection by physical device index, device
+  name, and UUID; when no manual preference is set it keeps the existing
+  dedicated-queue-first auto selector.
+- `initialize()` is idempotent for the same device options. Conflicting manual
+  selectors fail closed, and changing an initialized session's selection requires
+  an explicit `reset()` before reconfiguration. `reset()` tears down session
+  state in dependency order.
+- The runtime library now includes `compute_session.cpp`, and an additional
+  `viennaps-runtime-compute-session-smoke` target validates that the wrapper can
+  execute the same 16-element `y = 2x + 1` smoke successfully.
+
+| Gate | Result |
+|---|---|
+| Session ownership | instance, device, queue/command pool, reset, move construction, and move assignment pass |
+| Manual selection | current device reselected by physical index, exact name, and UUID; conflicts and invalid selectors rejected |
+| Session smoke | 16 values exact, 0 ULP, exit 0 in two validation-layer runs |
+| Runtime smoke | existing reuse smoke remains unchanged, exit 0 |
+| CTest registration | both runtime compute smokes are registered when `BUILD_TESTING` is enabled |
+| Validation build | runtime library and both compute-smoke executables built under MSVC C++20 with explicit `/W4 /WX` validation flags |
+
 ## P3-oracle-1: frozen ViennaLS single-step CPU oracle
 
 - Status: accepted locally as a CPU reference, not a Vulkan implementation

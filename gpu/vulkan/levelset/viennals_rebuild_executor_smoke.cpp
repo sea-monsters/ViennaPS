@@ -23,20 +23,26 @@ namespace runtime = viennaps::vulkan::runtime;
 namespace primitives = viennaps::vulkan::primitives;
 namespace vkLevelSet = viennaps::vulkan::levelset;
 
-[[nodiscard]] ls::SmartPointer<ls::Domain<float, 2>> makeDomain() {
+template <int D>
+[[nodiscard]] ls::SmartPointer<ls::Domain<float, D>> makeDomain() {
   constexpr viennahrle::CoordType extent = 8.0;
-  constexpr viennahrle::CoordType gridDelta = 0.5;
-  viennahrle::CoordType bounds[4] = {-extent, extent, -extent, extent};
-  ls::Domain<float, 2>::BoundaryType boundaryConditions[2] = {
-      ls::BoundaryConditionEnum::REFLECTIVE_BOUNDARY,
-      ls::BoundaryConditionEnum::REFLECTIVE_BOUNDARY};
+  constexpr viennahrle::CoordType gridDelta = D == 2 ? 0.5 : 1.0;
+  viennahrle::CoordType bounds[2 * D]{};
+  typename ls::Domain<float, D>::BoundaryType boundaryConditions[D]{};
+  for (int dimension = 0; dimension < D; ++dimension) {
+    bounds[2 * dimension] = -extent;
+    bounds[2 * dimension + 1] = extent;
+    boundaryConditions[dimension] =
+        ls::BoundaryConditionEnum::REFLECTIVE_BOUNDARY;
+  }
   auto domain =
-      ls::Domain<float, 2>::New(bounds, boundaryConditions, gridDelta);
-  float origin[2] = {0.0F, 0.0F};
-  ls::MakeGeometry<float, 2>(
-      domain, ls::SmartPointer<ls::Sphere<float, 2>>::New(origin, 3.0F))
+      ls::Domain<float, D>::New(bounds, boundaryConditions, gridDelta);
+  float origin[D]{};
+  ls::MakeGeometry<float, D>(
+      domain,
+      ls::SmartPointer<ls::Sphere<float, D>>::New(origin, D == 2 ? 3.0F : 2.0F))
       .apply();
-  ls::Expand<float, 2>(domain, 2).apply();
+  ls::Expand<float, D>(domain, D == 2 ? 2 : 1).apply();
   return domain;
 }
 
@@ -49,7 +55,7 @@ public:
   }
 };
 
-void seedPointData(ls::Domain<float, 2> &domain) {
+template <int D> void seedPointData(ls::Domain<float, D> &domain) {
   const auto count = domain.getNumberOfPoints();
   std::vector<float> scalars(count);
   std::vector<viennacore::Vec3D<float>> vectors(count);
@@ -62,8 +68,9 @@ void seedPointData(ls::Domain<float, 2> &domain) {
   domain.getPointData().insertNextVectorData(std::move(vectors), "vector");
 }
 
-void assertDomainsEqual(const ls::Domain<float, 2> &left,
-                        const ls::Domain<float, 2> &right) {
+template <int D>
+void assertDomainsEqual(const ls::Domain<float, D> &left,
+                        const ls::Domain<float, D> &right) {
   const auto &a = left.getDomain();
   const auto &b = right.getDomain();
   VC_TEST_ASSERT(a.getNumberOfSegments() == b.getNumberOfSegments());
@@ -79,7 +86,7 @@ void assertDomainsEqual(const ls::Domain<float, 2> &left,
     for (std::size_t i = 0U; i < as.undefinedValues.size(); ++i)
       VC_TEST_ASSERT(std::bit_cast<std::uint32_t>(as.undefinedValues[i]) ==
                      std::bit_cast<std::uint32_t>(bs.undefinedValues[i]));
-    for (unsigned dimension = 0U; dimension < 2U; ++dimension) {
+    for (unsigned dimension = 0U; dimension < D; ++dimension) {
       VC_TEST_ASSERT(as.runTypes[dimension] == bs.runTypes[dimension]);
       VC_TEST_ASSERT(as.startIndices[dimension] == bs.startIndices[dimension]);
       VC_TEST_ASSERT(as.runBreaks[dimension] == bs.runBreaks[dimension]);
@@ -87,8 +94,9 @@ void assertDomainsEqual(const ls::Domain<float, 2> &left,
   }
 }
 
-void assertPointDataEqual(const ls::Domain<float, 2> &left,
-                          const ls::Domain<float, 2> &right) {
+template <int D>
+void assertPointDataEqual(const ls::Domain<float, D> &left,
+                          const ls::Domain<float, D> &right) {
   const auto &a = left.getPointData();
   const auto &b = right.getPointData();
   VC_TEST_ASSERT(a.getScalarDataSize() == b.getScalarDataSize());
@@ -105,16 +113,67 @@ void assertPointDataEqual(const ls::Domain<float, 2> &left,
   }
 }
 
+template <int D>
+unsigned runDifferential(
+    const std::shared_ptr<vkLevelSet::ViennaLsRebuildExecutorStateFp32>
+        &state) {
+  auto cpu = makeDomain<D>();
+  auto vulkan = makeDomain<D>();
+  seedPointData(*cpu);
+  seedPointData(*vulkan);
+
+  ls::Advect<float, D> cpuAdvect;
+  cpuAdvect.insertNextLevelSet(cpu);
+  cpuAdvect.setVelocityField(ls::SmartPointer<ConstantVelocity>::New());
+  cpuAdvect.setSpatialScheme(ls::SpatialSchemeEnum::ENGQUIST_OSHER_1ST_ORDER);
+  cpuAdvect.setTemporalScheme(ls::TemporalSchemeEnum::FORWARD_EULER);
+  cpuAdvect.setAdvectionTime(0.05);
+  cpuAdvect.setTimeStepRatio(0.4999);
+  cpuAdvect.setSingleStep(true);
+  cpuAdvect.setUpdatePointData(true);
+
+  ls::Advect<float, D> vulkanAdvect;
+  vulkanAdvect.insertNextLevelSet(vulkan);
+  vulkanAdvect.setVelocityField(ls::SmartPointer<ConstantVelocity>::New());
+  vulkanAdvect.setSpatialScheme(
+      ls::SpatialSchemeEnum::ENGQUIST_OSHER_1ST_ORDER);
+  vulkanAdvect.setTemporalScheme(ls::TemporalSchemeEnum::FORWARD_EULER);
+  vulkanAdvect.setAdvectionTime(0.05);
+  vulkanAdvect.setTimeStepRatio(0.4999);
+  vulkanAdvect.setSingleStep(true);
+  vulkanAdvect.setUpdatePointData(true);
+
+  unsigned rebuildCalls = 0U;
+  bool callbackHandled = false;
+  auto executor = vkLevelSet::makeViennaLsRebuildExecutorFp32<D>(state);
+  vulkanAdvect.setLevelSetRebuildExecutor(
+      [executor = std::move(executor), &rebuildCalls, &callbackHandled](
+          const typename ls::Advect<float, D>::LevelSetRebuildContext &context,
+          typename ls::Advect<float, D>::LevelSetRebuildOutput &output,
+          std::string &error) {
+        ++rebuildCalls;
+        const auto status = executor(context, output, error);
+        callbackHandled =
+            status == ls::Advect<float, D>::LevelSetRebuildStatus::HANDLED;
+        return status;
+      });
+
+  cpuAdvect.apply();
+  vulkanAdvect.apply();
+  VC_TEST_ASSERT(!cpuAdvect.hasLevelSetRebuildError());
+  VC_TEST_ASSERT(!vulkanAdvect.hasLevelSetRebuildError());
+  VC_TEST_ASSERT(rebuildCalls > 0U);
+  VC_TEST_ASSERT(callbackHandled);
+  assertDomainsEqual(*cpu, *vulkan);
+  assertPointDataEqual(*cpu, *vulkan);
+  return rebuildCalls;
+}
+
 } // namespace
 
 // Exercises the complete segmented callback with a small CPU differential
 // oracle.
 int main() try {
-  auto cpu = makeDomain();
-  auto vulkan = makeDomain();
-  seedPointData(*cpu);
-  seedPointData(*vulkan);
-
   std::string error;
   auto session = std::make_shared<runtime::ComputeSession>();
   VC_TEST_ASSERT(session->initialize(error));
@@ -135,37 +194,12 @@ int main() try {
   state->actionFlagsProgram = loadProgram(VIENNAPS_HRLE_ACTION_FLAGS_SPV_PATH);
   state->compactProgram = loadProgram(VIENNAPS_HRLE_COMPACT_SPV_PATH);
 
-  ls::Advect<float, 2> cpuAdvect;
-  cpuAdvect.insertNextLevelSet(cpu);
-  cpuAdvect.setVelocityField(ls::SmartPointer<ConstantVelocity>::New());
-  cpuAdvect.setSpatialScheme(ls::SpatialSchemeEnum::ENGQUIST_OSHER_1ST_ORDER);
-  cpuAdvect.setTemporalScheme(ls::TemporalSchemeEnum::FORWARD_EULER);
-  cpuAdvect.setAdvectionTime(0.05);
-  cpuAdvect.setTimeStepRatio(0.4999);
-  cpuAdvect.setSingleStep(true);
-  cpuAdvect.setUpdatePointData(true);
+  const auto twoDimensionalRebuildCalls = runDifferential<2>(state);
+  const auto threeDimensionalRebuildCalls = runDifferential<3>(state);
+  VC_TEST_ASSERT(twoDimensionalRebuildCalls > 0U);
+  VC_TEST_ASSERT(threeDimensionalRebuildCalls > 0U);
 
-  ls::Advect<float, 2> vulkanAdvect;
-  vulkanAdvect.insertNextLevelSet(vulkan);
-  vulkanAdvect.setVelocityField(ls::SmartPointer<ConstantVelocity>::New());
-  vulkanAdvect.setSpatialScheme(
-      ls::SpatialSchemeEnum::ENGQUIST_OSHER_1ST_ORDER);
-  vulkanAdvect.setTemporalScheme(ls::TemporalSchemeEnum::FORWARD_EULER);
-  vulkanAdvect.setAdvectionTime(0.05);
-  vulkanAdvect.setTimeStepRatio(0.4999);
-  vulkanAdvect.setSingleStep(true);
-  vulkanAdvect.setUpdatePointData(true);
-  vulkanAdvect.setLevelSetRebuildExecutor(
-      vkLevelSet::makeViennaLsRebuildExecutorFp32<2>(state));
-
-  cpuAdvect.apply();
-  vulkanAdvect.apply();
-  VC_TEST_ASSERT(!cpuAdvect.hasLevelSetRebuildError());
-  VC_TEST_ASSERT(!vulkanAdvect.hasLevelSetRebuildError());
-  assertDomainsEqual(*cpu, *vulkan);
-  assertPointDataEqual(*cpu, *vulkan);
-
-  auto sentinel = ls::SmartPointer<ls::Domain<float, 2>>::New(makeDomain());
+  auto sentinel = ls::SmartPointer<ls::Domain<float, 2>>::New(makeDomain<2>());
   ls::Advect<float, 2>::LevelSetRebuildOutput output;
   output.domain = sentinel;
   output.sourceIds = {{7U}};

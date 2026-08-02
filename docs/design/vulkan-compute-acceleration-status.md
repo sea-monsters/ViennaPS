@@ -1440,6 +1440,42 @@ policy.
 | Residual boundary | deployment probe does not yet execute the full primitive/rebuild suite; Vulkan 3D and RK2/RK3 remain untested |
 | Path policy | all SDK and generated SPIR-V paths enter through environment/CMake configuration and are not persisted in tracked source |
 
+### P4C6: real 3D ViennaLS Vulkan rebuild differential
+
+- Status: accepted locally
+- Date: 2026-08-02
+- Scope: prove that the segmented rebuild executor dispatches the real D=3
+  ViennaLS callback and remains bit-exact with the CPU Forward-Euler oracle
+
+The rebuild executor smoke now uses dimension-templated HRLE fixtures and runs
+both the existing 2D sphere and a small 3D sphere through the actual
+`Advect<float, 3>` rebuild callback. The Vulkan callback is wrapped only to
+count invocations and require an explicit `HANDLED` result; a CPU fallback can
+therefore no longer make the differential test pass accidentally. The 3D
+fixture uses a one-cell grid and a wider boundary margin so sparse-star
+candidate indices remain inside the HRLE grid's half-open domain semantics.
+
+For both dimensions the smoke compares segment count and boundaries, defined
+and undefined FP32 bit patterns, every run type/break/start-index array, and
+scalar/vector PointData after callback-time global source-ID translation. The
+existing invalid-program test still checks that an `ERROR` preserves its
+caller-owned domain and source-ID sentinel. OpenMP is fixed to two threads for
+stable segmented execution.
+
+| Gate | Result |
+|---|---|
+| D=3 callback | `Advect<float, 3>` invokes the segmented Vulkan executor and returns `HANDLED` |
+| CPU differential | 3D sphere Forward-Euler CPU and Vulkan rebuild outputs match bit-for-bit |
+| Canonical structure | segmentation, defined/undefined values, run types, run breaks, and start indices match |
+| PointData | scalar/vector arrays and global source-ID translation match exactly |
+| Transaction fault | invalid classification SPIR-V preserves the preloaded 2D sentinel output |
+| Runtime validation | MSVC build plus direct Vulkan smoke with `OMP_NUM_THREADS=2` exits 0 |
+| Path policy | no SDK, dependency, source, shader, or Windows absolute path is tracked |
+
+The remaining Level Set validation gaps are RK2/RK3 runtime differentials and
+the deployment probe's broader 3D matrix; this slice does not change controller
+selection policy or the CPU fallback contract.
+
 ## P4D-deployment-probe audit: persisted automatic selection gap
 
 - Status: audited; implementation pending

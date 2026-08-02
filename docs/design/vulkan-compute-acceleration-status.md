@@ -1306,6 +1306,49 @@ and allocation alignment.
 | Working-set policy | existing primitive-suite and safe-working-set deployment gates remain sufficient; no schema or fixed local path is added |
 | Residual boundary | feed the validated stream to CPU sparse reconstruction, then wire the full transaction into the ViennaLS executor and deployment probe |
 
+## P4D-deployment-probe audit: persisted automatic selection gap
+
+- Status: audited; implementation pending
+- Date: 2026-08-02
+- Scope: verify that deployment-time hardware evaluation can persist enough
+  evidence for later Auto selection without recording local SDK or source paths
+
+The current probe enumerates physical-device identity, queues, extensions,
+features, limits, memory heaps, and optional memory-budget data. It does not
+create a `ComputeSession` or dispatch any primitive or HRLE shader. Its raw
+diagnostic therefore reports every validation suite as `not-run`, and the
+profile adapter currently writes both `vulkanPrimitiveSuitePass` and
+`vulkanFp64SuitePass` as false. A profile generated solely by this probe cannot
+unlock Vulkan Auto selection, even when the device supports the required
+compute operations.
+
+Profile lookup and hard policy boundaries are already suitable foundations.
+The runtime prefers an explicitly configured profile path, then
+`VIENNAPS_DEVICE_PROFILE_DIR`, then the external default profile directory; it
+rejects missing, invalid, or stale fingerprints and falls back to CPU in Auto.
+Manual mode overrides ranking and stage choice but still passes the same
+compute-suite, feature, precision, and safe-working-set checks. An unsafe
+memory estimate or missing hardware capability therefore remains a hard
+rejection rather than a silent fallback unless stage fallback was explicitly
+authorized.
+
+| Audit item | Current result | Required exit |
+|---|---|---|
+| Hardware facts | UUIDs, vendor/device/driver identity, queues, features, extensions, limits, heaps, and budget are queried | keep identity and capability query as the pre-dispatch filter |
+| Primitive validation | no shader is dispatched; all suites are `not-run` | execute the production elementwise, reduction/scan, and resident HRLE chain on the selected session |
+| Persisted eligibility | profile adapter forces Vulkan suite flags false | publish pass only after every required exact oracle succeeds; publish failure evidence otherwise |
+| Multi-device persistence | only the first enumerated deployment profile is written | select by requested UUID or write one atomic record per device |
+| Simulation startup | profile is loaded once and a matching session is created only for an eligible Vulkan plan | retain cached automatic selection and exact fingerprint match |
+| Manual override | policy choice is overridden, hard capability and memory limits are not | preserve strict diagnostics and explicit `allowStageFallback` semantics |
+| Path policy | profile path is caller-controlled and build definitions may contain generated absolute SPIR-V paths | default records outside the repository and never serialize SDK, library, source, build, or shader-file paths |
+
+The implementation should first freeze a failing test proving that a
+probe-generated profile is currently ineligible. It then adds one suite runner
+that receives shader payloads or an installed shader pack, reuses a single
+session, executes deterministic small oracles including the N=183/K=68 HRLE
+transaction, and atomically persists versioned suite evidence. Missing SDK or
+shader payloads must leave Vulkan disabled without writing a false pass.
+
 ## Next slice
 
 Feed the resident compaction materializer into the P4C2 CPU insertion oracle

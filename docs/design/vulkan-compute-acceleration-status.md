@@ -1716,9 +1716,10 @@ is retained and remains bit-exact against the CPU oracle.
 
 ### P5-E feasibility gate: neutral-transport coverage reaction remains CPU
 
-- Status: FP32 Vulkan implementation declined; a separate FP64 capability-gated
-  proposal is required before reconsidering it
-- Date: 2026-08-02
+- Status: confirmed CPU-only on the local adapter; FP32 Vulkan implementation
+  remains declined and a separate FP64 capability-gated proposal is required
+  before reconsidering it
+- Date: 2026-08-03
 
 The actual `NeutralTransportSurfaceModel<float, D>::updateCoverages` loop is
 not an FP32-only contract. `constants::N_A` is declared as `double`; its
@@ -1733,7 +1734,17 @@ FP32 equation would be a different numerical model and cannot satisfy the
 required CPU bitwise oracle. This work remains CPU by default. A future Vulkan
 route must first pass the selected device's `shaderFloat64` gate and a direct
 CPU/GPU double-intermediate differential, or separately specify and validate a
-software-double implementation; manual selection cannot bypass either gate.
+software-double implementation. Manual configuration may select CPU or any
+eligible backend, but cannot force an unavailable or numerically inexact
+Vulkan route past either gate.
+
+The local deployment check on Intel Arc (driver `101.8860`) reports
+`shaderFloat64 = false`; its FP32 signed-zero/Inf/NaN preservation,
+denormal preservation, and round-to-nearest-even controls are all true, but
+they do not satisfy this double-intermediate requirement. The persisted
+hardware profile must therefore keep neutral-transport coverage reaction on
+CPU for Auto selection and reject a Manual Vulkan request with that capability
+diagnostic on this adapter.
 
 ### P5-F: deterministic ray hit-to-record batch
 

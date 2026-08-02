@@ -655,6 +655,65 @@ target_link_libraries(viennaps-vulkan-ray-surface-reduction-smoke PRIVATE
                       viennaps_vulkan_ray_surface_reduction
                       viennaps_vulkan_ray_reducer Vulkan::Vulkan)
 if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
-  add_test(NAME viennaps-vulkan-ray-surface-reduction-smoke
+add_test(NAME viennaps-vulkan-ray-surface-reduction-smoke
            COMMAND viennaps-vulkan-ray-surface-reduction-smoke)
+endif()
+
+# P5-JD device-resident composition. The reusable primitives still own their
+# command buffers; P5-JE will replace this ordered multi-submit baseline with
+# command recording and one terminal submission.
+add_library(viennaps_vulkan_device_ray_flux_pipeline
+            device_ray_flux_pipeline.cpp)
+add_dependencies(viennaps_vulkan_device_ray_flux_pipeline
+                 viennaps-vulkan-triangle-hit-device-spv
+                 viennaps-vulkan-ray-record-compaction-spv
+                 viennaps-vulkan-ray-record-radix-sort-spv
+                 viennaps-vulkan-ray-surface-reduction-spv
+                 viennaps-vulkan-reduction-scan-smoke-spv)
+if(TARGET viennaps-vulkan-ray-record-radix-sort-spv-validated)
+  add_dependencies(viennaps_vulkan_device_ray_flux_pipeline
+                   viennaps-vulkan-ray-record-radix-sort-spv-validated)
+endif()
+target_link_libraries(viennaps_vulkan_device_ray_flux_pipeline
+                      PUBLIC viennaps_vulkan_compute_runtime
+                             viennaps_vulkan_ray_flux_pipeline
+                             viennaps_vulkan_triangle_hit_device
+                             viennaps_vulkan_ray_record_compaction
+                             viennaps_vulkan_ray_record_radix_sort
+                             viennaps_vulkan_ray_surface_reduction
+                             Vulkan::Vulkan)
+target_include_directories(viennaps_vulkan_device_ray_flux_pipeline PUBLIC
+                           "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(viennaps_vulkan_device_ray_flux_pipeline PRIVATE
+                        cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps_vulkan_device_ray_flux_pipeline PRIVATE /W4 /WX)
+else()
+  target_compile_options(viennaps_vulkan_device_ray_flux_pipeline PRIVATE
+                         -Wall -Wextra -Wpedantic -Werror)
+endif()
+add_executable(viennaps-vulkan-device-ray-flux-pipeline-smoke
+               device_ray_flux_pipeline_smoke.cpp)
+add_dependencies(viennaps-vulkan-device-ray-flux-pipeline-smoke
+                 viennaps-vulkan-triangle-hit-device-spv
+                 viennaps-vulkan-ray-record-compaction-spv
+                 viennaps-vulkan-ray-record-radix-sort-spv
+                 viennaps-vulkan-ray-surface-reduction-spv
+                 viennaps-vulkan-reduction-scan-smoke-spv)
+target_compile_features(viennaps-vulkan-device-ray-flux-pipeline-smoke PRIVATE
+                        cxx_std_20)
+target_compile_definitions(viennaps-vulkan-device-ray-flux-pipeline-smoke PRIVATE
+  "VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH}\""
+  "VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV_PATH}\""
+  "VIENNAPS_VULKAN_REDUCTION_SCAN_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_REDUCTION_SCAN_SPV_PATH}\""
+  "VIENNAPS_VULKAN_RAY_RECORD_RADIX_HISTOGRAM_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_RADIX_HISTOGRAM_SPV_PATH}\""
+  "VIENNAPS_VULKAN_RAY_RECORD_RADIX_PREFIX_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_RADIX_PREFIX_SPV_PATH}\""
+  "VIENNAPS_VULKAN_RAY_RECORD_RADIX_SCATTER_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_RADIX_SCATTER_SPV_PATH}\""
+  "VIENNAPS_VULKAN_RAY_SURFACE_SEGMENTS_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_SURFACE_SEGMENTS_SPV_PATH}\""
+  "VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-device-ray-flux-pipeline-smoke PRIVATE
+                      viennaps_vulkan_device_ray_flux_pipeline Vulkan::Vulkan)
+if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+  add_test(NAME viennaps-vulkan-device-ray-flux-pipeline-smoke
+           COMMAND viennaps-vulkan-device-ray-flux-pipeline-smoke)
 endif()

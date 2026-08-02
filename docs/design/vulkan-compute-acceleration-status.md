@@ -1949,7 +1949,7 @@ remain `DeviceBuffer` objects for the next composition stage.
 | Boundary behavior | alias, insufficient output capacity, foreign-session buffers, and zero-capacity requests are covered; rejected calls leave the existing output buffer unchanged |
 | Numeric and shader gate | both generated shaders pass `spirv-val`; the reduction disassembly contains `NoContraction` and no fused multiply-add, preserving the tested ordered FP32 additions |
 | Build and test | standalone `gpu/vulkan` build under MSVC succeeds; two direct Intel Arc executions print `ray surface reduction Vulkan dispatch PASS`, and focused CTest passes 1/1 |
-| Scope boundary | P5-JC requires the P5-JB2B sorted-input contract and does not independently prove sorting; it deliberately has no device-visible non-normal/overflow status, so CPU-equivalent rejection of non-finite or out-of-domain intermediate sums remains a P5-JD gate rather than a claimed capability |
+| Scope boundary | P5-JC requires the P5-JB2B sorted-input contract and does not independently prove sorting; it deliberately has no device-visible non-normal/overflow status, so CPU-equivalent rejection of non-finite or out-of-domain intermediate sums is not claimed by P5-JD and remains a later P5-JE/deployment gate |
 
 #### Strict-FP32 deployment-probe finding
 
@@ -1965,6 +1965,39 @@ must treat the static float-control properties as a candidate only: a
 process-isolated, watchdog-bounded numerical smoke must pass bitwise CPU
 differential cases before the strict GPU profile is selected automatically.
 
+### P5-JD: device-resident ray-flux composition baseline
+
+- Status: accepted locally as an ordered multi-submit composition baseline;
+  it is not the final one-command path or a production Process route
+- Date: 2026-08-02
+
+`DeviceRayFluxPipeline` is the physical composition of
+P5-I triangle hits, P5-JA record compaction, P5-JB2B stable radix ordering,
+and P5-JC surface reduction. It will allocate and upload only the original
+ray, triangle, and weight inputs, retain all hit/record/count/segment
+intermediates in the shared `ComputeSession`, and download only the terminal
+surface id, weight, and count. The first acceptance fixture is five rays and
+three triangles: three hits on surface 0 reduce to `3.0`, one translated hit
+is a singleton `-0`, and one ray misses. Every terminal word is compared with
+the existing CPU pipeline oracle. The standalone Vulkan build compiles the
+new smoke under MSVC; two direct Intel Arc executions print
+`device ray-flux pipeline Vulkan dispatch PASS`, and its focused CTest passes
+1/1.
+
+This deliberately changes the prior milestone wording: the reusable stage
+APIs each own and submit their command buffer today, so P5-JD cannot honestly
+claim a single submission. P5-JE is the subsequent command-recording refactor
+that will share scratch buffers, insert explicit stage barriers, and execute
+the whole chain in one terminal submission. The P5-JD acceptance boundary is
+therefore device residency and CPU-bitwise terminal differential only.
+
+| Gate | Result |
+|---|---|
+| Residency | no host readback of hits, compacted records, sorted records, flags, offsets, or the active count occurs before final reduction completion |
+| CPU oracle | five-ray simple-geometry output count, surface ids, FP32 weight bits, and caller output tails match `RayFluxPipeline::runCpu` exactly |
+| Transaction | malformed inputs and conservative output-capacity rejection leave caller output spans and count unchanged; zero rays preserve the caller output, while nonempty rays with no triangles produce a zero count without dispatch |
+| Scope boundary | no claim of one-command fusion, strict intermediate FP32 rejection equivalence, BVH, particle transport, Process routing, or automatic backend eligibility |
+
 ## Next slice
 
 The segmented rebuild adapter is installed by the level-set controller, the
@@ -1974,14 +2007,15 @@ RK2/RK3 remain deliberately CPU-only until a multi-stage device state machine
 is proven. The first surface velocity formula is now exact but intentionally
 unwired to process selection. Direct negative/non-finite time injection and
 the optional VTK-enabled install/export conflict remain validation gaps.
-P5-JD must physically compose P5-JA, P5-JB2B, and P5-JC through one ordered
-command submission while retaining the sixteen stable P5-JB2B LSD passes,
-their full `RayRecord` bit contract, and device-local count storage. It must
-also add a device-visible status path and fail-closed policy for non-finite or
-out-of-domain intermediate FP32 sums before claiming full `reduceCpu`
-rejection equivalence. The strict FP32 deployment profile additionally needs
-the isolated watchdog probe described above; HostVisible radix helpers cannot
-be reused.
+P5-JD first proves physical device-resident composition of P5-I, P5-JA,
+P5-JB2B, and P5-JC while retaining the sixteen stable P5-JB2B LSD passes,
+their full `RayRecord` bit contract, and device-local count storage. P5-JE
+then refactors those stages to command recording with explicit barriers and a
+single terminal submission. The same later path must add a device-visible
+status and fail-closed policy for non-finite or out-of-domain intermediate
+FP32 sums before claiming full `reduceCpu` rejection equivalence. The strict
+FP32 deployment profile additionally needs the isolated watchdog probe
+described above; HostVisible radix helpers cannot be reused.
 CPU differential checking remains an explicit validation gate, not a
 production per-call guard. Coverage reaction is a capability-gated FP64
 candidate, without weakening the current fail-closed gate.

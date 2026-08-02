@@ -1483,7 +1483,7 @@ session, executes deterministic small oracles including the N=183/K=68 HRLE
 transaction, and atomically persists versioned suite evidence. Missing SDK or
 shader payloads must leave Vulkan disabled without writing a false pass.
 
-### P4D1 validation-evidence adapter
+### P4D1 validation-evidence adapter and level-set deployment suite
 
 - Status: accepted locally
 - Date: 2026-08-02
@@ -1496,21 +1496,35 @@ explicitly pass. It enables `vulkanFp64SuitePass` only when the device exposes
 unknown enum values, missing FP32 evidence, and unsupported FP64 remain
 fail-closed. The budget and fingerprint contracts are unchanged.
 
-This interface does not pretend that the current probe executes validation:
-`VulkanProbe.cpp` supplies the default `NOT_RUN` evidence, so generated profiles
-remain ineligible until the real suite runner is connected. The focused
-no-SDK adapter test passes 1/1 and covers default, pass, fail, unknown,
-precision-feature, and safe-budget invariants without changing profile schema
-version 2.
+The deployment probe now connects the existing level-set update and HRLE
+rebuild transaction to this evidence gate when all generated SPIR-V artifacts
+are available. It creates one device-pinned `ComputeSession`, dispatches the
+FP32 level-set update, and runs the 2D sphere HRLE classification, action flags,
+recursive scan, stable compaction, and CPU sparse reconstruction transaction.
+The update values, defined/undefined HRLE values, defined-value bits, and
+source-point-ID map are compared with the CPU oracle before a suite pass is
+published. A missing artifact, dispatch error, CPU mismatch, or the
+`VIENNAPS_VULKAN_PROBE_FORCE_SUITE_FAIL` deployment test hook records a `FAIL`
+reason and leaves the persisted Vulkan suite gates false; no schema-3 field or
+machine-local path is introduced. The raw schema-1 diagnostic adds the
+`validation.levelSetSuiteReason` string while the schema-2 profile remains
+backward compatible.
+
+The focused no-SDK adapter test still covers default, pass, fail, unknown,
+precision-feature, and safe-budget invariants. On the local Intel Arc device,
+the deployment probe reports `primitiveSuite=pass`, `fp32Suite=pass`, and
+`levelSetSuiteReason="level-set update and HRLE rebuild CPU differential
+passed"`; the generated schema-2 profile round-trips and validates.
 
 ## Next slice
 
-Next connect the segmented rebuild adapter to the level-set controller, map
-Auto failures to CPU fallback, and preserve the snapshot when strict Manual
-Vulkan fails. Then include the exact transaction in the deployment-time
-primitive suite. Vulkan 3D and RK2/RK3 execution, direct negative/non-finite
-time injection, and the optional VTK-enabled install/export conflict remain
-validation gaps.
+The segmented rebuild adapter is installed by the level-set controller, and
+the deployment probe now executes the small FP32 update plus HRLE transaction
+before persisting the primitive gate. Vulkan 3D and RK2/RK3 execution, direct
+negative/non-finite time injection, and the optional VTK-enabled install/export
+conflict remain validation gaps. The next deployment slice should broaden the
+oracle matrix and add the remaining primitive, ray, and surface/oxidation
+suites without weakening the current fail-closed gate.
 
 After those production-seam gates, the Level Set work advances to HRLE
 sparse rebuild integration, followed by particle/ray and surface/oxidation

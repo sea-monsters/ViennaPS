@@ -120,15 +120,15 @@ set(VULKAN_SMOKE_SPV "${CMAKE_CURRENT_BINARY_DIR}/compute_smoke.comp.spv")
 
 if(VIENNAPS_VULKAN_SDK_AVAILABLE AND
    (VIENNAPS_ENABLE_VULKAN OR VIENNAPS_BUILD_VULKAN_SMOKE OR
-    VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE))
+    VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE OR VIENNAPS_BUILD_VULKAN_PROBE))
   add_subdirectory(runtime)
 endif()
 
-if(VIENNAPS_BUILD_VULKAN_PRIMITIVES_SMOKE)
+if(VIENNAPS_BUILD_VULKAN_PRIMITIVES_SMOKE OR VIENNAPS_BUILD_VULKAN_PROBE)
   add_subdirectory(primitives)
 endif()
 
-if(VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE)
+if(VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE OR VIENNAPS_BUILD_VULKAN_PROBE)
   if(VIENNAPS_VULKAN_SDK_AVAILABLE)
     add_subdirectory(levelset)
   else()
@@ -152,6 +152,53 @@ if(VIENNAPS_BUILD_VULKAN_PROBE)
   if(VIENNAPS_VULKAN_SDK_AVAILABLE)
     target_compile_definitions(viennaps-device-probe PRIVATE VIENNAPS_VULKAN_ENABLED)
     target_link_libraries(viennaps-device-probe PRIVATE Vulkan::Vulkan)
+    if(TARGET viennaps_vulkan_hrle_compaction AND
+       TARGET viennaps_vulkan_levelset_update AND
+       TARGET viennaps_vulkan_reduction_scan_primitives)
+      get_property(_VIENNAPS_PROBE_UPDATE_SPV
+                   TARGET viennaps_vulkan_levelset_update
+                   PROPERTY VIENNAPS_LEVELSET_UPDATE_SPV)
+      get_property(_VIENNAPS_PROBE_CLASSIFICATION_SPV
+                   TARGET viennaps_vulkan_levelset_update
+                   PROPERTY VIENNAPS_HRLE_CLASSIFICATION_SPV)
+      get_property(_VIENNAPS_PROBE_REDUCTION_SPV
+                   TARGET viennaps_vulkan_reduction_scan_primitives
+                   PROPERTY VIENNAPS_REDUCTION_SCAN_SPV)
+      get_property(_VIENNAPS_PROBE_ACTION_FLAGS_SPV
+                   TARGET viennaps_vulkan_hrle_compaction
+                   PROPERTY VIENNAPS_HRLE_ACTION_FLAGS_SPV)
+      get_property(_VIENNAPS_PROBE_COMPACT_SPV
+                   TARGET viennaps_vulkan_hrle_compaction
+                   PROPERTY VIENNAPS_HRLE_COMPACT_SPV)
+      if(_VIENNAPS_PROBE_UPDATE_SPV AND _VIENNAPS_PROBE_CLASSIFICATION_SPV AND
+         _VIENNAPS_PROBE_REDUCTION_SPV AND _VIENNAPS_PROBE_ACTION_FLAGS_SPV AND
+         _VIENNAPS_PROBE_COMPACT_SPV)
+        foreach(_VIENNAPS_PROBE_PATH IN ITEMS
+                _VIENNAPS_PROBE_UPDATE_SPV
+                _VIENNAPS_PROBE_CLASSIFICATION_SPV
+                _VIENNAPS_PROBE_REDUCTION_SPV
+                _VIENNAPS_PROBE_ACTION_FLAGS_SPV
+                _VIENNAPS_PROBE_COMPACT_SPV)
+          string(REPLACE "\\" "/" ${_VIENNAPS_PROBE_PATH}
+                 "${${_VIENNAPS_PROBE_PATH}}")
+        endforeach()
+        target_compile_definitions(viennaps-device-probe PRIVATE
+          VIENNAPS_VULKAN_LEVELSET_SUITE_AVAILABLE
+          "VIENNAPS_LEVELSET_UPDATE_SPV_PATH=\"${_VIENNAPS_PROBE_UPDATE_SPV}\""
+          "VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH=\"${_VIENNAPS_PROBE_CLASSIFICATION_SPV}\""
+          "VIENNAPS_REDUCTION_SCAN_SPV_PATH=\"${_VIENNAPS_PROBE_REDUCTION_SPV}\""
+          "VIENNAPS_HRLE_ACTION_FLAGS_SPV_PATH=\"${_VIENNAPS_PROBE_ACTION_FLAGS_SPV}\""
+          "VIENNAPS_HRLE_COMPACT_SPV_PATH=\"${_VIENNAPS_PROBE_COMPACT_SPV}\"")
+        add_dependencies(viennaps-device-probe
+          viennaps-vulkan-levelset-update-spv
+          viennaps-vulkan-hrle-classification-spv
+          viennaps-vulkan-reduction-scan-smoke-spv
+          viennaps-vulkan-hrle-compaction-spv)
+        target_link_libraries(viennaps-device-probe PRIVATE
+          ViennaPS viennaps_vulkan_levelset_update
+          viennaps_vulkan_hrle_compaction)
+      endif()
+    endif()
     message(STATUS "[ViennaPS Vulkan Probe] Vulkan SDK detected; building full probe.")
   else()
     message(STATUS "[ViennaPS Vulkan Probe] Vulkan SDK not available; building diagnostic "

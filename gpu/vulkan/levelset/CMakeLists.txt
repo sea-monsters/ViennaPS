@@ -121,6 +121,9 @@ add_library(viennaps_vulkan_levelset_update
 set_property(TARGET viennaps_vulkan_levelset_update
              PROPERTY VIENNAPS_LEVELSET_UPDATE_SPV
                       "${VIENNAPS_LEVELSET_UPDATE_SPV}")
+set_property(TARGET viennaps_vulkan_levelset_update
+             PROPERTY VIENNAPS_HRLE_CLASSIFICATION_SPV
+                      "${VIENNAPS_HRLE_CLASSIFICATION_SPV}")
 target_include_directories(viennaps_vulkan_levelset_update
   PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
          "${CMAKE_CURRENT_LIST_DIR}/../../../include/viennaps")

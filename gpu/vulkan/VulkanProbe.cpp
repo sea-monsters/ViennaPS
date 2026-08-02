@@ -9,8 +9,11 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <ctime>
 #include <fstream>
 #include <iomanip>
@@ -24,6 +27,20 @@
 
 #ifdef VIENNAPS_VULKAN_ENABLED
 #include <vulkan/vulkan.h>
+#ifdef VIENNAPS_VULKAN_LEVELSET_SUITE_AVAILABLE
+#include "levelset/hrle_rebuild_classification.hpp"
+#include "levelset/hrle_rebuild_compaction.hpp"
+#include "levelset/hrle_rebuild_pipeline.hpp"
+#include "levelset/levelset_update.hpp"
+#include "primitives/reduction_scan_primitives.hpp"
+#include "runtime/compute_session.hpp"
+
+#include <hrleSparseStarIterator.hpp>
+#include <levelset/psHrleSparseReconstruction.hpp>
+#include <lsDomain.hpp>
+#include <lsExpand.hpp>
+#include <lsMakeGeometry.hpp>
+#endif
 #endif
 
 namespace {
@@ -139,6 +156,226 @@ jsonNumberList(const std::vector<std::uint32_t> &value) {
   return std::find(extensions.begin(), extensions.end(),
                    std::string(candidate)) != extensions.end();
 }
+
+struct ValidationSuiteResult {
+  bool pass = false;
+  std::string reason;
+};
+
+#ifdef VIENNAPS_VULKAN_LEVELSET_SUITE_AVAILABLE
+
+using ProbeCandidate = viennaps::levelset::HrleRebuildCandidateFp32;
+using ProbeDecision = viennaps::levelset::HrleRebuildDecisionFp32;
+
+[[nodiscard]] std::vector<float>
+cpuUpdate(const viennaps::vulkan::levelset::LevelSetUpdateInput &input) {
+  std::vector<float> output(input.values.begin(), input.values.end());
+  for (std::size_t point = 0; point < output.size(); ++point) {
+    if (std::abs(output[point]) > input.integrationCutoff) {
+      continue;
+    }
+    std::uint32_t rateIndex = input.rateOffsets[point];
+    float remainingTime = input.timeStep;
+    float gradient = input.gradients[rateIndex];
+    float velocity = gradient - input.dissipations[rateIndex];
+    if ((input.checkDissipation && gradient < 0.0F && velocity > 0.0F) ||
+        (gradient > 0.0F && velocity < 0.0F)) {
+      velocity = 0.0F;
+    }
+    float rate = remainingTime * velocity;
+    while (std::abs(input.stopValues[rateIndex] - output[point]) <
+           std::abs(rate)) {
+      remainingTime -=
+          std::abs((input.stopValues[rateIndex] - output[point]) / velocity);
+      output[point] = input.stopValues[rateIndex++];
+      gradient = input.gradients[rateIndex];
+      velocity = gradient - input.dissipations[rateIndex];
+      if ((input.checkDissipation && gradient < 0.0F && velocity > 0.0F) ||
+          (gradient > 0.0F && velocity < 0.0F)) {
+        velocity = 0.0F;
+      }
+      rate = remainingTime * velocity;
+    }
+    output[point] -= rate;
+  }
+  return output;
+}
+
+template <class Iterator>
+[[nodiscard]] ProbeCandidate makeProbeCandidate(const Iterator &iterator) {
+  ProbeCandidate candidate{};
+  const auto &center = iterator.getCenter();
+  candidate.centerValue = center.getValue();
+  candidate.centerDefinedValue =
+      center.isDefined() ? center.getDefinedValue() : center.getValue();
+  candidate.centerPointId =
+      center.isDefined() ? static_cast<std::uint32_t>(center.getPointId())
+                         : viennaps::levelset::kInvalidHrlePointId;
+  for (std::size_t neighbor = 0U; neighbor < 4U; ++neighbor) {
+    const auto &value =
+        iterator.getNeighbor(static_cast<unsigned int>(neighbor));
+    candidate.neighborValues[neighbor] = value.getValue();
+    candidate.neighborDefinedValues[neighbor] =
+        value.isDefined() ? value.getDefinedValue() : value.getValue();
+    candidate.neighborPointIds[neighbor] =
+        value.isDefined() ? static_cast<std::uint32_t>(value.getPointId())
+                          : viennaps::levelset::kInvalidHrlePointId;
+  }
+  return candidate;
+}
+
+[[nodiscard]] viennals::SmartPointer<viennals::Domain<float, 2>>
+makeProbeDomain() {
+  constexpr viennahrle::CoordType extent = 8.0;
+  constexpr viennahrle::CoordType gridDelta = 0.5;
+  viennahrle::CoordType bounds[4] = {-extent, extent, -extent, extent};
+  viennals::BoundaryConditionEnum boundaries[2] = {
+      viennals::BoundaryConditionEnum::REFLECTIVE_BOUNDARY,
+      viennals::BoundaryConditionEnum::REFLECTIVE_BOUNDARY};
+  auto domain = viennals::Domain<float, 2>::New(bounds, boundaries, gridDelta);
+  float origin[2] = {0.0F, 0.0F};
+  viennals::MakeGeometry<float, 2>(
+      domain,
+      viennals::SmartPointer<viennals::Sphere<float, 2>>::New(origin, 3.0F))
+      .apply();
+  viennals::Expand<float, 2>(domain, 2).apply();
+  return domain;
+}
+
+[[nodiscard]] bool exactFloatVectors(const std::span<const float> actual,
+                                     const std::span<const float> expected) {
+  if (actual.size() != expected.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < actual.size(); ++index) {
+    if (std::bit_cast<std::uint32_t>(actual[index]) !=
+        std::bit_cast<std::uint32_t>(expected[index])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+[[nodiscard]] ValidationSuiteResult
+runLevelSetValidationSuite(const std::uint32_t deviceIndex) {
+  using namespace viennaps::vulkan;
+  using namespace viennaps::vulkan::runtime;
+  std::string error;
+  if (std::getenv("VIENNAPS_VULKAN_PROBE_FORCE_SUITE_FAIL") != nullptr) {
+    return {false, "validation suite forced to fail by deployment test hook"};
+  }
+  ComputeSession session{};
+  ComputeSessionOptions options{};
+  options.manualDeviceIndex = deviceIndex;
+  if (!session.initialize(error, options)) {
+    return {false, "compute session initialization failed: " + error};
+  }
+
+  SpirvProgram updateProgram{};
+  SpirvProgram classificationProgram{};
+  SpirvProgram actionFlagsProgram{};
+  SpirvProgram compactProgram{};
+  if (!readSpirv(VIENNAPS_LEVELSET_UPDATE_SPV_PATH, updateProgram, error) ||
+      !readSpirv(VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH, classificationProgram,
+                 error) ||
+      !readSpirv(VIENNAPS_HRLE_ACTION_FLAGS_SPV_PATH, actionFlagsProgram,
+                 error) ||
+      !readSpirv(VIENNAPS_HRLE_COMPACT_SPV_PATH, compactProgram, error)) {
+    return {false, "level-set validation shader load failed: " + error};
+  }
+
+  const std::array<float, 4> values{0.25F, 2.0F, -0.2F, 0.0F};
+  const std::array<std::uint32_t, 5> offsets{0U, 1U, 2U, 3U, 5U};
+  const std::array<float, 5> gradients{0.5F, 0.5F, 0.2F, 1.0F, 2.0F};
+  const std::array<float, 5> dissipations{0.1F, 0.0F, 0.5F, 0.0F, 0.0F};
+  const float sentinel = std::numeric_limits<float>::max();
+  const std::array<float, 5> stops{sentinel, sentinel, sentinel, -0.25F,
+                                   sentinel};
+  const viennaps::vulkan::levelset::LevelSetUpdateInput updateInput{
+      values, offsets, gradients, dissipations, stops, 1.0F, 1.0F, false};
+  const auto expectedUpdate = cpuUpdate(updateInput);
+  std::vector<float> actualUpdate;
+  if (!viennaps::vulkan::levelset::updateLevelSetFp32(
+          session, updateProgram, updateInput, actualUpdate, error) ||
+      !exactFloatVectors(actualUpdate, expectedUpdate)) {
+    return {false, "level-set update CPU differential failed" +
+                       (error.empty() ? std::string(": output differs from "
+                                                    "CPU oracle")
+                                      : ": " + error)};
+  }
+
+  const auto levelSet = makeProbeDomain();
+  std::vector<ProbeCandidate> candidates;
+  std::vector<viennahrle::Index<2>> candidateIndices;
+  const auto &grid = levelSet->getGrid();
+  const auto &domain = levelSet->getDomain();
+  for (unsigned segment = 0U; segment < domain.getNumberOfSegments();
+       ++segment) {
+    const auto start = segment == 0U ? grid.getMinGridPoint()
+                                     : domain.getSegmentation()[segment - 1U];
+    const auto end = segment + 1U < domain.getNumberOfSegments()
+                         ? domain.getSegmentation()[segment]
+                         : grid.incrementIndices(grid.getMaxGridPoint());
+    for (viennahrle::ConstSparseStarIterator<
+             typename viennals::Domain<float, 2>::DomainType, 1>
+             iterator(domain, start);
+         iterator.getIndices() < end; ++iterator) {
+      candidates.push_back(makeProbeCandidate(iterator));
+      candidateIndices.push_back(iterator.getIndices());
+    }
+  }
+  std::vector<ProbeDecision> cpuDecisions;
+  if (!viennaps::levelset::classifyHrleRebuildCpu(candidates, 2U, 1.0F,
+                                                  cpuDecisions, error)) {
+    return {false, "CPU HRLE oracle failed: " + error};
+  }
+  viennaps::levelset::HrleRebuildCompactionResultFp32 cpuCompaction;
+  if (!viennaps::levelset::compactHrleRebuildDecisionsCpu(
+          cpuDecisions, cpuCompaction, error)) {
+    return {false, "CPU HRLE compaction oracle failed: " + error};
+  }
+
+  viennaps::vulkan::primitives::ReductionScanPrimitives primitives;
+  if (!primitives.initialize(session, VIENNAPS_REDUCTION_SCAN_SPV_PATH,
+                             error)) {
+    return {false, "reduction/scan initialization failed: " + error};
+  }
+  viennahrle::Domain<float, 2> actualDomain;
+  std::vector<std::uint32_t> actualIds;
+  if (!viennaps::vulkan::levelset::rebuildHrleRebuildFp32DeviceToCpu<2>(
+          session, classificationProgram, actionFlagsProgram, compactProgram,
+          primitives, candidates, 2U, 1.0F, candidateIndices,
+          levelSet->getDomain().getNumberOfPoints(), levelSet->getGrid(),
+          actualDomain, actualIds, error)) {
+    return {false, "Vulkan HRLE rebuild transaction failed: " + error};
+  }
+  viennahrle::Domain<float, 2> expectedDomain;
+  std::vector<std::uint32_t> expectedIds;
+  if (!viennaps::levelset::reconstructHrleRebuildCpu<2>(
+          cpuCompaction, candidateIndices,
+          levelSet->getDomain().getNumberOfPoints(), levelSet->getGrid(),
+          expectedDomain, expectedIds, error) ||
+      actualIds != expectedIds) {
+    return {false, "HRLE source-point mapping differs from CPU oracle"};
+  }
+  for (const auto &index : candidateIndices) {
+    viennahrle::ConstSparseIterator<viennahrle::Domain<float, 2>> actual(
+        actualDomain, index);
+    viennahrle::ConstSparseIterator<viennahrle::Domain<float, 2>> expected(
+        expectedDomain, index);
+    if (actual.isDefined() != expected.isDefined() ||
+        std::bit_cast<std::uint32_t>(actual.getValue()) !=
+            std::bit_cast<std::uint32_t>(expected.getValue()) ||
+        (actual.isDefined() &&
+         std::bit_cast<std::uint32_t>(actual.getDefinedValue()) !=
+             std::bit_cast<std::uint32_t>(expected.getDefinedValue()))) {
+      return {false, "HRLE rebuild structure differs from CPU oracle"};
+    }
+  }
+  return {true, "level-set update and HRLE rebuild CPU differential passed"};
+}
+
+#endif
 
 #ifdef VIENNAPS_VULKAN_ENABLED
 
@@ -399,6 +636,17 @@ makeDeviceProfile(const VkPhysicalDevice physicalDevice,
   facts.hostVisibleBytes = hostVisibleBytes;
   facts.memoryBudgetBytes = memoryBudgetBytes;
 
+#ifdef VIENNAPS_VULKAN_LEVELSET_SUITE_AVAILABLE
+  const auto validation = runLevelSetValidationSuite(deviceIndex);
+  facts.validationEvidence.primitiveSuite =
+      validation.pass ? viennaps::compute::VulkanProbeSuiteStatus::PASS
+                      : viennaps::compute::VulkanProbeSuiteStatus::FAIL;
+  facts.validationEvidence.fp32Suite = facts.validationEvidence.primitiveSuite;
+#else
+  const ValidationSuiteResult validation{
+      false, "required Vulkan level-set suite artifacts unavailable"};
+#endif
+
   std::ostringstream json;
   json << '{';
   json << "\"schemaVersion\":1,";
@@ -476,11 +724,27 @@ makeDeviceProfile(const VkPhysicalDevice physicalDevice,
   json << "\"maxRayRecursionDepth\":" << maxRayRecursionDepth << "},";
 
   json << "\"validation\":{";
-  json << "\"primitiveSuite\":\"not-run\",";
-  json << "\"fp32Suite\":\"not-run\",";
+  const auto suiteStatus = [](const auto status) {
+    using Status = viennaps::compute::VulkanProbeSuiteStatus;
+    switch (status) {
+    case Status::PASS:
+      return "pass";
+    case Status::FAIL:
+      return "fail";
+    case Status::NOT_RUN:
+    default:
+      return "not-run";
+    }
+  };
+  json << "\"primitiveSuite\":\""
+       << suiteStatus(facts.validationEvidence.primitiveSuite) << "\",";
+  json << "\"fp32Suite\":\"" << suiteStatus(facts.validationEvidence.fp32Suite)
+       << "\",";
   json << "\"fp64Suite\":\"not-run\",";
   json << "\"computeBvhSuite\":\"not-run\",";
   json << "\"hardwareRaySuite\":\"not-run\",";
+  json << "\"levelSetSuiteReason\":\"" << escapeJson(validation.reason)
+       << "\",";
   json << "\"deviceIndex\":" << deviceIndex << "},";
 
   json << "\"extensions\":[";

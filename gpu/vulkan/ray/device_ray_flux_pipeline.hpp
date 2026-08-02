@@ -6,6 +6,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "ray_flux_pipeline.hpp"
 #include "ray_record_radix_sort.hpp"
@@ -66,6 +67,12 @@ public:
                             std::span<const Triangle> triangles,
                             std::span<const float> weights,
                             RayFluxResult &output, std::string &error);
+  [[nodiscard]] bool prepareGeometry(std::span<const Triangle> triangles,
+                                     std::string &error);
+  void resetPreparedGeometry();
+  [[nodiscard]] bool runGpuPrepared(std::span<const Ray> rays,
+                                    std::span<const float> weights,
+                                    RayFluxResult &output, std::string &error);
 
   // Counts the compute submission in the last runGpu() call. It intentionally
   // excludes input uploads and terminal downloads, which use explicit transfer
@@ -82,6 +89,9 @@ private:
   DeviceTriangleHitPrimitive triangleHit_{};
   TriangleBvhHitPrimitive triangleBvh_{};
   bool useTriangleBvh_{false};
+  bool preparedGeometry_{false};
+  bool reusePrepared_{false};
+  std::vector<Triangle> preparedTriangles_{};
   DeviceRayRecordCompactor compactor_{};
   DeviceRayRecordRadixSort sorter_{};
   DeviceRaySurfaceReducer reducer_{};

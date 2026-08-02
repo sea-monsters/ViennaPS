@@ -2169,12 +2169,21 @@ records BVH hits followed by the existing device compaction, stable radix sort,
 and strict surface reduction into one primary command buffer. An empty path
 keeps the established brute-force implementation unchanged.
 
+P5-R4 adds explicit `prepareGeometry`/`runGpuPrepared`/`resetPreparedGeometry`
+for callers that can prove the surface is unchanged across multiple flux
+evaluations. Preparation builds/uploads once; prepared runs upload only rays
+and weights before the same one-submission chain. A failed replacement
+preparation invalidates the old prepared state before attempting the new build,
+so stale device geometry can never be reused. The existing `runGpu` remains
+the conservative rebuild-on-every-call API.
+
 | Gate | Result |
 |---|---|
 | ABI and traversal | A 32-byte node stores conservative bounds, `leftFirst`, and leaf count. Internal nodes reserve adjacent child roots before recursive construction, so `leftFirst` and `leftFirst + 1` remain valid at arbitrary tested depth. |
 | CPU oracle | The smoke compares the raw `TriangleHit` fields from `intersectCpu` against device results. A normal-scale 20-triangle, six-ray tree puts equal-distance IDs 9 and 10 in opposite root branches; the device first visits ID 10 but must replace it with ID 9. A separate `1e-31` x-direction case verifies that a small nonzero slab direction is not culled. A successful empty-BVH rebuild returns all misses without a self-referential root traversal. A deterministic LCG differential over 32 triangles and 16 rays reports zero bit mismatches (seed `0x5EED`). |
 | Record-only chain | The smoke records P5-R2 into a caller command buffer, submits that buffer exactly once, and raw-bit compares downloaded hits to the CPU oracle. A null-command-buffer rejection preserves a pre-uploaded device hit sentinel. |
 | End-to-end composition | With the optional BVH SPIR-V path, a 20-triangle/six-ray cross-root equal-distance fixture flows through compaction, sort, and reduction in one compute submission. CPU/GPU count, surface IDs, and weight bits agree; the lower tied surface ID 9 is present. |
+| Prepared geometry | After one prepare, two identical 20-triangle/six-ray weighted runs remain bit-identical and each submits once. Empty or failed replacement preparation invalidates the prepared route; its next call rejects before modifying output sentinels. |
 | Transaction boundary | Invalid normal-FP32 inputs and undersized output return before dispatch and preserve caller sentinels. A zero-ray call preserves the output sentinel. |
 | Build and test | A fresh standalone Ninja build using MSVC `19.44.35223` and the local Intel Arc Vulkan adapter builds `viennaps-vulkan-triangle-bvh-hit-smoke`; focused CTest passes 1/1. |
 | Scope boundary | This is CPU-built BVH plus compute traversal and optional device-ray-flux selection. It does not perform GPU BVH construction/refit, reflection or multi-bounce transport, particle/material physics, Process integration, or use Vulkan RT extensions. |

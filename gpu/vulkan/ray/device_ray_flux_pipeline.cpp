@@ -132,6 +132,9 @@ void DeviceRayFluxPipeline::reset() {
   triangleHit_.reset();
   triangleBvh_.reset();
   useTriangleBvh_ = false;
+  preparedGeometry_ = false;
+  reusePrepared_ = false;
+  preparedTriangles_.clear();
   session_ = nullptr;
   if (ownsSession)
     ownedSession_.reset();
@@ -189,7 +192,8 @@ bool DeviceRayFluxPipeline::runGpu(std::span<const Ray> rays,
     output.count = 0U;
     return true;
   }
-  if (useTriangleBvh_ && !triangleBvh_.build(triangles, error))
+  if (useTriangleBvh_ && !reusePrepared_ &&
+      !triangleBvh_.build(triangles, error))
     return false;
   if (output.surfaceId.size() < rays.size())
     return fail(error,
@@ -304,6 +308,40 @@ bool DeviceRayFluxPipeline::runGpu(std::span<const Ray> rays,
   std::copy(stagedWeight.begin(), stagedWeight.end(), output.weight.begin());
   output.count = resultCount;
   return true;
+}
+
+bool DeviceRayFluxPipeline::prepareGeometry(std::span<const Triangle> triangles,
+                                            std::string &error) {
+  error.clear();
+  if (!ready(error) || !useTriangleBvh_)
+    return fail(error, "prepared geometry requires an initialized BVH path");
+  preparedGeometry_ = false;
+  preparedTriangles_.clear();
+  if (triangles.empty())
+    return fail(error, "prepared geometry cannot be empty");
+  if (!triangleBvh_.build(triangles, error))
+    return false;
+  preparedTriangles_.assign(triangles.begin(), triangles.end());
+  preparedGeometry_ = true;
+  return true;
+}
+
+void DeviceRayFluxPipeline::resetPreparedGeometry() {
+  preparedGeometry_ = false;
+  preparedTriangles_.clear();
+}
+
+bool DeviceRayFluxPipeline::runGpuPrepared(std::span<const Ray> rays,
+                                           std::span<const float> weights,
+                                           RayFluxResult &output,
+                                           std::string &error) {
+  error.clear();
+  if (!preparedGeometry_ || !useTriangleBvh_)
+    return fail(error, "prepared geometry is unavailable");
+  reusePrepared_ = true;
+  const bool result = runGpu(rays, preparedTriangles_, weights, output, error);
+  reusePrepared_ = false;
+  return result;
 }
 
 } // namespace viennaps::vulkan::ray

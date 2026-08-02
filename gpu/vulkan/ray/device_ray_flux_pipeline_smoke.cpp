@@ -199,5 +199,34 @@ int main() {
     assert(std::bit_cast<std::uint32_t>(tieGpuWeight[i]) ==
            std::bit_cast<std::uint32_t>(tieCpuWeight[i]));
   }
+  assert(pipeline.prepareGeometry(tieTriangles, error));
+  std::vector<std::uint32_t> preparedSurface(tieRays.size(), kSurfaceSentinel);
+  std::vector<float> preparedWeight(tieRays.size(), kWeightSentinel);
+  RayFluxResult prepared{preparedSurface, preparedWeight, 0U};
+  assert(pipeline.runGpuPrepared(tieRays, tieWeights, prepared, error));
+  assert(pipeline.lastComputeSubmissionCount() == 1U);
+  const auto preparedSurfaceFirst = preparedSurface;
+  const auto preparedWeightFirst = preparedWeight;
+  assert(pipeline.runGpuPrepared(tieRays, tieWeights, prepared, error));
+  assert(pipeline.lastComputeSubmissionCount() == 1U);
+  assert(prepared.count == tieCpu.count &&
+         preparedSurface == preparedSurfaceFirst &&
+         preparedWeight == preparedWeightFirst);
+  assert(!pipeline.prepareGeometry({}, error));
+  std::vector<std::uint32_t> failedPrepareSurface(tieRays.size(),
+                                                  kSurfaceSentinel);
+  std::vector<float> failedPrepareWeight(tieRays.size(), kWeightSentinel);
+  RayFluxResult failedPrepare{failedPrepareSurface, failedPrepareWeight, 74U};
+  assert(!pipeline.runGpuPrepared(tieRays, tieWeights, failedPrepare, error));
+  assert(failedPrepare.count == 74U &&
+         failedPrepareSurface[0] == kSurfaceSentinel &&
+         failedPrepareWeight[0] == kWeightSentinel);
+  pipeline.resetPreparedGeometry();
+  std::vector<std::uint32_t> resetSurface(tieRays.size(), kSurfaceSentinel);
+  std::vector<float> resetWeight(tieRays.size(), kWeightSentinel);
+  RayFluxResult resetResult{resetSurface, resetWeight, 73U};
+  assert(!pipeline.runGpuPrepared(tieRays, tieWeights, resetResult, error));
+  assert(resetResult.count == 73U && resetSurface[0] == kSurfaceSentinel &&
+         resetWeight[0] == kWeightSentinel);
   std::cout << "device ray-flux pipeline Vulkan dispatch PASS\n";
 }

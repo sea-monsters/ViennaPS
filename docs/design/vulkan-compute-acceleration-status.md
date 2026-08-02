@@ -2162,14 +2162,22 @@ performing host transfers. It validates session generation, buffer ownership,
 capacity, and aliases before recording the transfer-to-compute and
 compute-to-compute barriers required by the next device ray-flux stage.
 
+P5-R3 exposes that traversal as an optional `DeviceRayFluxSpirv` path. When
+provided, each `runGpu` call builds/uploads the BVH at its explicit
+geometry-change boundary, omits the brute-force triangle buffer/upload, and
+records BVH hits followed by the existing device compaction, stable radix sort,
+and strict surface reduction into one primary command buffer. An empty path
+keeps the established brute-force implementation unchanged.
+
 | Gate | Result |
 |---|---|
 | ABI and traversal | A 32-byte node stores conservative bounds, `leftFirst`, and leaf count. Internal nodes reserve adjacent child roots before recursive construction, so `leftFirst` and `leftFirst + 1` remain valid at arbitrary tested depth. |
 | CPU oracle | The smoke compares the raw `TriangleHit` fields from `intersectCpu` against device results. A normal-scale 20-triangle, six-ray tree puts equal-distance IDs 9 and 10 in opposite root branches; the device first visits ID 10 but must replace it with ID 9. A separate `1e-31` x-direction case verifies that a small nonzero slab direction is not culled. A successful empty-BVH rebuild returns all misses without a self-referential root traversal. A deterministic LCG differential over 32 triangles and 16 rays reports zero bit mismatches (seed `0x5EED`). |
 | Record-only chain | The smoke records P5-R2 into a caller command buffer, submits that buffer exactly once, and raw-bit compares downloaded hits to the CPU oracle. A null-command-buffer rejection preserves a pre-uploaded device hit sentinel. |
+| End-to-end composition | With the optional BVH SPIR-V path, a 20-triangle/six-ray cross-root equal-distance fixture flows through compaction, sort, and reduction in one compute submission. CPU/GPU count, surface IDs, and weight bits agree; the lower tied surface ID 9 is present. |
 | Transaction boundary | Invalid normal-FP32 inputs and undersized output return before dispatch and preserve caller sentinels. A zero-ray call preserves the output sentinel. |
 | Build and test | A fresh standalone Ninja build using MSVC `19.44.35223` and the local Intel Arc Vulkan adapter builds `viennaps-vulkan-triangle-bvh-hit-smoke`; focused CTest passes 1/1. |
-| Scope boundary | This is CPU-built BVH plus compute traversal only. P5-R2 exposes but does not yet select it in device-ray-flux routing. It does not perform GPU BVH construction/refit, reflection or multi-bounce transport, particle/material physics, Process integration, or use Vulkan RT extensions. |
+| Scope boundary | This is CPU-built BVH plus compute traversal and optional device-ray-flux selection. It does not perform GPU BVH construction/refit, reflection or multi-bounce transport, particle/material physics, Process integration, or use Vulkan RT extensions. |
 
 ## Next slice
 

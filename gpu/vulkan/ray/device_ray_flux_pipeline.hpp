@@ -10,6 +10,7 @@
 #include "ray_flux_pipeline.hpp"
 #include "ray_record_radix_sort.hpp"
 #include "ray_surface_reduction.hpp"
+#include "triangle_bvh_hit.hpp"
 #include "triangle_hit_device.hpp"
 
 namespace viennaps::vulkan::ray {
@@ -25,6 +26,7 @@ struct DeviceRayFluxSpirv {
   std::string_view radixScatter;
   std::string_view surfaceSegments;
   std::string_view surfaceReduce;
+  std::string_view triangleBvh;
 };
 
 // Composes device triangle intersection, record compaction, stable radix
@@ -78,6 +80,8 @@ private:
   runtime::ComputeSession ownedSession_{};
   runtime::ComputeSession *session_{nullptr};
   DeviceTriangleHitPrimitive triangleHit_{};
+  TriangleBvhHitPrimitive triangleBvh_{};
+  bool useTriangleBvh_{false};
   DeviceRayRecordCompactor compactor_{};
   DeviceRayRecordRadixSort sorter_{};
   DeviceRaySurfaceReducer reducer_{};

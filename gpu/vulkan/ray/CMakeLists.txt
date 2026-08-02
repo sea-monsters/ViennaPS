@@ -719,6 +719,7 @@ add_library(viennaps_vulkan_device_ray_flux_pipeline
             device_ray_flux_pipeline.cpp)
 add_dependencies(viennaps_vulkan_device_ray_flux_pipeline
                  viennaps-vulkan-triangle-hit-device-spv
+                 viennaps-vulkan-triangle-bvh-hit-spv
                  viennaps-vulkan-ray-record-compaction-spv
                  viennaps-vulkan-ray-record-radix-sort-spv
                  viennaps-vulkan-ray-surface-reduction-spv
@@ -731,6 +732,7 @@ target_link_libraries(viennaps_vulkan_device_ray_flux_pipeline
                       PUBLIC viennaps_vulkan_compute_runtime
                              viennaps_vulkan_ray_flux_pipeline
                              viennaps_vulkan_triangle_hit_device
+                             viennaps_vulkan_triangle_bvh_hit
                              viennaps_vulkan_ray_record_compaction
                              viennaps_vulkan_ray_record_radix_sort
                              viennaps_vulkan_ray_surface_reduction
@@ -749,12 +751,15 @@ add_executable(viennaps-vulkan-device-ray-flux-pipeline-smoke
                device_ray_flux_pipeline_smoke.cpp)
 add_dependencies(viennaps-vulkan-device-ray-flux-pipeline-smoke
                  viennaps-vulkan-triangle-hit-device-spv
+                 viennaps-vulkan-triangle-bvh-hit-spv
                  viennaps-vulkan-ray-record-compaction-spv
                  viennaps-vulkan-ray-record-radix-sort-spv
                  viennaps-vulkan-ray-surface-reduction-spv
                  viennaps-vulkan-reduction-scan-smoke-spv)
 target_compile_features(viennaps-vulkan-device-ray-flux-pipeline-smoke PRIVATE
                         cxx_std_20)
+target_compile_definitions(viennaps-vulkan-device-ray-flux-pipeline-smoke PRIVATE
+  "VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH}\"")
 target_compile_definitions(viennaps-vulkan-device-ray-flux-pipeline-smoke PRIVATE
   "VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH}\""
   "VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV_PATH}\""

@@ -15,6 +15,9 @@
 #ifndef VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH
 #define VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH ""
 #endif
+#ifndef VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH
+#define VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH ""
+#endif
 #ifndef VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV_PATH
 #define VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV_PATH ""
 #endif
@@ -75,7 +78,8 @@ int main() {
       VIENNAPS_VULKAN_RAY_RECORD_RADIX_PREFIX_SPV_PATH,
       VIENNAPS_VULKAN_RAY_RECORD_RADIX_SCATTER_SPV_PATH,
       VIENNAPS_VULKAN_RAY_SURFACE_SEGMENTS_SPV_PATH,
-      VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV_PATH};
+      VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV_PATH,
+      VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH};
   if (spirv.triangleHit.empty() || spirv.recordCompaction.empty() ||
       spirv.reductionScan.empty() || spirv.radixHistogram.empty() ||
       spirv.radixPrefix.empty() || spirv.radixScatter.empty() ||
@@ -106,14 +110,16 @@ int main() {
   std::vector<std::uint32_t> overflowCpuSurface(rays.size(), kSurfaceSentinel);
   std::vector<float> overflowCpuWeight(rays.size(), kWeightSentinel);
   RayFluxResult overflowCpu{overflowCpuSurface, overflowCpuWeight, 73U};
-  assert(!pipeline.runCpu(rays, triangles, overflowWeights, overflowCpu, error));
+  assert(
+      !pipeline.runCpu(rays, triangles, overflowWeights, overflowCpu, error));
   assert(overflowCpu.count == 73U &&
          overflowCpuSurface[0] == kSurfaceSentinel &&
          overflowCpuWeight[0] == kWeightSentinel);
   std::vector<std::uint32_t> overflowGpuSurface(rays.size(), kSurfaceSentinel);
   std::vector<float> overflowGpuWeight(rays.size(), kWeightSentinel);
   RayFluxResult overflowGpu{overflowGpuSurface, overflowGpuWeight, 73U};
-  assert(!pipeline.runGpu(rays, triangles, overflowWeights, overflowGpu, error));
+  assert(
+      !pipeline.runGpu(rays, triangles, overflowWeights, overflowGpu, error));
   assert(overflowGpu.count == 73U &&
          overflowGpuSurface[0] == kSurfaceSentinel &&
          overflowGpuWeight[0] == kWeightSentinel);
@@ -143,5 +149,55 @@ int main() {
   assert(pipeline.runGpu({}, {}, {}, empty, error));
   assert(empty.count == 42U && emptySurface[0] == 0x12345678U &&
          emptyWeight[1] == -11.0F);
+
+  std::vector<Triangle> tieTriangles;
+  for (int i = 0; i < 9; ++i) {
+    const float x = -10.0F - static_cast<float>(i);
+    tieTriangles.push_back({{{x - 0.25F, -0.25F, 0.0F}},
+                            {{x + 0.25F, -0.25F, 0.0F}},
+                            {{x, 0.25F, 0.0F}}});
+  }
+  tieTriangles.push_back(
+      {{{-1.0F, -1.0F, 0.0F}}, {{1.0F, -1.0F, 0.0F}}, {{0.0F, 1.0F, 0.0F}}});
+  tieTriangles.push_back(tieTriangles.back());
+  for (int i = 0; i < 9; ++i) {
+    const float x = 10.0F + static_cast<float>(i);
+    tieTriangles.push_back({{{x - 0.25F, -0.25F, 0.0F}},
+                            {{x + 0.25F, -0.25F, 0.0F}},
+                            {{x, 0.25F, 0.0F}}});
+  }
+  const std::vector<Ray> tieRays{
+      {{{0.0F, 0.0F, 2.0F}}, {{0.0F, 0.0F, -1.0F}}, 0.0F, 10.0F},
+      {{{0.9F, 0.8F, 2.0F}}, {{0.0F, 0.0F, -1.0F}}, 0.0F, 10.0F},
+      {{{20.0F, 20.0F, 2.0F}}, {{0.0F, 0.0F, -1.0F}}, 0.0F, 10.0F},
+      {{{-10.0F, 0.0F, 2.0F}}, {{0.0F, 0.0F, -1.0F}}, 0.0F, 10.0F},
+      {{{0.0F, 0.0F, 2.0F}}, {{0.0F, 0.0F, -1.0F}}, 2.0F, 10.0F},
+      {{{0.0F, 0.0F, 2.0F}}, {{0.0F, 0.0F, 1.0F}}, 0.0F, 10.0F}};
+  const std::vector<float> tieWeights{1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F};
+  std::vector<std::uint32_t> tieCpuSurface(tieRays.size(), kSurfaceSentinel);
+  std::vector<float> tieCpuWeight(tieRays.size(), kWeightSentinel);
+  RayFluxResult tieCpu{tieCpuSurface, tieCpuWeight, 0U};
+  assert(pipeline.runCpu(tieRays, tieTriangles, tieWeights, tieCpu, error));
+  std::vector<std::uint32_t> tieGpuSurface(tieRays.size(), kSurfaceSentinel);
+  std::vector<float> tieGpuWeight(tieRays.size(), kWeightSentinel);
+  RayFluxResult tieGpu{tieGpuSurface, tieGpuWeight, 0U};
+  assert(pipeline.runGpu(tieRays, tieTriangles, tieWeights, tieGpu, error));
+  assert(pipeline.lastComputeSubmissionCount() == 1U);
+  const bool tieSurface9 =
+      std::find(tieGpuSurface.begin(), tieGpuSurface.begin() + tieGpu.count,
+                9U) != tieGpuSurface.begin() + tieGpu.count;
+  if (!(tieGpu.count == tieCpu.count && tieSurface9)) {
+    std::cerr << "tie result gpu count=" << tieGpu.count
+              << " cpu count=" << tieCpu.count << " first="
+              << (tieGpu.count == 0U ? 0xffffffffU : tieGpuSurface[0])
+              << " cpu-first="
+              << (tieCpu.count == 0U ? 0xffffffffU : tieCpuSurface[0]) << '\n';
+    return 1;
+  }
+  for (std::size_t i = 0; i < tieGpu.count; ++i) {
+    assert(tieGpuSurface[i] == tieCpuSurface[i]);
+    assert(std::bit_cast<std::uint32_t>(tieGpuWeight[i]) ==
+           std::bit_cast<std::uint32_t>(tieCpuWeight[i]));
+  }
   std::cout << "device ray-flux pipeline Vulkan dispatch PASS\n";
 }

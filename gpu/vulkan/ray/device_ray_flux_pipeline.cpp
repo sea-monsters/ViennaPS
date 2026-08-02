@@ -102,6 +102,9 @@ bool DeviceRayFluxPipeline::setup(runtime::ComputeSession *external,
     session_ = &ownedSession_;
   }
   if (!triangleHit_.initialize(*session_, spirv.triangleHit, error) ||
+      (spirv.triangleBvh.empty()
+           ? false
+           : !triangleBvh_.initialize(*session_, spirv.triangleBvh, error)) ||
       !compactor_.initialize(*session_, spirv.recordCompaction,
                              spirv.reductionScan, error) ||
       !sorter_.initialize(*session_, spirv.radixHistogram, spirv.radixPrefix,
@@ -113,6 +116,7 @@ bool DeviceRayFluxPipeline::setup(runtime::ComputeSession *external,
     reset();
     return false;
   }
+  useTriangleBvh_ = !spirv.triangleBvh.empty();
   return true;
 }
 
@@ -126,6 +130,8 @@ void DeviceRayFluxPipeline::reset() {
   sorter_.reset();
   compactor_.reset();
   triangleHit_.reset();
+  triangleBvh_.reset();
+  useTriangleBvh_ = false;
   session_ = nullptr;
   if (ownsSession)
     ownedSession_.reset();
@@ -135,7 +141,8 @@ bool DeviceRayFluxPipeline::isInitialized() const {
   return session_ != nullptr && session_->isValid() &&
          triangleHit_.isInitialized() && compactor_.isInitialized() &&
          sorter_.isInitialized() && reducer_.isInitialized() &&
-         commandBuffer_ != VK_NULL_HANDLE && fence_.get() != VK_NULL_HANDLE;
+         commandBuffer_ != VK_NULL_HANDLE && fence_.get() != VK_NULL_HANDLE &&
+         (!useTriangleBvh_ || triangleBvh_.isInitialized());
 }
 
 const runtime::VulkanDevice &DeviceRayFluxPipeline::device() const {
@@ -182,6 +189,8 @@ bool DeviceRayFluxPipeline::runGpu(std::span<const Ray> rays,
     output.count = 0U;
     return true;
   }
+  if (useTriangleBvh_ && !triangleBvh_.build(triangles, error))
+    return false;
   if (output.surfaceId.size() < rays.size())
     return fail(error,
                 "device ray-flux output capacity must cover every input ray");
@@ -197,8 +206,8 @@ bool DeviceRayFluxPipeline::runGpu(std::span<const Ray> rays,
   RayRecordCompactionDeviceOutput compacted{};
   DeviceRaySurfaceReductionOutput reduced{};
   if (!triangleHit_.createRayBuffers(capacity, origins, directions, error) ||
-      !triangleHit_.createTriangleBuffer(triangles.size(), triangleBuffer,
-                                         error) ||
+      ((!useTriangleBvh_) && !triangleHit_.createTriangleBuffer(
+                                 triangles.size(), triangleBuffer, error)) ||
       !triangleHit_.createHitBuffer(capacity, hits, error) ||
       !weightBuffer.create(*session_, static_cast<VkDeviceSize>(weightBytes),
                            error) ||
@@ -221,7 +230,8 @@ bool DeviceRayFluxPipeline::runGpu(std::span<const Ray> rays,
                            error))
     return false;
   if (!triangleHit_.uploadRays(rays, origins, directions, error) ||
-      !triangleHit_.uploadTriangles(triangles, triangleBuffer, error) ||
+      ((!useTriangleBvh_) &&
+       !triangleHit_.uploadTriangles(triangles, triangleBuffer, error)) ||
       !weightBuffer.upload(*session_, weights.data(),
                            static_cast<VkDeviceSize>(weightBytes), 0U, error) ||
       vkResetCommandBuffer(commandBuffer_, 0U) != VK_SUCCESS)
@@ -238,9 +248,12 @@ bool DeviceRayFluxPipeline::runGpu(std::span<const Ray> rays,
     vkEndCommandBuffer(commandBuffer_);
     return false;
   };
-  if (!triangleHit_.recordDispatch(commandBuffer_, origins, directions,
-                                   triangleBuffer, capacity, triangles.size(),
-                                   hits, capacity, error) ||
+  if ((useTriangleBvh_
+           ? !triangleBvh_.recordDispatch(commandBuffer_, origins, directions,
+                                          capacity, hits, capacity, error)
+           : !triangleHit_.recordDispatch(
+                 commandBuffer_, origins, directions, triangleBuffer, capacity,
+                 triangles.size(), hits, capacity, error)) ||
       !compactor_.recordCompact(commandBuffer_, hits, weightBuffer, capacity,
                                 static_cast<std::uint32_t>(triangles.size()),
                                 capacity, compacted, scanScratch_, error) ||

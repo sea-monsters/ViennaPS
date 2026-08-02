@@ -1605,6 +1605,34 @@ available.
 | Scope boundary | only the fixed etch-front velocity formula is accelerated; coverage evolution, graph diffusion, ray transport, and process/controller routing remain CPU |
 | Path policy | Vulkan SDK and SPIR-V locations are generated or supplied through the local environment; no machine-specific path is tracked |
 
+### P5-B2: exact FP32 CSR graph-diffusion primitive
+
+- Status: accepted locally; surface-process integration pending
+- Date: 2026-08-02
+
+`SurfaceGraphDiffusionFp32` implements one explicit FP32 graph-diffusion
+step for the CSR form of `SurfaceDiffusionSolver::stepExplicit`. One Vulkan
+invocation owns one CSR row and performs its products and accumulation in the
+input edge order, then applies `field + diffusionStep * laplacian`. The shader
+uses `precise`, and its generated SPIR-V contains `NoContraction` decorations
+for the multiply/add operation boundaries.
+
+The host validates a deliberately strict finite-normal-or-zero FP32 domain
+before dispatch: CSR offsets must be monotonic and complete, columns must be
+in range, all intermediate products/sums/scaled values must stay in the
+domain, buffers must be non-aliasing and device-owned, and invalid input is
+rejected before it can write the output buffer. Empty `N=0` CSR input is a
+successful no-op.
+
+| Gate | Result |
+|---|---|
+| CPU differential | CPU row-order volatile FP32 oracle and Intel Arc Vulkan output are bit-exact (max ULP 0) for the five-node, eleven-edge mixed-sign CSR fixture |
+| Surface invariants | constant field is preserved; a symmetric three-node peak is bit-exact, mass-conserving, and smoothing |
+| Dispatch boundaries | unaligned output tail remains intact; empty CSR is a no-op |
+| Fail-closed input | malformed row-offset length, out-of-range columns, NaN weight, undersized output, buffer aliasing/capacity/device mismatch, and strict-domain violations preserve caller output |
+| Standalone build | a fresh `VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE=ON`, probe-off build links the runtime, executes the Intel Arc smoke, and discovers the CTest |
+| Scope boundary | this is a reusable CSR primitive only; `psSurfaceDiffusion` and coverage/process/controller routing remain CPU |
+
 ## Next slice
 
 The segmented rebuild adapter is installed by the level-set controller, the
@@ -1614,8 +1642,8 @@ RK2/RK3 remain deliberately CPU-only until a multi-stage device state machine
 is proven. The first surface velocity formula is now exact but intentionally
 unwired to process selection. Direct negative/non-finite time injection and
 the optional VTK-enabled install/export conflict remain validation gaps. The
-next implementation slices are surface coverage/CSR graph diffusion, then
-deterministic ray reduction, without weakening the current fail-closed gate.
+next implementation slices are surface coverage integration, then deterministic
+ray reduction, without weakening the current fail-closed gate.
 
 After those production-seam gates, the Level Set work advances to HRLE
 sparse rebuild integration, followed by particle/ray and surface/oxidation

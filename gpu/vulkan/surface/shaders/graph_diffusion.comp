@@ -1,0 +1,44 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer RowOffsets {
+  uint values[];
+} rowOffsets;
+layout(set = 0, binding = 1, std430) readonly buffer ColumnIndices {
+  uint values[];
+} columnIndices;
+layout(set = 0, binding = 2, std430) readonly buffer Weights {
+  float values[];
+} weights;
+layout(set = 0, binding = 3, std430) readonly buffer Field {
+  float values[];
+} field;
+layout(set = 0, binding = 4, std430) writeonly buffer Output {
+  float values[];
+} resultBuffer;
+
+layout(push_constant) uniform PushConstants {
+  uint elementCount;
+  uint nonzeroCount;
+  float diffusionStep;
+} params;
+
+void main() {
+  const uint index = gl_GlobalInvocationID.x;
+  if (index >= params.elementCount) {
+    return;
+  }
+
+  precise float laplacian = 0.0;
+  const uint begin = rowOffsets.values[index];
+  const uint end = rowOffsets.values[index + 1u];
+  for (uint edge = begin; edge < end; ++edge) {
+    const uint column = columnIndices.values[edge];
+    precise float product = weights.values[edge] * field.values[column];
+    laplacian = laplacian + product;
+  }
+  precise float scaled = params.diffusionStep * laplacian;
+  precise float result = field.values[index] + scaled;
+  resultBuffer.values[index] = result;
+}

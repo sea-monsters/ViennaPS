@@ -8,6 +8,10 @@ set(VIENNAPS_VULKAN_SURFACE_SHADER
     "${CMAKE_CURRENT_SOURCE_DIR}/shaders/neutral_transport_surface.comp")
 set(VIENNAPS_VULKAN_SURFACE_SPV
     "${CMAKE_CURRENT_BINARY_DIR}/neutral_transport_surface.comp.spv")
+set(VIENNAPS_VULKAN_GRAPH_DIFFUSION_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/graph_diffusion.comp")
+set(VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/graph_diffusion.comp.spv")
 
 find_program(VIENNAPS_VULKAN_SURFACE_SHADER_COMPILER
              NAMES glslc glslangValidator
@@ -30,6 +34,29 @@ if(NOT VIENNAPS_VULKAN_SURFACE_SHADER_COMPILER)
           "[ViennaPS Vulkan Surface] Vulkan SDK detected but no shader compiler found; skipping surface module.")
   return()
 endif()
+
+if("${VIENNAPS_VULKAN_SURFACE_SHADER_COMPILER}" MATCHES ".*glslangValidator.*")
+  add_custom_command(
+    OUTPUT ${VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV}
+    COMMAND ${VIENNAPS_VULKAN_SURFACE_SHADER_COMPILER} -V
+            ${VIENNAPS_VULKAN_GRAPH_DIFFUSION_SHADER} -o
+            ${VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV}
+    DEPENDS ${VIENNAPS_VULKAN_GRAPH_DIFFUSION_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Generating Vulkan graph diffusion SPIR-V shader.")
+else()
+  add_custom_command(
+    OUTPUT ${VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV}
+    COMMAND ${VIENNAPS_VULKAN_SURFACE_SHADER_COMPILER}
+            -o ${VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV}
+            ${VIENNAPS_VULKAN_GRAPH_DIFFUSION_SHADER}
+    DEPENDS ${VIENNAPS_VULKAN_GRAPH_DIFFUSION_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Generating Vulkan graph diffusion SPIR-V shader.")
+endif()
+
+add_custom_target(viennaps-vulkan-graph-diffusion-spv
+  DEPENDS ${VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV})
 
 if("${VIENNAPS_VULKAN_SURFACE_SHADER_COMPILER}" MATCHES ".*glslangValidator.*")
   add_custom_command(
@@ -65,6 +92,39 @@ if(MSVC)
 else()
   target_compile_options(viennaps_vulkan_surface
                          PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+add_library(viennaps_vulkan_graph_diffusion graph_diffusion.cpp)
+add_dependencies(viennaps_vulkan_graph_diffusion
+                 viennaps-vulkan-graph-diffusion-spv)
+target_link_libraries(viennaps_vulkan_graph_diffusion
+                      PUBLIC viennaps_vulkan_compute_runtime Vulkan::Vulkan)
+target_include_directories(viennaps_vulkan_graph_diffusion
+                           PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(viennaps_vulkan_graph_diffusion PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps_vulkan_graph_diffusion PRIVATE /W4 /WX)
+else()
+  target_compile_options(viennaps_vulkan_graph_diffusion
+                         PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH
+               "${VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV}")
+add_executable(viennaps-vulkan-graph-diffusion-smoke
+               graph_diffusion_smoke.cpp)
+add_dependencies(viennaps-vulkan-graph-diffusion-smoke
+                 viennaps-vulkan-graph-diffusion-spv)
+target_compile_features(viennaps-vulkan-graph-diffusion-smoke PRIVATE cxx_std_20)
+target_compile_definitions(
+  viennaps-vulkan-graph-diffusion-smoke PRIVATE
+  "VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH=\"${VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-graph-diffusion-smoke
+                      PRIVATE viennaps_vulkan_graph_diffusion Vulkan::Vulkan)
+
+if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+  add_test(NAME viennaps-vulkan-graph-diffusion-smoke
+           COMMAND viennaps-vulkan-graph-diffusion-smoke)
 endif()
 
 string(REPLACE "\\" "/" VIENNAPS_VULKAN_NEUTRAL_TRANSPORT_SPV_PATH

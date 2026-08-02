@@ -2709,8 +2709,8 @@ fail-closed to CPU when no valid profile exists.
 
 ### PD1-A: borrowed deployment-session bridge initialization
 
-- Status: implemented at the coverage-delta and surface-diffusion bridge layer;
-  Process deployment binding remains the next stage
+- Status: implemented at the coverage-delta and surface-diffusion bridge layer
+  and consumed by the PD1-B Process deployment binding
 - Date: 2026-08-03
 
 Both FP32 surface bridges now accept a validated caller-owned

@@ -659,6 +659,59 @@ add_test(NAME viennaps-vulkan-ray-surface-reduction-smoke
            COMMAND viennaps-vulkan-ray-surface-reduction-smoke)
 endif()
 
+# P5-R1 CPU-built flattened BVH triangle-hit primitive.
+set(VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle_bvh_hit.comp")
+set(VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/triangle_bvh_hit.comp.spv")
+if("${VIENNAPS_VULKAN_RAY_SHADER_COMPILER}" MATCHES ".*glslangValidator.*")
+  add_custom_command(OUTPUT ${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV}
+    COMMAND ${VIENNAPS_VULKAN_RAY_SHADER_COMPILER} -V
+            ${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SHADER} -o
+            ${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV}
+    DEPENDS ${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+else()
+  add_custom_command(OUTPUT ${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV}
+    COMMAND ${VIENNAPS_VULKAN_RAY_SHADER_COMPILER} -o
+            ${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV}
+            ${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SHADER}
+    DEPENDS ${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+endif()
+add_custom_target(viennaps-vulkan-triangle-bvh-hit-spv
+                  DEPENDS ${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV})
+add_library(viennaps_vulkan_triangle_bvh_hit triangle_bvh_hit.cpp)
+add_dependencies(viennaps_vulkan_triangle_bvh_hit
+                 viennaps-vulkan-triangle-bvh-hit-spv
+                 viennaps-vulkan-triangle-hit-spv)
+target_link_libraries(viennaps_vulkan_triangle_bvh_hit PUBLIC
+                      viennaps_vulkan_compute_runtime
+                      viennaps_vulkan_triangle_hit Vulkan::Vulkan)
+target_include_directories(viennaps_vulkan_triangle_bvh_hit PUBLIC
+                           "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(viennaps_vulkan_triangle_bvh_hit PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps_vulkan_triangle_bvh_hit PRIVATE /W4 /WX)
+else()
+  target_compile_options(viennaps_vulkan_triangle_bvh_hit PRIVATE
+                         -Wall -Wextra -Wpedantic -Werror)
+endif()
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH
+               "${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV}")
+add_executable(viennaps-vulkan-triangle-bvh-hit-smoke triangle_bvh_hit_smoke.cpp)
+add_dependencies(viennaps-vulkan-triangle-bvh-hit-smoke
+                 viennaps-vulkan-triangle-bvh-hit-spv)
+target_compile_features(viennaps-vulkan-triangle-bvh-hit-smoke PRIVATE cxx_std_20)
+target_compile_definitions(viennaps-vulkan-triangle-bvh-hit-smoke PRIVATE
+  "VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-triangle-bvh-hit-smoke PRIVATE
+                      viennaps_vulkan_triangle_bvh_hit Vulkan::Vulkan)
+if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+  add_test(NAME viennaps-vulkan-triangle-bvh-hit-smoke
+           COMMAND viennaps-vulkan-triangle-bvh-hit-smoke)
+endif()
+
 # P5-JD device-resident composition. The reusable primitives still own their
 # command buffers; P5-JE will replace this ordered multi-submit baseline with
 # command recording and one terminal submission.

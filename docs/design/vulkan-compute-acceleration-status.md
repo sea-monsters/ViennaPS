@@ -2141,6 +2141,28 @@ the flag is nonzero. The non-recording primitive follows the same contract.
 | Validation boundary | The two affected standalone CTests pass on the local Vulkan device. A complete standalone build remains blocked by the pre-existing `/W4 /WX` C4530 exception-handling warning in `gather_histogram_primitives.cpp`; this slice does not claim that unrelated full-suite gate. |
 | Scope boundary | This adds numerical failure propagation only. It does not add a BVH, reflection/multi-bounce transport, CUDA callable-equivalent surface physics, Process routing, dynamic-output admission, or automatic backend promotion. |
 
+### P5-R1: compute-only flattened BVH triangle traversal
+
+- Status: accepted locally as the first non-brute-force ray-intersection
+  primitive; build and physical-transport integration remain pending
+- Date: 2026-08-03
+
+`TriangleBvhHitPrimitive` builds a median-split flattened BVH on the CPU,
+expands every node bound outward by one FP32 representable value, then uploads
+nodes, packed triangles, and stable original-triangle indices to device-local
+buffers. A six-buffer compute shader traverses that representation; it has no
+Vulkan ray-tracing extension dependency. CPU construction/upload is the
+explicit geometry-change boundary in this slice. Intersection dispatch uploads
+rays and downloads only final hits.
+
+| Gate | Result |
+|---|---|
+| ABI and traversal | A 32-byte node stores conservative bounds, `leftFirst`, and leaf count. Internal nodes reserve adjacent child roots before recursive construction, so `leftFirst` and `leftFirst + 1` remain valid at arbitrary tested depth. |
+| CPU oracle | The smoke compares the raw `TriangleHit` fields from `intersectCpu` against device results. A normal-scale 20-triangle, six-ray tree puts equal-distance IDs 9 and 10 in opposite root branches; the device first visits ID 10 but must replace it with ID 9. A separate `1e-31` x-direction case verifies that a small nonzero slab direction is not culled. A successful empty-BVH rebuild returns all misses without a self-referential root traversal. A deterministic LCG differential over 32 triangles and 16 rays reports zero bit mismatches (seed `0x5EED`). |
+| Transaction boundary | Invalid normal-FP32 inputs and undersized output return before dispatch and preserve caller sentinels. A zero-ray call preserves the output sentinel. |
+| Build and test | A fresh standalone Ninja build using MSVC `19.44.35223` and the local Intel Arc Vulkan adapter builds `viennaps-vulkan-triangle-bvh-hit-smoke`; focused CTest passes 1/1. |
+| Scope boundary | This is CPU-built BVH plus compute traversal only. It does not perform GPU BVH construction/refit, reflection or multi-bounce transport, particle/material physics, device-ray-flux routing, Process integration, or use Vulkan RT extensions. |
+
 ## Next slice
 
 The segmented rebuild adapter is installed by the level-set controller, the
@@ -2157,7 +2179,8 @@ then records those stages with explicit barriers into one compute submission.
 P5-JF completes the next numerical-integrity condition with a device-visible
 status and a fail-closed terminal commit for non-finite or out-of-domain
 intermediate FP32 sums, matching the relevant `reduceCpu` rejection boundary.
-The remaining ray work is physical transport and integration: BVH traversal,
+P5-R1 next supplies compute-only traversal over a CPU-built, device-resident
+flat BVH. The remaining ray work is GPU BVH construction/refit,
 boundary/reflection/multi-bounce behavior, surface-model coupling, and Process
 routing. P5-K2 now populates P5-K1's evidence with an isolated watchdog probe;
 its dedicated raw-word shader and process boundary cannot reuse the HostVisible

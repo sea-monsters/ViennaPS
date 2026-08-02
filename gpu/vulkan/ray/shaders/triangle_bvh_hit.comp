@@ -1,0 +1,101 @@
+// Copyright 2026 ViennaPS
+// SPDX-License-Identifier: MIT
+#version 450
+
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0, std430) readonly buffer RO { vec4 originNear[]; };
+layout(set = 0, binding = 1, std430) readonly buffer RD { vec4 directionFar[]; };
+
+struct Node { vec3 bmin; uint leftFirst; vec3 bmax; uint count; };
+layout(set = 0, binding = 2, std430) readonly buffer BN { Node node[]; };
+layout(set = 0, binding = 3, std430) readonly buffer TR { vec4 vertex[]; };
+layout(set = 0, binding = 4, std430) readonly buffer IX { uint index[]; };
+struct Hit { float t; uint triangleIndex; float u; float v; };
+layout(set = 0, binding = 5, std430) buffer HT { Hit hit[]; };
+
+layout(push_constant) uniform C {
+  uint rayCount;
+  uint nodeCount;
+  uint triangleCount;
+  uint indexCount;
+} c;
+
+precise float dot3(vec3 a, vec3 b) {
+  precise float s = a.x * b.x;
+  s = s + a.y * b.y;
+  s = s + a.z * b.z;
+  return s;
+}
+vec3 sub3(vec3 a, vec3 b) { return vec3(a.x - b.x, a.y - b.y, a.z - b.z); }
+vec3 cross3(vec3 a, vec3 b) {
+  return vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z,
+              a.x * b.y - a.y * b.x);
+}
+bool boxHit(Node n, vec3 o, vec3 d, float tn, float tf) {
+  precise float t0 = tn;
+  precise float t1 = tf;
+  for (uint k = 0u; k < 3u; ++k) {
+    if (d[k] == 0.0) {
+      if (o[k] < n.bmin[k] || o[k] > n.bmax[k]) return false;
+      continue;
+    }
+    precise float inv = 1.0 / d[k];
+    precise float a = (n.bmin[k] - o[k]) * inv;
+    precise float b = (n.bmax[k] - o[k]) * inv;
+    if (a > b) { float q = a; a = b; b = q; }
+    t0 = max(t0, a); t1 = min(t1, b);
+    if (t1 < t0) return false;
+  }
+  return true;
+}
+
+void main() {
+  uint ri = gl_GlobalInvocationID.x;
+  if (ri >= c.rayCount) return;
+  const uint miss = 0xffffffffu;
+  precise float bestT = uintBitsToFloat(0x7f7fffffu);
+  uint bestI = miss;
+  precise float bestU = 0.0;
+  precise float bestV = 0.0;
+  vec3 o = originNear[ri].xyz;
+  vec3 d = directionFar[ri].xyz;
+  float tn = originNear[ri].w;
+  float tf = directionFar[ri].w;
+  uint stack[64];
+  uint sp = 0u;
+  if (c.nodeCount > 0u) stack[sp++] = 0u;
+  while (sp > 0u) {
+    uint ni = stack[--sp];
+    if (ni >= c.nodeCount || !boxHit(node[ni], o, d, tn, min(tf, bestT))) continue;
+    Node n = node[ni];
+    if (n.count > 0u) {
+      for (uint j = 0u; j < n.count; ++j) {
+        uint ti = index[n.leftFirst + j];
+        if (ti >= c.triangleCount) continue;
+        uint base = ti * 3u;
+        vec3 a = vertex[base].xyz, b = vertex[base + 1u].xyz;
+        vec3 cc = vertex[base + 2u].xyz;
+        vec3 e1 = sub3(b, a), e2 = sub3(cc, a), pv = cross3(d, e2);
+        precise float det = dot3(e1, pv);
+        if (isnan(det) || isinf(det) || abs(det) <= 1.0e-7) continue;
+        precise float inv = 1.0 / det;
+        vec3 tv = sub3(o, a);
+        precise float u = dot3(tv, pv) * inv;
+        if (isnan(u) || isinf(u) || u < 0.0 || u > 1.0) continue;
+        vec3 qv = cross3(tv, e1);
+        precise float v = dot3(d, qv) * inv;
+        if (isnan(v) || isinf(v) || v < 0.0 || u + v > 1.0) continue;
+        precise float t = dot3(e2, qv) * inv;
+        if (isnan(t) || isinf(t) || t < tn || t > tf) continue;
+        if (bestI == miss || t < bestT || (t == bestT && ti < bestI)) {
+          bestT = t; bestI = ti; bestU = u; bestV = v;
+        }
+      }
+    } else if (n.leftFirst < c.nodeCount && c.nodeCount - n.leftFirst > 1u &&
+               sp + 2u <= 64u) {
+      stack[sp++] = n.leftFirst;
+      stack[sp++] = n.leftFirst + 1u;
+    }
+  }
+  hit[ri] = Hit(bestT, bestI, bestU, bestV);
+}

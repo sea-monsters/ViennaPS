@@ -111,6 +111,27 @@ public:
       return result;
     }
 
+    const bool forwardEuler = process.getAdvectionParameters().temporalScheme ==
+                              viennals::TemporalSchemeEnum::FORWARD_EULER;
+    if (!forwardEuler) {
+      const std::string unsupportedTemporal =
+          "Level-set Vulkan execution is validated only for Forward Euler; "
+          "Runge-Kutta temporal schemes remain on the CPU.";
+      if (result.manualMode && wantVulkan) {
+        restoreManualState();
+        result.ok = false;
+        result.usingVulkan = false;
+        result.message = "Manual Vulkan requested, but " + unsupportedTemporal;
+        return result;
+      }
+      result.ok = true;
+      result.usingVulkan = false;
+      result.selectedBackend = compute::ComputeBackend::CPU;
+      result.degraded = !result.manualMode;
+      result.message = unsupportedTemporal;
+      return result;
+    }
+
     const std::array workloads{workload};
 
     std::string prepareError;

@@ -243,14 +243,16 @@ struct StepResult {
 
 [[nodiscard]] StepResult runOneStep(
     const viennals::SmartPointer<viennals::Domain<float, 2>> &domain,
-    const viennaps::Process<float, 2>::LevelSetUpdateExecutor &executor = {}) {
+    const viennaps::Process<float, 2>::LevelSetUpdateExecutor &executor = {},
+    const viennals::TemporalSchemeEnum temporalScheme =
+        viennals::TemporalSchemeEnum::FORWARD_EULER) {
   viennals::Advect<float, 2> advect;
   advect.insertNextLevelSet(domain);
   advect.setVelocityField(
       viennals::SmartPointer<ConstantVelocityField>::New(-0.1F));
   advect.setSpatialScheme(
       viennals::SpatialSchemeEnum::ENGQUIST_OSHER_1ST_ORDER);
-  advect.setTemporalScheme(viennals::TemporalSchemeEnum::FORWARD_EULER);
+  advect.setTemporalScheme(temporalScheme);
   advect.setAdvectionTime(0.05);
   advect.setTimeStepRatio(0.4999);
   advect.setDissipationAlpha(0.0);
@@ -326,6 +328,82 @@ int main() try {
   VC_TEST_ASSERT(vulkan.advectedTime > 0.0);
   VC_TEST_ASSERT(vulkan.advectedTime == cpu.advectedTime);
   assertNear(vulkan.nodes, cpu.nodes);
+
+  // The controller must not install a one-stage Vulkan callback when the
+  // Process is configured for a higher-order time scheme.
+  auto rk2Domain = makeProcessDomain();
+  auto rk2Model = viennacore::SmartPointer<AnalyticModel>::New(-0.1F);
+  viennaps::Process<float, 2> rk2Process(rk2Domain, rk2Model, 0.05F);
+  viennaps::AdvectionParameters rk2Parameters;
+  rk2Parameters.temporalScheme =
+      viennals::TemporalSchemeEnum::RUNGE_KUTTA_2ND_ORDER;
+  rk2Process.setParameters(rk2Parameters);
+  Controller rk2Controller;
+  const auto rk2Configuration = rk2Controller.configure(
+      rk2Process, selection, hardware, workload, {},
+      VIENNAPS_LEVELSET_UPDATE_SPV_PATH, profile.path.string());
+  VC_TEST_ASSERT(rk2Configuration.ok);
+  VC_TEST_ASSERT(rk2Configuration.degraded);
+  VC_TEST_ASSERT(!rk2Configuration.usingVulkan);
+  VC_TEST_ASSERT(rk2Configuration.selectedBackend == ComputeBackend::CPU);
+  VC_TEST_ASSERT(!static_cast<bool>(rk2Process.getLevelSetUpdateExecutor()));
+  VC_TEST_ASSERT(!static_cast<bool>(rk2Process.getLevelSetRebuildExecutor()));
+  auto rk2CpuReferenceDomain = makeProcessDomain();
+  const auto rk2CpuReference =
+      runOneStep(rk2CpuReferenceDomain->getSurface(), {},
+                 viennals::TemporalSchemeEnum::RUNGE_KUTTA_2ND_ORDER);
+  VC_TEST_ASSERT(rk2CpuReference.advectedTime > 0.0);
+  VC_TEST_ASSERT(!rk2CpuReference.nodes.empty());
+
+  auto rk3Domain = makeProcessDomain();
+  auto rk3Model = viennacore::SmartPointer<AnalyticModel>::New(-0.1F);
+  viennaps::Process<float, 2> rk3Process(rk3Domain, rk3Model, 0.05F);
+  viennaps::AdvectionParameters rk3Parameters;
+  rk3Parameters.temporalScheme =
+      viennals::TemporalSchemeEnum::RUNGE_KUTTA_3RD_ORDER;
+  rk3Process.setParameters(rk3Parameters);
+  const auto preservedRk3Update =
+      [](const Advect::LevelSetUpdateContext &, Advect::LevelSetUpdateOutput &,
+         std::string &) { return Advect::LevelSetUpdateStatus::ERROR; };
+  const auto preservedRk3Rebuild = [](const Advect::LevelSetRebuildContext &,
+                                      Advect::LevelSetRebuildOutput &,
+                                      std::string &) {
+    return Advect::LevelSetRebuildStatus::ERROR;
+  };
+  rk3Process.setLevelSetUpdateExecutor(preservedRk3Update);
+  rk3Process.setLevelSetRebuildExecutor(preservedRk3Rebuild);
+  rk3Process.setLevelSetUpdateFailurePolicy(
+      viennaps::LevelSetUpdateFailurePolicy::FAIL);
+  ManualSelectionConfig rk3Selection;
+  rk3Selection.selectionMode = SelectionMode::MANUAL;
+  rk3Selection.globalBackend = ComputeBackend::VULKAN;
+  ComputeSessionOptions rk3Device;
+  rk3Device.manualDeviceName = hardware.deviceName;
+  Controller rk3Controller;
+  const auto rk3Configuration = rk3Controller.configure(
+      rk3Process, rk3Selection, hardware, workload, rk3Device,
+      VIENNAPS_LEVELSET_UPDATE_SPV_PATH, profile.path.string());
+  VC_TEST_ASSERT(!rk3Configuration.ok);
+  VC_TEST_ASSERT(!rk3Configuration.usingVulkan);
+  VC_TEST_ASSERT(static_cast<bool>(rk3Process.getLevelSetUpdateExecutor()));
+  VC_TEST_ASSERT(static_cast<bool>(rk3Process.getLevelSetRebuildExecutor()));
+  VC_TEST_ASSERT(rk3Process.getLevelSetUpdateFailurePolicy() ==
+                 viennaps::LevelSetUpdateFailurePolicy::FAIL);
+  auto rk3CpuReferenceDomain = makeProcessDomain();
+  const auto rk3CpuReference =
+      runOneStep(rk3CpuReferenceDomain->getSurface(), {},
+                 viennals::TemporalSchemeEnum::RUNGE_KUTTA_3RD_ORDER);
+  bool rk3FailureThrown = false;
+  try {
+    rk3Process.apply();
+  } catch (const std::runtime_error &) {
+    rk3FailureThrown = true;
+  }
+  VC_TEST_ASSERT(rk3FailureThrown);
+  VC_TEST_ASSERT(rk3Process.getLastProcessResult() ==
+                 viennaps::ProcessResult::FAILURE);
+  VC_TEST_ASSERT(rk3CpuReference.advectedTime > 0.0);
+  VC_TEST_ASSERT(!rk3CpuReference.nodes.empty());
 
   auto strictDomain = makeProcessDomain();
   auto strictModel = viennacore::SmartPointer<AnalyticModel>::New(-0.1F);

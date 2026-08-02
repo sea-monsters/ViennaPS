@@ -1411,7 +1411,7 @@ caller output.
 | Multi-segment contract | the smoke runs with two OpenMP segments; a separate CPU seam matrix validates handled 3D and multi-segment PointData, including `updatePointData=false` |
 | Transaction failure | an empty classification program returns `ERROR` and preserves sentinel domain and source IDs |
 | Lifetime | the copyable executor captures shared ownership of session, primitives, and SPIR-V programs |
-| Residual boundary | the Vulkan adapter is not yet installed by the deployment controller; Vulkan 3D, RK2/RK3, and explicit empty-output-segment execution remain untested; session invalidation is assumed not to race the final publish |
+| Residual boundary | later P4C6 verifies D=3 Forward Euler and P4C7 guards RK2/RK3 on CPU; explicit empty-output-segment execution remains untested and session invalidation is assumed not to race the final publish |
 | Production boundary | device classification and compaction are accelerated; candidate collection, canonical HRLE construction, re-segmentation, and PointData translation remain CPU work |
 
 ### P4C5-C: level-set controller installation and policy routing
@@ -1437,7 +1437,7 @@ policy.
 | Manual bad rebuild | returns failure and restores the pre-call update/rebuild callbacks and policy (an initially empty process remains empty) |
 | Clear | clears update and rebuild callbacks and restores fallback policy |
 | Existing controller regression | auto/manual/stale/shader/gate smoke passes; execution smoke preserves strict rollback |
-| Residual boundary | deployment probe does not yet execute the full primitive/rebuild suite; Vulkan 3D and RK2/RK3 remain untested |
+| Residual boundary | deployment probe does not yet execute the full primitive/rebuild suite; later P4C6 verifies D=3 Forward Euler and P4C7 retains RK2/RK3 on CPU |
 | Path policy | all SDK and generated SPIR-V paths enter through environment/CMake configuration and are not persisted in tracked source |
 
 ### P4C6: real 3D ViennaLS Vulkan rebuild differential
@@ -1472,9 +1472,33 @@ stable segmented execution.
 | Runtime validation | MSVC build plus direct Vulkan smoke with `OMP_NUM_THREADS=2` exits 0 |
 | Path policy | no SDK, dependency, source, shader, or Windows absolute path is tracked |
 
-The remaining Level Set validation gaps are RK2/RK3 runtime differentials and
-the deployment probe's broader 3D matrix; this slice does not change controller
-selection policy or the CPU fallback contract.
+The remaining Level Set validation gap is the deployment probe's broader 3D
+matrix; this slice does not change controller selection policy or the CPU
+fallback contract.
+
+### P4C7: temporal-scheme safety gate
+
+- Status: accepted locally
+- Date: 2026-08-02
+
+`Process` now exposes a read-only `AdvectionParameters` view so the Vulkan
+controller can inspect the actual temporal scheme rather than inferring it from
+the callback. The current device update executor is verified only for a single
+Forward-Euler step. It therefore remains installed only for Forward Euler.
+RK2/RK3 Auto selection clears both level-set callbacks and deliberately returns
+a degraded CPU plan; a Manual Vulkan request fails strictly and restores the
+complete pre-call callbacks and failure policy.
+
+| Gate | Result |
+|---|---|
+| Forward Euler | Vulkan update and rebuild callbacks remain installed; the real sphere CPU/Vulkan execution regression passes |
+| RK2 Auto | returns CPU/degraded and clears update/rebuild callbacks; a non-empty CPU RK2 oracle advances normally |
+| RK3 Manual | returns an error, restores prior callbacks and `FAIL` policy, and the strict process path reports failure |
+| API boundary | only a const `Process::getAdvectionParameters()` accessor was added; no mutable context is exposed |
+| Residual boundary | a future multi-stage Vulkan callback state machine is required before RK2/RK3 can be accelerated |
+
+This is a correctness gate, not a claim of RK acceleration: unsupported
+temporal schemes cannot silently run the one-step shader for every stage.
 
 ## P4D-deployment-probe audit: persisted automatic selection gap
 
@@ -1554,13 +1578,14 @@ passed"`; the generated schema-2 profile round-trips and validates.
 
 ## Next slice
 
-The segmented rebuild adapter is installed by the level-set controller, and
-the deployment probe now executes the small FP32 update plus HRLE transaction
-before persisting the primitive gate. Vulkan 3D and RK2/RK3 execution, direct
-negative/non-finite time injection, and the optional VTK-enabled install/export
-conflict remain validation gaps. The next deployment slice should broaden the
-oracle matrix and add the remaining primitive, ray, and surface/oxidation
-suites without weakening the current fail-closed gate.
+The segmented rebuild adapter is installed by the level-set controller, the
+deployment probe executes the small FP32 update plus HRLE transaction before
+persisting the primitive gate, and D=3 Forward Euler has a real differential.
+RK2/RK3 remain deliberately CPU-only until a multi-stage device state machine
+is proven. Direct negative/non-finite time injection and the optional
+VTK-enabled install/export conflict remain validation gaps. The next deployment
+slice should broaden the oracle matrix and add the remaining primitive, ray,
+and surface/oxidation suites without weakening the current fail-closed gate.
 
 After those production-seam gates, the Level Set work advances to HRLE
 sparse rebuild integration, followed by particle/ray and surface/oxidation

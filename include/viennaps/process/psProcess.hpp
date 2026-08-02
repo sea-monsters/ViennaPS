@@ -85,6 +85,10 @@ public:
     context_.advectionParams = p;
   }
 
+  [[nodiscard]] const AdvectionParameters &getAdvectionParameters() const {
+    return context_.advectionParams;
+  }
+
   void setParameters(const CoverageParameters &p) {
     context_.coverageParams = p;
   }

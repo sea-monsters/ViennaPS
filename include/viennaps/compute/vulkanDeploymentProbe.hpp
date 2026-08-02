@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -42,6 +43,9 @@ struct VulkanDeploymentProbeOptions {
   std::string executable;
   // Absolute path selected by the deployment host for this one-shot output.
   std::filesystem::path outputPath;
+  // When deployment detection selected a non-default physical device, forward
+  // its Vulkan enumeration index to the strict child probe.
+  std::optional<std::uint32_t> strictFp32DeviceIndex;
   std::chrono::milliseconds watchdog = std::chrono::milliseconds(65'000);
   VulkanProbeProcessLauncher launcher;
 };
@@ -260,9 +264,13 @@ makeVulkanDeploymentProfileProbe(VulkanDeploymentProbeOptions options) {
       return false;
     }
     ec.clear();
-    const std::vector<std::string> argv = {
-        options.executable, "--strict-fp32-smoke", "--write-deployment-profile",
-        outputPath.string(), "--validate-profile"};
+    std::vector<std::string> argv = {options.executable, "--strict-fp32-smoke",
+                                     "--write-deployment-profile",
+                                     outputPath.string(), "--validate-profile"};
+    if (options.strictFp32DeviceIndex.has_value()) {
+      argv.push_back("--strict-fp32-device-index");
+      argv.push_back(std::to_string(*options.strictFp32DeviceIndex));
+    }
     auto cleanup = [&]() {
       std::error_code cleanupError;
       std::filesystem::remove(outputPath, cleanupError);

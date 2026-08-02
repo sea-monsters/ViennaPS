@@ -2202,3 +2202,31 @@ failure.
 | Fail closed | focused test covers nonzero/timeout, malformed output, mismatched identity, and invalid strict evidence; generated outputs are removed |
 | Process isolation | default path passes a vector of argv tokens to shell-free process creation and retains the existing strict child watchdog boundary; no SDK path is introduced |
 | Scope boundary | only the public adapter header, focused CPU test, and this design section are changed; Process/controller, CUDA/OptiX, shaders, and profile persistence are untouched |
+
+### P5-K3D: deployment bootstrap composition core
+
+- Status: implemented as a synchronous, CPU-testable composition helper; it
+  remains outside Process/controller execution paths
+- Date: 2026-08-03
+
+`bootstrapVulkanDeploymentProfile` composes an injectable hardware collector,
+the existing strict probe factory, and `provisionDeploymentProfile`. AUTO and
+Manual-Vulkan configurations collect hardware and invoke the probe only when
+the selected profile is missing, stale, or invalid. The runtime facade collects
+the exact Vulkan physical-device identity and enumeration index, then forwards
+that index to the strict child probe when known. Probe output is generated
+under a unique absolute path in an existing caller-selected transient directory
+(or the system temporary directory selected by the runtime facade) and is
+removed by the existing probe adapter. A manual configuration bypasses both
+collector and probe only when every requested stage resolves to CPU, and then
+succeeds with an incomplete fingerprint. Collector, path, launcher,
+validation, and persistence failures retain the existing CPU fail-closed plan.
+
+| Gate | Result |
+|---|---|
+| Composition/cardinality | CPU-only fake collector/launcher test covers one collection and one probe for a missing profile |
+| Manual CPU bypass | focused test succeeds without hardware, collector, probe executable, or launcher callbacks |
+| Failure boundary | collector failure and unavailable transient output produce a CPU plan without invoking the probe |
+| Temp hygiene | generated output is unique under the selected directory; probe adapter removes it on success/failure |
+| Runtime identity | actual Vulkan smoke verifies default and manual-UUID sessions produce the same complete fingerprint and physical-device index; the index reaches the probe argv when known |
+| Scope boundary | bootstrap core, runtime selected-device collector/facade, focused CPU test, runtime smoke/CMake wiring, probe index forwarding, and this status section are changed; Process/controller, CUDA/OptiX, shaders, and profile persistence remain untouched |

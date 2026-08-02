@@ -65,6 +65,7 @@ endif()
 add_library(viennaps_vulkan_compute_runtime
   vulkan_compute_runtime.cpp
   compute_session.cpp
+  deployment_hardware_fingerprint.cpp
   deployment_compute_context.cpp
 )
 target_include_directories(viennaps_vulkan_compute_runtime
@@ -82,6 +83,24 @@ else()
 endif()
 
 if(VIENNAPS_BUILD_VULKAN_SMOKE OR VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE)
+  add_executable(viennaps-deployment-hardware-fingerprint-smoke
+                 deployment_hardware_fingerprint_smoke.cpp)
+  target_link_libraries(viennaps-deployment-hardware-fingerprint-smoke
+    PRIVATE viennaps_vulkan_compute_runtime Vulkan::Vulkan)
+  target_compile_features(viennaps-deployment-hardware-fingerprint-smoke
+                          PRIVATE cxx_std_20)
+  if(MSVC)
+    target_compile_options(viennaps-deployment-hardware-fingerprint-smoke
+                           PRIVATE /W4 /WX)
+  else()
+    target_compile_options(viennaps-deployment-hardware-fingerprint-smoke
+                           PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  endif()
+  if(BUILD_TESTING)
+    add_test(NAME viennaps-deployment-hardware-fingerprint-smoke
+             COMMAND viennaps-deployment-hardware-fingerprint-smoke)
+  endif()
+
   add_executable(viennaps-deployment-compute-context-smoke
                  deployment_compute_context_smoke.cpp)
   target_link_libraries(viennaps-deployment-compute-context-smoke

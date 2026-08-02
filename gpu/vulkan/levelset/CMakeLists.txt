@@ -366,6 +366,26 @@ else()
                          PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+if(VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE AND TARGET ViennaPS)
+  add_executable(viennaps-vulkan-levelset-deployment-session-smoke
+                 levelset_deployment_session_smoke.cpp)
+  target_link_libraries(viennaps-vulkan-levelset-deployment-session-smoke
+                        PRIVATE ViennaPS viennaps_vulkan_compute_runtime)
+  target_compile_features(viennaps-vulkan-levelset-deployment-session-smoke
+                           PRIVATE cxx_std_20)
+  if(MSVC)
+    target_compile_options(viennaps-vulkan-levelset-deployment-session-smoke
+                           PRIVATE /W4)
+  else()
+    target_compile_options(viennaps-vulkan-levelset-deployment-session-smoke
+                           PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+elseif(VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE)
+  message(STATUS
+          "[ViennaPS Vulkan Level Set] deployment-session smoke requires the "
+          "top-level ViennaPS target; skipping standalone GPU build.")
+endif()
+
 if(BUILD_TESTING)
   add_test(NAME viennaps-vulkan-levelset-update-smoke
            COMMAND viennaps-vulkan-levelset-update-smoke)
@@ -380,5 +400,9 @@ if(BUILD_TESTING)
              COMMAND viennaps-vulkan-hrle-rebuild-executor-smoke)
     set_tests_properties(viennaps-vulkan-hrle-rebuild-executor-smoke
                          PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=2" TIMEOUT 30)
+  endif()
+  if(TARGET viennaps-vulkan-levelset-deployment-session-smoke)
+    add_test(NAME viennaps-vulkan-levelset-deployment-session-smoke
+             COMMAND viennaps-vulkan-levelset-deployment-session-smoke)
   endif()
 endif()

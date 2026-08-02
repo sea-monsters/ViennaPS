@@ -2240,3 +2240,41 @@ validation, and persistence failures retain the existing CPU fail-closed plan.
 | Temp hygiene | generated output is unique under the selected directory; probe adapter removes it on success/failure |
 | Runtime identity | actual Vulkan smoke verifies default and manual-UUID sessions produce the same complete fingerprint and physical-device index; the index reaches the probe argv when known |
 | Scope boundary | bootstrap core, runtime selected-device collector/facade, focused CPU test, runtime smoke/CMake wiring, probe index forwarding, and this status section are changed; Process/controller, CUDA/OptiX, shaders, and profile persistence remain untouched |
+
+### P5-K3E: Level Set deployment-session integration seam
+
+- Status: implemented and CPU-executed; full top-level CTest remains a
+  long-running dependency gate
+- Date: 2026-08-03
+
+`LevelSetDeploymentSession<D>` is the application-facing deployment-thread
+facade for Level Set execution. `provision()` composes the existing selected
+device bootstrap exactly once and caches the request, selected hardware,
+resolved decision, and effective probe executable, including a fail-closed
+CPU decision. A subsequent `provision()` returns the cached result with
+`reused=true`; callers must use `resetDeployment()` before changing workload,
+selection, device, profile, or probe configuration. `configure()` is strictly
+cache-only and delegates to `configureResolved()`, so it cannot repeat profile
+I/O, hardware collection, or strict probing during a simulation task.
+
+The explicit bootstrap probe path has precedence over
+`VIENNAPS_DEVICE_PROBE_PATH`; no SDK, VTK, or fixed local path is recorded in
+source. A Manual-CPU request retains the deployment core's executable bypass
+and never initializes Vulkan or invokes a collector/probe. AUTO and
+Manual-Vulkan retain the existing CPU fail-closed or explicit-error behavior.
+
+The level-set CMake slice now enables the prerequisite primitives subproject
+when the level-set smoke is selected, and publishes `Vulkan::Vulkan` as a
+public runtime dependency because runtime public headers expose Vulkan types.
+The new smoke is intentionally emitted only by a top-level build that provides
+the `ViennaPS` target; the standalone GPU subproject reports the omission
+instead of producing an under-specified executable.
+
+| Gate | Result |
+|---|---|
+| CPU deployment execution | a locally compiled temporary executable passed Manual-CPU bypass, repeat-provision cache reuse, explicit-probe-over-environment precedence, environment fallback, fake collector/probe cardinality, and fail-closed cache retention; no CUDA device was used |
+| Cache-only controller seam | an isolated MSVC C++20 syntax check, against the project's versioned ViennaLS patch, compiled the `configure()`/`configureResolved()` type path; it introduced no dependency-cache modification |
+| CMake dependency contract | standalone level-set configuration now reaches generation with the primitives dependency present; the deployment-session smoke is deliberately skipped unless the top-level `ViennaPS` target supplies ViennaHRLE/ViennaLS include contracts |
+| Residual top-level gate | local VTK-source configuration reached VTK feature detection but exceeds the bounded interactive configuration window; a future long-running top-level build must execute the registered deployment-session CTest with the same environment-provided SDK/dependency paths |
+| Temp hygiene | all temporary compile overlays and `build-p5k3e-*` validation directories were removed after validation; the generic `build` directory was preserved |
+| Scope boundary | deployment-session header/smoke, Vulkan CMake dependency propagation, and this status entry are changed; Process/controller behavior, CUDA/OptiX, shader algorithms, profile persistence, and fixed local paths remain untouched |

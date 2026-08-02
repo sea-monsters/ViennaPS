@@ -73,7 +73,7 @@ target_include_directories(viennaps_vulkan_compute_runtime
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/../../../include/viennaps
 )
-target_link_libraries(viennaps_vulkan_compute_runtime PRIVATE Vulkan::Vulkan)
+target_link_libraries(viennaps_vulkan_compute_runtime PUBLIC Vulkan::Vulkan)
 target_compile_features(viennaps_vulkan_compute_runtime PRIVATE cxx_std_20)
 if(MSVC)
   target_compile_options(viennaps_vulkan_compute_runtime PRIVATE /W4 /WX /EHsc)

@@ -37,6 +37,7 @@ public:
                                 const ComputeSessionOptions &options = {});
   void reset();
   [[nodiscard]] bool isValid() const;
+  [[nodiscard]] std::uint64_t generation() const;
 
   [[nodiscard]] VulkanInstance &instance();
   [[nodiscard]] const VulkanInstance &instance() const;
@@ -64,6 +65,11 @@ private:
   std::string configuredDeviceName_{};
   std::string configuredDeviceUuid_{};
   bool initialized_{false};
+  std::uint64_t generation_{0};
 };
+
+// Generation-aware resources use this query before destroying Vulkan handles.
+// Session reset and resource reset must not run concurrently.
+[[nodiscard]] bool isLiveComputeSessionGeneration(std::uint64_t generation);
 
 } // namespace viennaps::vulkan::runtime

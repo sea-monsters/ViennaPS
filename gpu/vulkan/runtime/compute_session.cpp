@@ -8,15 +8,54 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <limits>
+#include <mutex>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace {
 
 constexpr std::uint32_t kUnsetManualDeviceIndex =
     std::numeric_limits<std::uint32_t>::max();
+
+std::mutex &generationMutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
+std::unordered_set<std::uint64_t> &liveGenerations() {
+  static std::unordered_set<std::uint64_t> generations;
+  return generations;
+}
+
+bool registerGeneration(const std::uint64_t generation) {
+  try {
+    std::lock_guard lock(generationMutex());
+    return liveGenerations().insert(generation).second;
+  } catch (...) {
+    return false;
+  }
+}
+
+void unregisterGeneration(const std::uint64_t generation) {
+  if (generation == 0u) {
+    return;
+  }
+  std::lock_guard lock(generationMutex());
+  liveGenerations().erase(generation);
+}
+
+std::uint64_t allocateGeneration() {
+  static std::atomic<std::uint64_t> next{1u};
+  std::uint64_t generation = next.fetch_add(1u, std::memory_order_relaxed);
+  while (generation == 0u) {
+    generation = next.fetch_add(1u, std::memory_order_relaxed);
+  }
+  return generation;
+}
 
 [[nodiscard]] bool isHexDigit(const char ch) {
   return std::isxdigit(static_cast<unsigned char>(ch)) != 0;
@@ -205,12 +244,13 @@ ComputeSession::ComputeSession(ComputeSession &&other) noexcept
       configuredDeviceIndex_(other.configuredDeviceIndex_),
       configuredDeviceName_(std::move(other.configuredDeviceName_)),
       configuredDeviceUuid_(std::move(other.configuredDeviceUuid_)),
-      initialized_(other.initialized_) {
+      initialized_(other.initialized_), generation_(other.generation_) {
   other.selection_ = {};
   other.configuredDeviceIndex_ = kUnsetManualDeviceIndex;
   other.configuredDeviceName_.clear();
   other.configuredDeviceUuid_.clear();
   other.initialized_ = false;
+  other.generation_ = 0;
 }
 
 ComputeSession &ComputeSession::operator=(ComputeSession &&other) noexcept {
@@ -224,11 +264,13 @@ ComputeSession &ComputeSession::operator=(ComputeSession &&other) noexcept {
     configuredDeviceName_ = std::move(other.configuredDeviceName_);
     configuredDeviceUuid_ = std::move(other.configuredDeviceUuid_);
     initialized_ = other.initialized_;
+    generation_ = other.generation_;
     other.selection_ = {};
     other.configuredDeviceIndex_ = kUnsetManualDeviceIndex;
     other.configuredDeviceName_.clear();
     other.configuredDeviceUuid_.clear();
     other.initialized_ = false;
+    other.generation_ = 0;
   }
   return *this;
 }
@@ -276,15 +318,23 @@ bool ComputeSession::initialize(std::string &error,
   configuredDeviceIndex_ = options.manualDeviceIndex;
   configuredDeviceName_ = options.manualDeviceName;
   configuredDeviceUuid_ = options.manualDeviceUuid;
+  generation_ = allocateGeneration();
+  if (!registerGeneration(generation_)) {
+    generation_ = 0;
+    reset();
+    error = "Failed to register Vulkan compute session generation.";
+    return false;
+  }
   initialized_ = true;
   return true;
 }
 
 void ComputeSession::reset() {
-  if (!initialized_ && !commandContext_.pool() && !device_.isValid() &&
-      !instance_.isValid()) {
+  if (!initialized_ && generation_ == 0u && !commandContext_.pool() &&
+      !device_.isValid() && !instance_.isValid()) {
     return;
   }
+  unregisterGeneration(generation_);
   commandContext_.reset();
   device_.reset();
   instance_.reset();
@@ -293,6 +343,7 @@ void ComputeSession::reset() {
   configuredDeviceName_.clear();
   configuredDeviceUuid_.clear();
   initialized_ = false;
+  generation_ = 0;
 }
 
 bool ComputeSession::isValid() const {
@@ -313,6 +364,15 @@ const ComputeDeviceSelection &ComputeSession::selection() const {
 }
 VkInstance ComputeSession::instanceHandle() const { return instance_.get(); }
 VkDevice ComputeSession::deviceHandle() const { return device_.get(); }
+std::uint64_t ComputeSession::generation() const { return generation_; }
+
+bool isLiveComputeSessionGeneration(const std::uint64_t generation) {
+  if (generation == 0u) {
+    return false;
+  }
+  std::lock_guard lock(generationMutex());
+  return liveGenerations().contains(generation);
+}
 
 bool ComputeSession::optionsMatch(const ComputeSessionOptions &options) const {
   return configuredDeviceIndex_ == options.manualDeviceIndex &&

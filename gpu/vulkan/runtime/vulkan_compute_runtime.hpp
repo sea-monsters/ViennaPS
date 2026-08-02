@@ -146,8 +146,10 @@ private:
 // Device-local storage buffer used by the shared ComputeSession pipeline.
 // Data transfer is deliberately submitted through the owning session so the
 // command pool, queue, and device lifetime stay on one synchronization path.
-// The caller must reset buffers before resetting/reinitializing that session;
-// the current handle check does not provide generation-token stale detection.
+// Generation-aware buffers reject transfers after session reset/reinitialize;
+// session reset must not run concurrently with buffer transfer/reset. Legacy
+// buffers created through the VulkanDevice overload still require reset before
+// device destroy.
 class DeviceBuffer {
 public:
   DeviceBuffer() = default;
@@ -159,6 +161,8 @@ public:
   DeviceBuffer &operator=(DeviceBuffer &&other) noexcept;
 
   [[nodiscard]] bool create(VulkanDevice &device, VkDeviceSize bytes,
+                            std::string &error);
+  [[nodiscard]] bool create(ComputeSession &session, VkDeviceSize bytes,
                             std::string &error);
   void reset();
 
@@ -178,13 +182,19 @@ public:
   [[nodiscard]] VkDeviceMemory memory() const;
   [[nodiscard]] VkDeviceSize size() const;
   [[nodiscard]] VkDevice ownerDevice() const;
+  [[nodiscard]] std::uint64_t ownerSessionGeneration() const;
 
 private:
+  [[nodiscard]] bool createImpl(VulkanDevice &device, VkDeviceSize bytes,
+                                std::uint64_t sessionGeneration,
+                                std::string &error);
+
   VkDevice device_{VK_NULL_HANDLE};
   VkDevice deviceForDestroy_{VK_NULL_HANDLE};
   VkBuffer buffer_{VK_NULL_HANDLE};
   VkDeviceMemory memory_{VK_NULL_HANDLE};
   VkDeviceSize bytes_{0};
+  std::uint64_t ownerSessionGeneration_{0};
 };
 
 class ShaderModule {

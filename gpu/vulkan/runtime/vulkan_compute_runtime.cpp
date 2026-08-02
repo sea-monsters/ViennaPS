@@ -579,12 +579,14 @@ DeviceBuffer::~DeviceBuffer() { reset(); }
 
 DeviceBuffer::DeviceBuffer(DeviceBuffer &&other) noexcept
     : device_(other.device_), deviceForDestroy_(other.deviceForDestroy_),
-      buffer_(other.buffer_), memory_(other.memory_), bytes_(other.bytes_) {
+      buffer_(other.buffer_), memory_(other.memory_), bytes_(other.bytes_),
+      ownerSessionGeneration_(other.ownerSessionGeneration_) {
   other.device_ = VK_NULL_HANDLE;
   other.deviceForDestroy_ = VK_NULL_HANDLE;
   other.buffer_ = VK_NULL_HANDLE;
   other.memory_ = VK_NULL_HANDLE;
   other.bytes_ = 0;
+  other.ownerSessionGeneration_ = 0;
 }
 
 DeviceBuffer &DeviceBuffer::operator=(DeviceBuffer &&other) noexcept {
@@ -595,17 +597,35 @@ DeviceBuffer &DeviceBuffer::operator=(DeviceBuffer &&other) noexcept {
     buffer_ = other.buffer_;
     memory_ = other.memory_;
     bytes_ = other.bytes_;
+    ownerSessionGeneration_ = other.ownerSessionGeneration_;
     other.device_ = VK_NULL_HANDLE;
     other.deviceForDestroy_ = VK_NULL_HANDLE;
     other.buffer_ = VK_NULL_HANDLE;
     other.memory_ = VK_NULL_HANDLE;
     other.bytes_ = 0;
+    other.ownerSessionGeneration_ = 0;
   }
   return *this;
 }
 
 bool DeviceBuffer::create(VulkanDevice &device, const VkDeviceSize bytes,
                           std::string &error) {
+  return createImpl(device, bytes, 0u, error);
+}
+
+bool DeviceBuffer::create(ComputeSession &session, const VkDeviceSize bytes,
+                          std::string &error) {
+  error.clear();
+  if (!session.isValid() || session.generation() == 0u) {
+    error = "Compute session is not initialized.";
+    return false;
+  }
+  return createImpl(session.device(), bytes, session.generation(), error);
+}
+
+bool DeviceBuffer::createImpl(VulkanDevice &device, const VkDeviceSize bytes,
+                              const std::uint64_t sessionGeneration,
+                              std::string &error) {
   error.clear();
   if (bytes == 0) {
     error = "Requested device buffer size is zero.";
@@ -616,7 +636,8 @@ bool DeviceBuffer::create(VulkanDevice &device, const VkDeviceSize bytes,
     return false;
   }
   if (isValid()) {
-    if (device_ == device.get() && bytes_ == bytes) {
+    if (device_ == device.get() && bytes_ == bytes &&
+        ownerSessionGeneration_ == sessionGeneration) {
       return true;
     }
     error = "DeviceBuffer is already initialized with different properties.";
@@ -673,14 +694,20 @@ bool DeviceBuffer::create(VulkanDevice &device, const VkDeviceSize bytes,
   buffer_ = buffer;
   memory_ = memory;
   bytes_ = bytes;
+  ownerSessionGeneration_ = sessionGeneration;
   return true;
 }
 
 void DeviceBuffer::reset() {
-  if (buffer_ != VK_NULL_HANDLE && deviceForDestroy_ != VK_NULL_HANDLE) {
+  const bool canDestroy =
+      ownerSessionGeneration_ == 0u ||
+      isLiveComputeSessionGeneration(ownerSessionGeneration_);
+  if (canDestroy && buffer_ != VK_NULL_HANDLE &&
+      deviceForDestroy_ != VK_NULL_HANDLE) {
     vkDestroyBuffer(deviceForDestroy_, buffer_, nullptr);
   }
-  if (memory_ != VK_NULL_HANDLE && deviceForDestroy_ != VK_NULL_HANDLE) {
+  if (canDestroy && memory_ != VK_NULL_HANDLE &&
+      deviceForDestroy_ != VK_NULL_HANDLE) {
     vkFreeMemory(deviceForDestroy_, memory_, nullptr);
   }
   device_ = VK_NULL_HANDLE;
@@ -688,6 +715,7 @@ void DeviceBuffer::reset() {
   buffer_ = VK_NULL_HANDLE;
   memory_ = VK_NULL_HANDLE;
   bytes_ = 0;
+  ownerSessionGeneration_ = 0;
 }
 
 namespace {
@@ -701,6 +729,11 @@ namespace {
   }
   if (!buffer.isValid()) {
     error = "DeviceBuffer has not been created.";
+    return false;
+  }
+  if (buffer.ownerSessionGeneration() != 0u &&
+      buffer.ownerSessionGeneration() != session.generation()) {
+    error = "DeviceBuffer belongs to a stale or different session generation.";
     return false;
   }
   if (buffer.ownerDevice() != session.deviceHandle()) {
@@ -910,6 +943,13 @@ bool DeviceBuffer::copyTo(ComputeSession &session, DeviceBuffer &destination,
       !validateDeviceRange(destination, bytes, destinationOffset, error)) {
     return false;
   }
+  if ((ownerSessionGeneration() != 0u &&
+       ownerSessionGeneration() != session.generation()) ||
+      (destination.ownerSessionGeneration() != 0u &&
+       destination.ownerSessionGeneration() != session.generation())) {
+    error = "DeviceBuffer belongs to a stale or different session generation.";
+    return false;
+  }
   if (ownerDevice() != session.deviceHandle() ||
       destination.ownerDevice() != session.deviceHandle()) {
     error = "DeviceBuffer and ComputeSession use different Vulkan devices.";
@@ -971,6 +1011,9 @@ VkBuffer DeviceBuffer::handle() const { return buffer_; }
 VkDeviceMemory DeviceBuffer::memory() const { return memory_; }
 VkDeviceSize DeviceBuffer::size() const { return bytes_; }
 VkDevice DeviceBuffer::ownerDevice() const { return device_; }
+std::uint64_t DeviceBuffer::ownerSessionGeneration() const {
+  return ownerSessionGeneration_;
+}
 
 ShaderModule::~ShaderModule() { reset(); }
 

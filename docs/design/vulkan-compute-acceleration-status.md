@@ -1160,11 +1160,14 @@ releasing a command buffer whose submitted transfer might still be pending.
 The contract rejects zero-sized allocation or transfer, null host data,
 uninitialized buffers, out-of-range copies, aliases, different logical Vulkan
 devices, and incompatible repeated creation. Repeating creation with the same
-device and size is idempotent. Existing host-visible APIs remain intact. The
-buffer must be reset before its owning session is reset or destroyed; a
-session-generation token for detecting stale handles after reset/reinitialize
-is not implemented yet and remains a gate before the production resident
-pipeline owns buffers across session transitions.
+device, size, and session generation is idempotent. Existing host-visible APIs
+remain intact. A process-unique non-zero `ComputeSession` generation now moves
+with the session, remains stable across idempotent initialization, and changes
+after reset/reinitialize. Generation-aware buffers reject foreign or stale
+sessions before transfer. A stale wrapper skips destruction through its dead
+Vulkan device; legacy handle-only buffers retain the compatibility requirement
+to reset before device destruction. Session reset must not run concurrently
+with buffer transfer or reset.
 
 The same slice corrects Vulkan buffer teardown order for host-visible and
 device-local buffers: the bound buffer is destroyed before its memory is
@@ -1175,13 +1178,14 @@ download round trip, move state, and the principal validation failures.
 |---|---|
 | Device-local allocation | storage and bidirectional transfer usage pass on the selected Vulkan device |
 | Exact transfer | upload, device copy, and download preserve four uint32 values exactly |
-| Session isolation | a buffer created by one logical device is rejected by a different session |
+| Session isolation | device and generation must match; foreign and reset/reinitialized sessions are rejected |
+| Generation lifecycle | idempotent initialize and session moves retain the token; reset clears it; reinitialize changes it |
 | Transfer safety | zero, null, uninitialized, out-of-range, alias, and size mismatch cases fail closed |
 | Runtime compatibility | deployment context, runtime compute, compute session, and device-buffer smokes pass 4/4 |
 | No-SDK behavior | the 17 relevant CPU, policy, HRLE, executor, and probe tests pass |
 | Deployment schema | no schema change; use existing suite gate, estimated bytes, and safe working-set threshold |
 | Conservative HRLE peak | 2D is at least `120N + 8`; 3D is at least `152N + 8`, plus scan scratch and alignment |
-| Residual boundary | session generation, timeout/deferred cleanup, device scan overloads, shaders, and materialization remain pending |
+| Residual boundary | concurrent reset, timeout/deferred cleanup, device scan overloads, shaders, and materialization remain pending |
 | Path policy | no SDK, dependency, source checkout, or build-cache path is tracked |
 
 The deployment-time profile already contains `vulkanPrimitiveSuitePass` and

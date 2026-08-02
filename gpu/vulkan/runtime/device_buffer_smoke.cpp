@@ -33,6 +33,16 @@ int main() {
     std::cerr << "session initialization failed: " << error << '\n';
     return 1;
   }
+  const auto initialGeneration = session.generation();
+  if (initialGeneration == 0u) {
+    std::cerr << "session generation is zero.\n";
+    return 1;
+  }
+  error.clear();
+  if (!session.initialize(error) || session.generation() != initialGeneration) {
+    std::cerr << "idempotent session initialization changed generation.\n";
+    return 1;
+  }
 
   static_assert(!std::is_copy_constructible_v<DeviceBuffer>);
   static_assert(!std::is_copy_assignable_v<DeviceBuffer>);
@@ -43,6 +53,13 @@ int main() {
       !destination.create(session.device(), 4u * sizeof(std::uint32_t),
                           error)) {
     std::cerr << "device buffer creation failed: " << error << '\n';
+    return 1;
+  }
+
+  DeviceBuffer generationBuffer{};
+  if (!generationBuffer.create(session, sizeof(std::uint32_t), error) ||
+      generationBuffer.ownerSessionGeneration() != initialGeneration) {
+    std::cerr << "generation-aware buffer creation failed: " << error << '\n';
     return 1;
   }
 
@@ -127,6 +144,70 @@ int main() {
                      error, "session mismatch upload")) {
     return 1;
   }
+
+  error.clear();
+  if (!expectFailure(generationBuffer.upload(foreignSession, expected.data(),
+                                             sizeof(std::uint32_t), 0u, error),
+                     error, "generation mismatch upload")) {
+    return 1;
+  }
+
+  ComputeSession movedSession{std::move(session)};
+  if (session.generation() != 0u ||
+      movedSession.generation() != initialGeneration ||
+      !generationBuffer.upload(movedSession, expected.data(),
+                                sizeof(std::uint32_t), 0u, error)) {
+    std::cerr << "session move did not preserve generation-aware buffer.\n";
+    return 1;
+  }
+
+  ComputeSession assignedSession{};
+  assignedSession = std::move(movedSession);
+  if (movedSession.generation() != 0u ||
+      assignedSession.generation() != initialGeneration ||
+      !generationBuffer.upload(assignedSession, expected.data(),
+                               sizeof(std::uint32_t), 0u, error)) {
+    std::cerr << "session move assignment lost generation-aware buffer.\n";
+    return 1;
+  }
+
+  ComputeSession staleSession{};
+  error.clear();
+  if (!staleSession.initialize(error)) {
+    std::cerr << "stale session initialization failed: " << error << '\n';
+    return 1;
+  }
+  DeviceBuffer staleBuffer{};
+  const auto staleGeneration = staleSession.generation();
+  if (!staleBuffer.create(staleSession, sizeof(std::uint32_t), error) ||
+      staleGeneration == 0u) {
+    std::cerr << "stale buffer creation failed: " << error << '\n';
+    return 1;
+  }
+  staleSession.reset();
+  error.clear();
+  if (!expectFailure(staleBuffer.upload(staleSession, expected.data(),
+                                        sizeof(std::uint32_t), 0u, error),
+                     error, "reset session upload")) {
+    return 1;
+  }
+  if (!staleSession.initialize(error) ||
+      staleSession.generation() == staleGeneration) {
+    std::cerr << "session reinitialize did not get a new generation.\n";
+    return 1;
+  }
+  error.clear();
+  if (!expectFailure(staleBuffer.upload(staleSession, expected.data(),
+                                        sizeof(std::uint32_t), 0u, error),
+                     error, "reinitialized session upload")) {
+    return 1;
+  }
+  staleBuffer.reset();
+  generationBuffer.reset();
+  source.reset();
+  destination.reset();
+  assignedSession.reset();
+  staleSession.reset();
 
   std::cout << "DeviceBuffer smoke passed." << '\n';
   return 0;

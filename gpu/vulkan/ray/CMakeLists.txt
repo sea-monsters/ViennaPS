@@ -589,3 +589,72 @@ if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
   add_test(NAME viennaps-vulkan-ray-record-radix-sort-smoke
            COMMAND viennaps-vulkan-ray-record-radix-sort-smoke)
 endif()
+
+# P5-JC device-resident surface segment construction and ordered reduction.
+set(VIENNAPS_VULKAN_RAY_SURFACE_SEGMENTS_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/ray_surface_segments.comp")
+set(VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/ray_surface_reduce.comp")
+set(VIENNAPS_VULKAN_RAY_SURFACE_SEGMENTS_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/ray_surface_segments.comp.spv")
+set(VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/ray_surface_reduce.comp.spv")
+foreach(_surface_kind SEGMENTS REDUCE)
+  if("${VIENNAPS_VULKAN_RAY_SHADER_COMPILER}" MATCHES ".*glslangValidator.*")
+    add_custom_command(
+      OUTPUT "${VIENNAPS_VULKAN_RAY_SURFACE_${_surface_kind}_SPV}"
+      COMMAND ${VIENNAPS_VULKAN_RAY_SHADER_COMPILER} -V
+              "${VIENNAPS_VULKAN_RAY_SURFACE_${_surface_kind}_SHADER}" -o
+              "${VIENNAPS_VULKAN_RAY_SURFACE_${_surface_kind}_SPV}"
+      DEPENDS "${VIENNAPS_VULKAN_RAY_SURFACE_${_surface_kind}_SHADER}"
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+  else()
+    add_custom_command(
+      OUTPUT "${VIENNAPS_VULKAN_RAY_SURFACE_${_surface_kind}_SPV}"
+      COMMAND ${VIENNAPS_VULKAN_RAY_SHADER_COMPILER} -o
+              "${VIENNAPS_VULKAN_RAY_SURFACE_${_surface_kind}_SPV}"
+              "${VIENNAPS_VULKAN_RAY_SURFACE_${_surface_kind}_SHADER}"
+      DEPENDS "${VIENNAPS_VULKAN_RAY_SURFACE_${_surface_kind}_SHADER}"
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+  endif()
+endforeach()
+add_custom_target(viennaps-vulkan-ray-surface-reduction-spv
+  DEPENDS ${VIENNAPS_VULKAN_RAY_SURFACE_SEGMENTS_SPV}
+          ${VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV})
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_RAY_SURFACE_SEGMENTS_SPV_PATH
+       "${VIENNAPS_VULKAN_RAY_SURFACE_SEGMENTS_SPV}")
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV_PATH
+       "${VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV}")
+add_library(viennaps_vulkan_ray_surface_reduction ray_surface_reduction.cpp)
+add_dependencies(viennaps_vulkan_ray_surface_reduction
+                 viennaps-vulkan-ray-surface-reduction-spv
+                 viennaps-vulkan-reduction-scan-smoke-spv)
+target_link_libraries(viennaps_vulkan_ray_surface_reduction PUBLIC
+                      viennaps_vulkan_compute_runtime
+                      viennaps_vulkan_reduction_scan_primitives Vulkan::Vulkan)
+target_include_directories(viennaps_vulkan_ray_surface_reduction PUBLIC
+                           "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(viennaps_vulkan_ray_surface_reduction PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps_vulkan_ray_surface_reduction PRIVATE /W4 /WX)
+else()
+  target_compile_options(viennaps_vulkan_ray_surface_reduction PRIVATE
+                         -Wall -Wextra -Wpedantic -Werror)
+endif()
+add_executable(viennaps-vulkan-ray-surface-reduction-smoke
+               ray_surface_reduction_smoke.cpp)
+add_dependencies(viennaps-vulkan-ray-surface-reduction-smoke
+                 viennaps-vulkan-ray-surface-reduction-spv
+                 viennaps-vulkan-reduction-scan-smoke-spv)
+target_compile_features(viennaps-vulkan-ray-surface-reduction-smoke PRIVATE cxx_std_20)
+target_compile_definitions(viennaps-vulkan-ray-surface-reduction-smoke PRIVATE
+  "VIENNAPS_VULKAN_RAY_SURFACE_SEGMENTS_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_SURFACE_SEGMENTS_SPV_PATH}\""
+  "VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV_PATH}\""
+  "VIENNAPS_VULKAN_REDUCTION_SCAN_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_REDUCTION_SCAN_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-ray-surface-reduction-smoke PRIVATE
+                      viennaps_vulkan_ray_surface_reduction
+                      viennaps_vulkan_ray_reducer Vulkan::Vulkan)
+if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+  add_test(NAME viennaps-vulkan-ray-surface-reduction-smoke
+           COMMAND viennaps-vulkan-ray-surface-reduction-smoke)
+endif()

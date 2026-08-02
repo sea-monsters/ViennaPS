@@ -1,0 +1,42 @@
+// Copyright 2026 ViennaPS
+// SPDX-License-Identifier: MIT
+#version 450
+
+layout(std430, binding = 0) readonly buffer InputRecords {
+  uvec4 records[];
+};
+layout(std430, binding = 1) readonly buffer InputCount {
+  uint inputCount;
+};
+layout(std430, binding = 2) readonly buffer SegmentFlags {
+  uint flags[];
+};
+layout(std430, binding = 3) readonly buffer SegmentOffsets {
+  uint offsets[];
+};
+layout(std430, binding = 4) writeonly buffer OutputSurfaceIds {
+  uint outputSurfaceIds[];
+};
+layout(std430, binding = 5) writeonly buffer OutputWeights {
+  float outputWeights[];
+};
+layout(push_constant) uniform Params {
+  uint capacity;
+} params;
+layout(local_size_x = 64) in;
+
+void main() {
+  uint start = gl_GlobalInvocationID.x;
+  if (start >= params.capacity || start >= inputCount || flags[start] == 0u)
+    return;
+  uint surface = records[start].y;
+  precise float sum = uintBitsToFloat(records[start].z);
+  for (uint index = start + 1u;
+       index < inputCount && records[index].y == surface; ++index) {
+    precise float next = sum + uintBitsToFloat(records[index].z);
+    sum = next;
+  }
+  uint segment = offsets[start];
+  outputSurfaceIds[segment] = surface;
+  outputWeights[segment] = sum;
+}

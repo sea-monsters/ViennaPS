@@ -1,0 +1,39 @@
+// Copyright 2026 ViennaPS
+// SPDX-License-Identifier: MIT
+#version 450
+
+layout(std430, binding = 0) readonly buffer InputRecords {
+  uvec4 records[];
+};
+layout(std430, binding = 1) readonly buffer InputCount {
+  uint inputCount;
+};
+layout(std430, binding = 2) writeonly buffer SegmentFlags {
+  uint flags[];
+};
+layout(std430, binding = 3) buffer SegmentOffsets {
+  uint unusedOffsets[];
+};
+layout(std430, binding = 4) buffer OutputSurfaceIds {
+  uint unusedSurfaceIds[];
+};
+layout(std430, binding = 5) buffer OutputWeights {
+  float unusedWeights[];
+};
+layout(push_constant) uniform Params {
+  uint capacity;
+} params;
+layout(local_size_x = 64) in;
+
+void main() {
+  uint index = gl_GlobalInvocationID.x;
+  if (index >= params.capacity)
+    return;
+  if (index >= inputCount) {
+    flags[index] = 0u;
+    return;
+  }
+  flags[index] = index == 0u || records[index].y != records[index - 1u].y
+                     ? 1u
+                     : 0u;
+}

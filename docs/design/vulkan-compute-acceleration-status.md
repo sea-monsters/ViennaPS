@@ -1924,6 +1924,33 @@ and never reads a count, histogram, prefix, or record during `sort()`.
 | Build and test | the standalone `gpu/vulkan` CMake entry builds under MSVC; two direct GPU executions print `ray record radix sort Vulkan dispatch PASS` and focused CTest passes 1/1 |
 | Scope boundary | this proves recursive ordering and capability admission, not a physical >256-tile run on every adapter; exact dynamic output admission, segment reduction, BVH, particle transport, Process routing, and multi-stage composition remain out of scope |
 
+### P5-JC: device-resident surface segments and ordered FP32 reduction
+
+- Status: accepted locally as the post-sort aggregation seam; it remains
+  unconnected to Process routing and final command fusion
+- Date: 2026-08-02
+
+`DeviceRaySurfaceReducer` consumes a record/count buffer that the caller has
+already ordered stably by `(surfaceId, rayId)`, as established by P5-JB2B. It
+marks surface changes in a device flag buffer, uses the existing device-buffer
+exclusive scan and compaction-count primitive to construct dense segment
+indices, then lets only segment-start invocations perform one sequential FP32
+sum each. The first `weightBits` word seeds that sum, and `precise` produces a
+`NoContraction` SPIR-V `OpFAdd`; no record or count is downloaded during
+`reduce()`. The reduced surface-id, weight, segment flags, offsets, and count
+remain `DeviceBuffer` objects for the next composition stage.
+
+| Gate | Result |
+|---|---|
+| Exact CPU differential | an eight-slot device fixture with seven sorted records produces the same four dense surface outputs and count as `reduceCpu`, compared bit-for-bit after the terminal download; it includes a singleton negative-zero segment and the order-sensitive `1e20 + (-1e20) + 0.25` sequence |
+| Segment contract | flags are `index == 0 || surfaceId[index] != surfaceId[index - 1]`; the device scan maps every active record to its dense segment, leaves the inactive capacity tail zeroed, and drives the device-only segment count |
+| Device boundary | `reduce()` takes and returns only device buffers and has no production host download; the current flags, scan/count, and reduction passes use separate ordered submissions, so this is not yet the final one-command P5-J composition |
+| Hardware admission | input and output capacity must fit `uint32_t`; a 64-invocation x-workgroup, dispatch count, byte products, storage-buffer ranges, session generation, non-aliasing buffers, and exact descriptor ranges are checked before scratch allocation or dispatch |
+| Boundary behavior | alias, insufficient output capacity, foreign-session buffers, and zero-capacity requests are covered; rejected calls leave the existing output buffer unchanged |
+| Numeric and shader gate | both generated shaders pass `spirv-val`; the reduction disassembly contains `NoContraction` and no fused multiply-add, preserving the tested ordered FP32 additions |
+| Build and test | standalone `gpu/vulkan` build under MSVC succeeds; two direct Intel Arc executions print `ray surface reduction Vulkan dispatch PASS`, and focused CTest passes 1/1 |
+| Scope boundary | P5-JC requires the P5-JB2B sorted-input contract and does not independently prove sorting; it deliberately has no device-visible non-normal/overflow status, so CPU-equivalent rejection of non-finite or out-of-domain intermediate sums remains a P5-JD gate rather than a claimed capability |
+
 ## Next slice
 
 The segmented rebuild adapter is installed by the level-set controller, the
@@ -1933,14 +1960,12 @@ RK2/RK3 remain deliberately CPU-only until a multi-stage device state machine
 is proven. The first surface velocity formula is now exact but intentionally
 unwired to process selection. Direct negative/non-finite time injection and
 the optional VTK-enabled install/export conflict remain validation gaps.
-P5-JC may now construct surface segments and reduce each segment in sorted ray
-order, seeding from the first `weightBits` value rather than `+0`, so singleton
-negative zero and all accepted CPU FP32 ordering remain exact. Its GPU path
-must retain P5-JB2B's sixteen stable 4-bit LSD passes, `rayId` before
-`surfaceId`, device-local histogram/prefix/ping-pong/count storage, and the
-full `RayRecord` bit contract; HostVisible radix helpers cannot be reused. The
-final P5-J composition must replace P5-JA's multiple submissions with one
-ordered command submission.
+P5-JD must physically compose P5-JA, P5-JB2B, and P5-JC through one ordered
+command submission while retaining the sixteen stable P5-JB2B LSD passes,
+their full `RayRecord` bit contract, and device-local count storage. It must
+also add a device-visible status path and fail-closed policy for non-finite or
+out-of-domain intermediate FP32 sums before claiming full `reduceCpu`
+rejection equivalence; HostVisible radix helpers cannot be reused.
 CPU differential checking remains an explicit validation gate, not a
 production per-call guard. Coverage reaction is a capability-gated FP64
 candidate, without weakening the current fail-closed gate.

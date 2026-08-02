@@ -303,6 +303,124 @@ int main() {
     return 1;
   }
 
+  // Device-resident path: all CSR/field data remains in DeviceBuffer objects
+  // through dispatch; only the explicit terminal download crosses the host.
+  viennaps::vulkan::runtime::ComputeSession sharedSession;
+  Model deviceModel;
+  if (!sharedSession.initialize(error) ||
+      !deviceModel.initialize(
+          sharedSession, VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH, error)) {
+    std::cerr << "device model setup failed: " << error << '\n';
+    return 1;
+  }
+  viennaps::vulkan::runtime::DeviceBuffer deviceRows;
+  viennaps::vulkan::runtime::DeviceBuffer deviceColumns;
+  viennaps::vulkan::runtime::DeviceBuffer deviceWeights;
+  viennaps::vulkan::runtime::DeviceBuffer deviceField;
+  viennaps::vulkan::runtime::DeviceBuffer deviceOutput;
+  if (!deviceRows.create(sharedSession,
+                         rowOffsets.size() * sizeof(std::uint32_t), error) ||
+      !deviceColumns.create(sharedSession,
+                            columns.size() * sizeof(std::uint32_t), error) ||
+      !deviceWeights.create(sharedSession, weights.size() * sizeof(float),
+                            error) ||
+      !deviceField.create(sharedSession, field.size() * sizeof(float), error) ||
+      !deviceOutput.create(sharedSession, output.size() * sizeof(float),
+                           error) ||
+      !deviceRows.upload(sharedSession, rowOffsets.data(),
+                         rowOffsets.size() * sizeof(std::uint32_t), 0U,
+                         error) ||
+      !deviceColumns.upload(sharedSession, columns.data(),
+                            columns.size() * sizeof(std::uint32_t), 0U,
+                            error) ||
+      !deviceWeights.upload(sharedSession, weights.data(),
+                            weights.size() * sizeof(float), 0U, error) ||
+      !deviceField.upload(sharedSession, field.data(),
+                          field.size() * sizeof(float), 0U, error) ||
+      !deviceOutput.upload(sharedSession, output.data(),
+                           output.size() * sizeof(float), 0U, error) ||
+      !deviceModel.evaluateDevice(deviceRows, rowOffsets.size(), deviceColumns,
+                                  columns.size(), deviceWeights, weights.size(),
+                                  deviceField, field.size(), deviceOutput,
+                                  output.size(), rowOffsets, columns, weights,
+                                  field, step, error) ||
+      !deviceOutput.download(sharedSession, output.data(),
+                             output.size() * sizeof(float), 0U, error)) {
+    std::cerr << "device-resident evaluation failed: " << error << '\n';
+    return 1;
+  }
+  for (std::size_t i = 0U; i < field.size(); ++i) {
+    if (!check(ulpDistance(output[i], expected[i]) == 0U,
+               "device-resident CPU/Vulkan mismatch")) {
+      return 1;
+    }
+  }
+  for (std::size_t i = field.size(); i < output.size(); ++i) {
+    if (!check(
+            viennaps::vulkan::runtime::exactlyEqualFloat(output[i], sentinel),
+            "device-resident tail guard was overwritten")) {
+      return 1;
+    }
+  }
+
+  std::vector<std::uint32_t> malformedRows = rowOffsets;
+  malformedRows[1U] = malformedRows[0U] - 1U;
+  std::fill(output.begin(), output.end(), sentinel);
+  if (!deviceOutput.upload(sharedSession, output.data(),
+                           output.size() * sizeof(float), 0U, error) ||
+      deviceModel.evaluateDevice(deviceRows, rowOffsets.size(), deviceColumns,
+                                 columns.size(), deviceWeights, weights.size(),
+                                 deviceField, field.size(), deviceOutput,
+                                 output.size(), malformedRows, columns, weights,
+                                 field, step, error) ||
+      !deviceOutput.download(sharedSession, output.data(),
+                             output.size() * sizeof(float), 0U, error)) {
+    std::cerr << "malformed device CSR was accepted\n";
+    return 1;
+  }
+  if (!check(viennaps::vulkan::runtime::exactlyEqualFloat(output.front(),
+                                                          sentinel),
+             "malformed device CSR overwrote output")) {
+    return 1;
+  }
+
+  viennaps::vulkan::runtime::DeviceBuffer emptyDeviceRows;
+  viennaps::vulkan::runtime::DeviceBuffer emptyDeviceColumns;
+  viennaps::vulkan::runtime::DeviceBuffer emptyDeviceWeights;
+  viennaps::vulkan::runtime::DeviceBuffer emptyDeviceField;
+  viennaps::vulkan::runtime::DeviceBuffer emptyDeviceOutput;
+  std::vector<float> emptyDeviceSentinel{sentinel};
+  if (!emptyDeviceRows.create(sharedSession, sizeof(std::uint32_t), error) ||
+      !emptyDeviceColumns.create(sharedSession, sizeof(std::uint32_t), error) ||
+      !emptyDeviceWeights.create(sharedSession, sizeof(float), error) ||
+      !emptyDeviceField.create(sharedSession, sizeof(float), error) ||
+      !emptyDeviceOutput.create(sharedSession, sizeof(float), error) ||
+      !emptyDeviceRows.upload(sharedSession, emptyRowValues.data(),
+                              sizeof(std::uint32_t), 0U, error) ||
+      !emptyDeviceOutput.upload(sharedSession, emptyDeviceSentinel.data(),
+                                sizeof(float), 0U, error) ||
+      !deviceModel.evaluateDevice(
+          emptyDeviceRows, 1U, emptyDeviceColumns, 0U, emptyDeviceWeights, 0U,
+          emptyDeviceField, 0U, emptyDeviceOutput, 1U, emptyRowValues,
+          std::span<const std::uint32_t>{}, std::span<const float>{},
+          std::span<const float>{}, step, error) ||
+      !emptyDeviceOutput.download(sharedSession, emptyDeviceSentinel.data(),
+                                  sizeof(float), 0U, error) ||
+      !check(viennaps::vulkan::runtime::exactlyEqualFloat(
+                 emptyDeviceSentinel.front(), sentinel),
+             "empty device CSR wrote output")) {
+    std::cerr << "empty device CSR evaluation failed: " << error << '\n';
+    return 1;
+  }
+  if (deviceModel.evaluateDevice(
+          emptyDeviceRows, 1U, emptyDeviceRows, 0U, emptyDeviceWeights, 0U,
+          emptyDeviceField, 0U, emptyDeviceOutput, 1U, emptyRowValues,
+          std::span<const std::uint32_t>{}, std::span<const float>{},
+          std::span<const float>{}, step, error)) {
+    std::cerr << "aliased empty device CSR was accepted\n";
+    return 1;
+  }
+
   std::cout << "[GraphDiffusion] CPU/Vulkan exact PASS, N=" << field.size()
             << " nnz=" << columns.size() << '\n';
   return 0;

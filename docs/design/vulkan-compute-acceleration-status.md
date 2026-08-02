@@ -1607,7 +1607,8 @@ available.
 
 ### P5-B2: exact FP32 CSR graph-diffusion primitive
 
-- Status: accepted locally; surface-process integration pending
+- Status: accepted on local Vulkan hardware by CPU differential; surface-process
+  integration remains pending
 - Date: 2026-08-02
 
 `SurfaceGraphDiffusionFp32` implements one explicit FP32 graph-diffusion
@@ -1616,6 +1617,13 @@ invocation owns one CSR row and performs its products and accumulation in the
 input edge order, then applies `field + diffusionStep * laplacian`. The shader
 uses `precise`, and its generated SPIR-V contains `NoContraction` decorations
 for the multiply/add operation boundaries.
+
+The primitive now also accepts a caller-owned `ComputeSession` and a
+device-resident `DeviceBuffer` variant. Row offsets, columns, weights, field,
+and output remain on that session's device for the dispatch; only the explicit
+caller upload and terminal download cross the host. Host validation mirrors
+the uploaded spans so malformed CSR, non-finite values, stale/foreign session
+generations, aliases, and insufficient capacity fail before submission.
 
 The host validates a deliberately strict finite-normal-or-zero FP32 domain
 before dispatch: CSR offsets must be monotonic and complete, columns must be
@@ -1631,6 +1639,8 @@ successful no-op.
 | Dispatch boundaries | unaligned output tail remains intact; empty CSR is a no-op |
 | Fail-closed input | malformed row-offset length, out-of-range columns, NaN weight, undersized output, buffer aliasing/capacity/device mismatch, and strict-domain violations preserve caller output |
 | Standalone build | a fresh `VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE=ON`, probe-off build links the runtime, executes the Intel Arc smoke, and discovers the CTest |
+| Device residency | borrowed-session DeviceBuffer path keeps all five CSR/field/output buffers device-local through dispatch; terminal output is bit-exact to the existing CPU oracle |
+| Device empty graph | a valid zero-node DeviceBuffer graph preserves its tail sentinel; aliased empty buffers are rejected before the no-op |
 | Scope boundary | this is a reusable CSR primitive only; `psSurfaceDiffusion` and coverage/process/controller routing remain CPU |
 
 ### P5-C: deterministic FP32 ray-record reducer

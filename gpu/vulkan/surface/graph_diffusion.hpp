@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -27,6 +28,8 @@ public:
   SurfaceGraphDiffusionFp32 &operator=(SurfaceGraphDiffusionFp32 &&) = delete;
 
   [[nodiscard]] bool initialize(std::string_view spirvPath, std::string &error);
+  [[nodiscard]] bool initialize(runtime::ComputeSession &session,
+                                std::string_view spirvPath, std::string &error);
   void reset();
   [[nodiscard]] bool isInitialized() const;
 
@@ -56,6 +59,20 @@ public:
            std::size_t outputCapacity, float diffusionStep,
            std::string &error) const;
 
+  // Device-resident variant. The host spans are validation mirrors for the
+  // uploaded device buffers; no intermediate host transfer is performed.
+  [[nodiscard]] bool
+  evaluateDevice(runtime::DeviceBuffer &rowOffsets, std::size_t rowOffsetCount,
+                 runtime::DeviceBuffer &columnIndices, std::size_t nonzeroCount,
+                 runtime::DeviceBuffer &weights, std::size_t weightCount,
+                 runtime::DeviceBuffer &field, std::size_t fieldCount,
+                 runtime::DeviceBuffer &output, std::size_t outputCapacity,
+                 std::span<const std::uint32_t> rowOffsetValues,
+                 std::span<const std::uint32_t> columnValues,
+                 std::span<const float> weightValues,
+                 std::span<const float> fieldValues, float diffusionStep,
+                 std::string &error) const;
+
   [[nodiscard]] const viennaps::vulkan::runtime::VulkanDevice &device() const;
 
 private:
@@ -70,6 +87,9 @@ private:
       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
 
   [[nodiscard]] bool isReady(std::string &error) const;
+  [[nodiscard]] bool setup(std::string_view spirvPath,
+                           runtime::ComputeSession *externalSession,
+                           std::string &error);
 
   struct PushConstants {
     std::uint32_t elementCount;
@@ -77,7 +97,8 @@ private:
     float diffusionStep;
   };
 
-  runtime::ComputeSession session_{};
+  runtime::ComputeSession ownedSession_{};
+  runtime::ComputeSession *session_ = nullptr;
   runtime::ShaderModule shaderModule_{};
   runtime::DescriptorSetLayout descriptorSetLayout_{};
   runtime::PipelineLayout pipelineLayout_{};

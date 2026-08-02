@@ -47,9 +47,19 @@ SurfaceGraphDiffusionFp32::~SurfaceGraphDiffusionFp32() { reset(); }
 bool SurfaceGraphDiffusionFp32::initialize(const std::string_view spirvPath,
                                            std::string &error) {
   error.clear();
-  if (isInitialized()) {
-    return true;
-  }
+  return setup(spirvPath, nullptr, error);
+}
+
+bool SurfaceGraphDiffusionFp32::initialize(runtime::ComputeSession &session,
+                                           const std::string_view spirvPath,
+                                           std::string &error) {
+  error.clear();
+  return setup(spirvPath, &session, error);
+}
+
+bool SurfaceGraphDiffusionFp32::setup(const std::string_view spirvPath,
+                                      runtime::ComputeSession *externalSession,
+                                      std::string &error) {
   if (spirvPath.empty()) {
     return setError(error, "initialization", "SPIR-V path is empty");
   }
@@ -61,13 +71,22 @@ bool SurfaceGraphDiffusionFp32::initialize(const std::string_view spirvPath,
     return setError(error, "initialization", detail);
   };
 
-  if (!session_.initialize(error)) {
-    return failInitialization();
+  if (externalSession != nullptr) {
+    if (!externalSession->isValid()) {
+      error = "external compute session is not initialized";
+      return failInitialization();
+    }
+    session_ = externalSession;
+  } else {
+    if (!ownedSession_.initialize(error)) {
+      return failInitialization();
+    }
+    session_ = &ownedSession_;
   }
 
   runtime::SpirvProgram program{};
   if (!runtime::readSpirv(spirvPath, program, error) ||
-      !shaderModule_.create(session_.device(), program, error)) {
+      !shaderModule_.create(session_->device(), program, error)) {
     return failInitialization();
   }
 
@@ -79,7 +98,7 @@ bool SurfaceGraphDiffusionFp32::initialize(const std::string_view spirvPath,
     bindings[binding].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   }
   if (!descriptorSetLayout_.create(
-          session_.device(),
+          session_->device(),
           std::span<const VkDescriptorSetLayoutBinding>(bindings.data(),
                                                         bindings.size()),
           error)) {
@@ -88,23 +107,23 @@ bool SurfaceGraphDiffusionFp32::initialize(const std::string_view spirvPath,
 
   const VkPushConstantRange pushRange{VK_SHADER_STAGE_COMPUTE_BIT, 0U,
                                       sizeof(PushConstants)};
-  if (!pipelineLayout_.create(session_.device(), descriptorSetLayout_.get(),
+  if (!pipelineLayout_.create(session_->device(), descriptorSetLayout_.get(),
                               std::span(&pushRange, 1U), error)) {
     return failInitialization();
   }
-  if (!descriptorPool_.create(session_.device(), 1U, 5U,
+  if (!descriptorPool_.create(session_->device(), 1U, 5U,
                               VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, error) ||
       !descriptorPool_.allocate(descriptorSetLayout_.get(), descriptorSet_,
                                 error)) {
     return failInitialization();
   }
-  if (!session_.commandContext().allocatePrimary(commandBuffer_, error) ||
-      !fence_.create(session_.device(), error)) {
+  if (!session_->commandContext().allocatePrimary(commandBuffer_, error) ||
+      !fence_.create(session_->device(), error)) {
     return failInitialization();
   }
 
   const runtime::ComputePipelineOptions options{kEntryPoint, {}, nullptr, 0U};
-  if (!pipeline_.create(session_.device(), shaderModule_, pipelineLayout_,
+  if (!pipeline_.create(session_->device(), shaderModule_, pipelineLayout_,
                         options, error)) {
     return failInitialization();
   }
@@ -112,6 +131,7 @@ bool SurfaceGraphDiffusionFp32::initialize(const std::string_view spirvPath,
 }
 
 void SurfaceGraphDiffusionFp32::reset() {
+  const bool ownsSession = session_ == &ownedSession_;
   fence_.destroy();
   pipeline_.reset();
   descriptorPool_.reset();
@@ -120,11 +140,15 @@ void SurfaceGraphDiffusionFp32::reset() {
   shaderModule_.reset();
   commandBuffer_ = VK_NULL_HANDLE;
   descriptorSet_ = VK_NULL_HANDLE;
-  session_.reset();
+  session_ = nullptr;
+  if (ownsSession) {
+    ownedSession_.reset();
+  }
 }
 
 bool SurfaceGraphDiffusionFp32::isInitialized() const {
-  return session_.isValid() && shaderModule_.get() != VK_NULL_HANDLE &&
+  return session_ != nullptr && session_->isValid() &&
+         shaderModule_.get() != VK_NULL_HANDLE &&
          descriptorSetLayout_.get() != VK_NULL_HANDLE &&
          pipelineLayout_.get() != VK_NULL_HANDLE &&
          pipeline_.get() != VK_NULL_HANDLE &&
@@ -152,7 +176,7 @@ bool SurfaceGraphDiffusionFp32::createFloatBuffer(
     return setError(error, "createFloatBuffer", "element count overflows");
   }
   return buffer.create(
-      session_.device(),
+      session_->device(),
       static_cast<VkDeviceSize>(allocatedElements * sizeof(float)),
       kFloatBufferUsage, kHostMemoryFlags, error);
 }
@@ -169,7 +193,7 @@ bool SurfaceGraphDiffusionFp32::createIndexBuffer(
     return setError(error, "createIndexBuffer", "element count overflows");
   }
   return buffer.create(
-      session_.device(),
+      session_->device(),
       static_cast<VkDeviceSize>(allocatedElements * sizeof(std::uint32_t)),
       kIndexBufferUsage, kHostMemoryFlags, error);
 }
@@ -211,7 +235,7 @@ bool SurfaceGraphDiffusionFp32::evaluate(
         return setError(error, "validation", "CSR buffers must not alias");
       }
     }
-    if (buffers[i]->ownerDevice() != session_.device().get()) {
+    if (buffers[i]->ownerDevice() != session_->device().get()) {
       return setError(error, "validation", "buffer belongs to another device");
     }
   }
@@ -310,7 +334,7 @@ bool SurfaceGraphDiffusionFp32::evaluate(
   const auto groups = fieldCount / kWorkgroupSize +
                       (fieldCount % kWorkgroupSize != 0U ? 1U : 0U);
   if (groups >
-      session_.selection().properties.limits.maxComputeWorkGroupCount[0]) {
+      session_->selection().properties.limits.maxComputeWorkGroupCount[0]) {
     return setError(error, "dispatch",
                     "dispatch group count exceeds device limit");
   }
@@ -336,7 +360,7 @@ bool SurfaceGraphDiffusionFp32::evaluate(
     writes[binding].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[binding].pBufferInfo = &infos[binding];
   }
-  vkUpdateDescriptorSets(session_.device().get(),
+  vkUpdateDescriptorSets(session_->device().get(),
                          static_cast<std::uint32_t>(writes.size()),
                          writes.data(), 0U, nullptr);
 
@@ -387,7 +411,7 @@ bool SurfaceGraphDiffusionFp32::evaluate(
   VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
   submit.commandBufferCount = 1U;
   submit.pCommandBuffers = &commandBuffer_;
-  if (vkQueueSubmit(session_.device().computeQueue(), 1U, &submit,
+  if (vkQueueSubmit(session_->device().computeQueue(), 1U, &submit,
                     fence_.get()) != VK_SUCCESS) {
     return setError(error, "dispatch", "failed to submit command buffer");
   }
@@ -401,8 +425,213 @@ bool SurfaceGraphDiffusionFp32::evaluate(
   return true;
 }
 
+bool SurfaceGraphDiffusionFp32::evaluateDevice(
+    runtime::DeviceBuffer &rowOffsets, const std::size_t rowOffsetCount,
+    runtime::DeviceBuffer &columnIndices, const std::size_t nonzeroCount,
+    runtime::DeviceBuffer &weights, const std::size_t weightCount,
+    runtime::DeviceBuffer &field, const std::size_t fieldCount,
+    runtime::DeviceBuffer &output, const std::size_t outputCapacity,
+    const std::span<const std::uint32_t> rowOffsetValues,
+    const std::span<const std::uint32_t> columnValues,
+    const std::span<const float> weightValues,
+    const std::span<const float> fieldValues, const float diffusionStep,
+    std::string &error) const {
+  error.clear();
+  if (!isReady(error)) {
+    return false;
+  }
+  if (fieldCount > std::numeric_limits<std::uint32_t>::max() ||
+      nonzeroCount > std::numeric_limits<std::uint32_t>::max() ||
+      rowOffsetCount != fieldCount + 1U || nonzeroCount != weightCount ||
+      outputCapacity < fieldCount || rowOffsetValues.size() != rowOffsetCount ||
+      columnValues.size() != nonzeroCount ||
+      weightValues.size() != weightCount || fieldValues.size() != fieldCount) {
+    return setError(error, "validation", "device CSR dimensions disagree");
+  }
+  if (rowOffsets.ownerDevice() != session_->device().get() ||
+      columnIndices.ownerDevice() != session_->device().get() ||
+      weights.ownerDevice() != session_->device().get() ||
+      field.ownerDevice() != session_->device().get() ||
+      output.ownerDevice() != session_->device().get()) {
+    return setError(error, "validation",
+                    "device buffer belongs to another device");
+  }
+  const auto generation = session_->generation();
+  const std::array<const runtime::DeviceBuffer *, 5U> buffers = {
+      &rowOffsets, &columnIndices, &weights, &field, &output};
+  for (std::size_t i = 0U; i < buffers.size(); ++i) {
+    if (!buffers[i]->isValid() ||
+        buffers[i]->ownerSessionGeneration() != generation) {
+      return setError(error, "validation", "device buffer session is stale");
+    }
+    for (std::size_t j = i + 1U; j < buffers.size(); ++j) {
+      if (buffers[i]->handle() == buffers[j]->handle()) {
+        return setError(error, "validation",
+                        "device CSR buffers must not alias");
+      }
+    }
+  }
+  if (rowOffsets.size() < rowOffsetCount * sizeof(std::uint32_t) ||
+      columnIndices.size() < nonzeroCount * sizeof(std::uint32_t) ||
+      weights.size() < weightCount * sizeof(float) ||
+      field.size() < fieldCount * sizeof(float) ||
+      output.size() < outputCapacity * sizeof(float)) {
+    return setError(error, "validation",
+                    "device buffer capacity is insufficient");
+  }
+  if (!std::isfinite(diffusionStep) || !isNormalOrZero(diffusionStep)) {
+    return setError(error, "validation",
+                    "diffusion step is outside FP32 domain");
+  }
+  if (rowOffsetValues.empty() || rowOffsetValues.front() != 0U ||
+      rowOffsetValues.back() != nonzeroCount) {
+    return setError(error, "validation", "CSR row offsets are invalid");
+  }
+  for (std::size_t row = 0U; row < fieldCount; ++row) {
+    if (rowOffsetValues[row] > rowOffsetValues[row + 1U]) {
+      return setError(error, "validation", "CSR row offsets are not monotonic");
+    }
+  }
+  for (const auto column : columnValues) {
+    if (column >= fieldCount) {
+      return setError(error, "validation", "CSR column index is out of bounds");
+    }
+  }
+  for (const auto weight : weightValues) {
+    if (!isNormalOrZero(weight)) {
+      return setError(error, "validation", "CSR weight is outside FP32 domain");
+    }
+  }
+  for (const auto value : fieldValues) {
+    if (!isNormalOrZero(value)) {
+      return setError(error, "validation",
+                      "field value is outside FP32 domain");
+    }
+  }
+  for (std::size_t row = 0U; row < fieldCount; ++row) {
+    volatile float laplacian = 0.0F;
+    for (std::size_t edge = rowOffsetValues[row];
+         edge < rowOffsetValues[row + 1U]; ++edge) {
+      volatile float product =
+          weightValues[edge] * fieldValues[columnValues[edge]];
+      if (!isNormalOrZero(product)) {
+        return setError(error, "validation", "CSR product leaves FP32 domain");
+      }
+      laplacian = laplacian + product;
+      if (!isNormalOrZero(laplacian)) {
+        return setError(error, "validation", "CSR sum leaves FP32 domain");
+      }
+    }
+    volatile float scaled = diffusionStep * laplacian;
+    volatile float result = fieldValues[row] + scaled;
+    if (!isNormalOrZero(scaled) || !isNormalOrZero(result)) {
+      return setError(error, "validation",
+                      "diffusion result leaves FP32 domain");
+    }
+  }
+  if (fieldCount == 0U) {
+    return true;
+  }
+  const auto groups = fieldCount / kWorkgroupSize +
+                      (fieldCount % kWorkgroupSize != 0U ? 1U : 0U);
+  if (groups >
+      session_->selection().properties.limits.maxComputeWorkGroupCount[0]) {
+    return setError(error, "dispatch",
+                    "dispatch group count exceeds device limit");
+  }
+
+  const std::array<VkBuffer, 5U> handles = {
+      rowOffsets.handle(), columnIndices.handle(), weights.handle(),
+      field.handle(), output.handle()};
+  const std::array<VkDeviceSize, 5U> ranges = {
+      rowOffsetCount * sizeof(std::uint32_t),
+      nonzeroCount * sizeof(std::uint32_t), weightCount * sizeof(float),
+      fieldCount * sizeof(float), fieldCount * sizeof(float)};
+  std::array<VkDescriptorBufferInfo, 5U> infos{};
+  std::array<VkWriteDescriptorSet, 5U> writes{};
+  for (std::uint32_t binding = 0U; binding < writes.size(); ++binding) {
+    infos[binding] = {handles[binding], 0U, ranges[binding]};
+    writes[binding] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                       nullptr,
+                       descriptorSet_,
+                       binding,
+                       0U,
+                       1U,
+                       VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                       nullptr,
+                       &infos[binding],
+                       nullptr};
+  }
+  vkUpdateDescriptorSets(session_->device().get(),
+                         static_cast<std::uint32_t>(writes.size()),
+                         writes.data(), 0U, nullptr);
+  VkCommandBufferBeginInfo beginInfo{
+      VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+  beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  if (vkResetCommandBuffer(commandBuffer_, 0U) != VK_SUCCESS ||
+      vkBeginCommandBuffer(commandBuffer_, &beginInfo) != VK_SUCCESS) {
+    return setError(error, "dispatch", "failed to begin command buffer");
+  }
+  std::array<VkBufferMemoryBarrier, 5U> barriers{};
+  for (std::uint32_t binding = 0U; binding < barriers.size(); ++binding) {
+    barriers[binding] = {
+        VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        nullptr,
+        VK_ACCESS_TRANSFER_WRITE_BIT,
+        static_cast<VkAccessFlags>(binding == 4U ? VK_ACCESS_SHADER_WRITE_BIT
+                                                 : VK_ACCESS_SHADER_READ_BIT),
+        VK_QUEUE_FAMILY_IGNORED,
+        VK_QUEUE_FAMILY_IGNORED,
+        handles[binding],
+        0U,
+        ranges[binding]};
+  }
+  vkCmdPipelineBarrier(commandBuffer_, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 0U, nullptr,
+                       static_cast<std::uint32_t>(barriers.size()),
+                       barriers.data(), 0U, nullptr);
+  vkCmdBindPipeline(commandBuffer_, VK_PIPELINE_BIND_POINT_COMPUTE,
+                    pipeline_.get());
+  vkCmdBindDescriptorSets(commandBuffer_, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          pipelineLayout_.get(), 0U, 1U, &descriptorSet_, 0U,
+                          nullptr);
+  const PushConstants pushConstants{static_cast<std::uint32_t>(fieldCount),
+                                    static_cast<std::uint32_t>(nonzeroCount),
+                                    diffusionStep};
+  vkCmdPushConstants(commandBuffer_, pipelineLayout_.get(),
+                     VK_SHADER_STAGE_COMPUTE_BIT, 0U, sizeof(PushConstants),
+                     &pushConstants);
+  vkCmdDispatch(commandBuffer_, static_cast<std::uint32_t>(groups), 1U, 1U);
+  VkBufferMemoryBarrier outputBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+                                      nullptr,
+                                      VK_ACCESS_SHADER_WRITE_BIT,
+                                      VK_ACCESS_TRANSFER_READ_BIT,
+                                      VK_QUEUE_FAMILY_IGNORED,
+                                      VK_QUEUE_FAMILY_IGNORED,
+                                      output.handle(),
+                                      0U,
+                                      ranges[4U]};
+  vkCmdPipelineBarrier(commandBuffer_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT, 0U, 0U, nullptr, 1U,
+                       &outputBarrier, 0U, nullptr);
+  if (vkEndCommandBuffer(commandBuffer_) != VK_SUCCESS) {
+    return setError(error, "dispatch", "failed to end command buffer");
+  }
+  VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+  submit.commandBufferCount = 1U;
+  submit.pCommandBuffers = &commandBuffer_;
+  if (vkQueueSubmit(session_->device().computeQueue(), 1U, &submit,
+                    fence_.get()) != VK_SUCCESS ||
+      !fence_.wait(10'000'000'000ULL, error)) {
+    return setError(error, "dispatch",
+                    "device graph diffusion submission failed");
+  }
+  fence_.reset();
+  return true;
+}
+
 const runtime::VulkanDevice &SurfaceGraphDiffusionFp32::device() const {
-  return session_.device();
+  return session_->device();
 }
 
 } // namespace viennaps::vulkan::surface

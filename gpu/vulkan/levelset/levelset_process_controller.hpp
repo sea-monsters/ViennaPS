@@ -42,15 +42,15 @@ public:
     std::string compact;
   };
 
-  [[nodiscard]] Result
-  configure(ProcessType &process,
-            const compute::ManualSelectionConfig &selection,
-            const compute::HardwareFingerprint &currentHardware,
-            const compute::StageWorkload &workload,
-            const runtime::ComputeSessionOptions &manualDevice = {},
-            const std::string_view configuredSpirvPath = {},
-            const std::string_view configuredProfilePath = {},
-            const RebuildSpirvPaths &configuredRebuildSpirvPaths = {}) {
+  [[nodiscard]] Result configure(
+      ProcessType &process, const compute::ManualSelectionConfig &selection,
+      const compute::HardwareFingerprint &currentHardware,
+      const compute::StageWorkload &workload,
+      const runtime::ComputeSessionOptions &manualDevice = {},
+      const std::string_view configuredSpirvPath = {},
+      const std::string_view configuredProfilePath = {},
+      const RebuildSpirvPaths &configuredRebuildSpirvPaths = {},
+      const compute::DeploymentProfileDecision *resolvedDecision = nullptr) {
     const auto previousUpdateExecutor = process.getLevelSetUpdateExecutor();
     const auto previousRebuildExecutor = process.getLevelSetRebuildExecutor();
     const auto previousFailurePolicy = process.getLevelSetUpdateFailurePolicy();
@@ -111,6 +111,19 @@ public:
       return result;
     }
 
+    // Manual CPU is an explicit executable route. It must not consult a
+    // deployment profile (or require a complete hardware fingerprint).
+    if (result.manualMode && requestedBackend == compute::ComputeBackend::CPU) {
+      result.ok = true;
+      result.prepared = true;
+      result.usingVulkan = false;
+      result.degraded = false;
+      result.selectedBackend = compute::ComputeBackend::CPU;
+      process.clearLevelSetUpdateExecutor();
+      process.clearLevelSetRebuildExecutor();
+      return result;
+    }
+
     const bool forwardEuler = process.getAdvectionParameters().temporalScheme ==
                               viennals::TemporalSchemeEnum::FORWARD_EULER;
     if (!forwardEuler) {
@@ -135,9 +148,14 @@ public:
     const std::array workloads{workload};
 
     std::string prepareError;
-    result.prepared = state->computeContext.prepare(
-        currentHardware, workloads, selection, configuredProfilePath,
-        prepareError, manualDevice);
+    result.prepared =
+        resolvedDecision != nullptr
+            ? state->computeContext.prepare(*resolvedDecision, currentHardware,
+                                            workloads, selection, prepareError,
+                                            manualDevice)
+            : state->computeContext.prepare(currentHardware, workloads,
+                                            selection, configuredProfilePath,
+                                            prepareError, manualDevice);
     result.selectedBackend =
         result.prepared
             ? state->computeContext.backendFor(compute::Stage::LEVEL_SET)
@@ -162,16 +180,6 @@ public:
       result.ok = true;
       result.degraded = true;
       result.usingVulkan = false;
-      return result;
-    }
-
-    if (selection.selectionMode == compute::SelectionMode::MANUAL &&
-        requestedBackend == compute::ComputeBackend::CPU) {
-      result.ok = true;
-      result.usingVulkan = false;
-      result.degraded = false;
-      process.clearLevelSetUpdateExecutor();
-      process.clearLevelSetRebuildExecutor();
       return result;
     }
 
@@ -382,6 +390,23 @@ public:
     result.degraded =
         !result.manualMode && state->computeContext.decision().requiresProbe;
     return result;
+  }
+
+  // Configure from a decision resolved/provisioned by the deployment thread.
+  // The decision is consumed cache-only by the controller.
+  [[nodiscard]] Result
+  configureResolved(ProcessType &process,
+                    const compute::ManualSelectionConfig &selection,
+                    const compute::HardwareFingerprint &currentHardware,
+                    const compute::StageWorkload &workload,
+                    const compute::DeploymentProfileDecision &resolvedDecision,
+                    const runtime::ComputeSessionOptions &manualDevice = {},
+                    const std::string_view configuredSpirvPath = {},
+                    const std::string_view configuredProfilePath = {},
+                    const RebuildSpirvPaths &configuredRebuildSpirvPaths = {}) {
+    return configure(process, selection, currentHardware, workload,
+                     manualDevice, configuredSpirvPath, configuredProfilePath,
+                     configuredRebuildSpirvPaths, &resolvedDecision);
   }
 
   void clear(ProcessType &process) const {

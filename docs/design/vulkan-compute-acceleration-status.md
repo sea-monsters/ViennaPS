@@ -2141,7 +2141,32 @@ fixed local paths are introduced.
 | Gate | Result |
 |---|---|
 | Reuse/probe cardinality | focused CPU-only test covers valid reuse with zero callback calls and one-call provisioning for missing/stale/invalid profiles |
-| Fail closed | incomplete fingerprint, callback absence, throw, failure, mismatch, and persistence/re-read failures retain CPU routing and report an error |
-| Persistence hygiene | provisioning creates the parent directory only when needed, re-reads a VALID record, and leaves no temporary files |
-| Replacement safety | failed replacement preserves the prior target and cleans its temporary artifact |
+| Fail closed | focused tests cover incomplete fingerprint, callback absence, throw, failure, mismatch, and a write-path failure; the implementation also fail-closes on re-read failure |
+| Persistence hygiene | successful provisioning creates the parent directory only when needed, re-reads a VALID record, and leaves no temporary files |
+| Replacement safety | implementation uses atomic replacement without pre-deleting a target; focused coverage verifies a failed directory destination is preserved and its temporary artifact is cleaned |
 | Scope boundary | no Process routing, Vulkan probe implementation, flux-engine, or worker-thread changes are included |
+
+### P5-K3B: Level Set deployment-profile preparation facade
+
+- Status: implemented as a controller-only pre-apply seam; no generic Process,
+  FluxEngine, ray, or shader/pipeline routing is changed
+- Date: 2026-08-02
+
+`LevelSetProcessController` retains its existing `configure` overload, while
+an explicit `configureResolved` entry accepts a `DeploymentProfileDecision`
+resolved by the deployment/configuration thread. On the Vulkan-capable AUTO or
+Manual-Vulkan path, the resolved plan must match the explicit `StageWorkload`;
+it is then consumed without profile lookup or probing. Manual overrides remain
+authoritative: an explicit CPU request bypasses profile/decision validation and
+is executable without a profile or complete hardware fingerprint, while Manual
+Vulkan requires a valid matching persisted profile and returns an explicit
+failure instead of silently degrading. AUTO uses the resolved plan and degrades
+to CPU when the plan is a fail-closed missing/stale profile plan. Controller
+configuration still completes before worker callbacks are installed.
+
+| Gate | Result |
+|---|---|
+| Deterministic preparation | CPU-only controller smoke covers a valid resolved plan, plan-stage mismatch, missing-profile fail-closed plan, manual CPU bypass, and explicit Manual Vulkan rejection without requiring a GPU |
+| Cache boundary | resolved-decision configure path does not call profile I/O or a deployment probe; legacy configure remains source-compatible and performs its established profile resolution |
+| Hardware binding | a Vulkan-selected resolved plan is rejected unless the decision is VALID, has a profile, and its complete fingerprint matches current hardware; the selected session also matches every Vulkan-observable identity field (UUIDs, vendor/device IDs, name, driver version), with a focused driver-version mismatch rejection; driver date remains a deployment-time stale-gate field |
+| Scope boundary | only the Level Set controller seam, its focused smoke, the runtime context preparation overload, and this status entry are changed; generic Process, CUDA, FluxEngine, ray, fixed SDK/VTK paths, and profile persistence remain untouched |

@@ -128,6 +128,16 @@ public:
   record.capabilityProfile.vulkanAvailable = true;
   record.capabilityProfile.vulkanPrimitiveSuitePass = true;
   record.capabilityProfile.vulkanCompute = true;
+  record.capabilityProfile.vulkanFp32NumericalSmoke.status =
+      viennaps::compute::VulkanNumericalSmokeStatus::PASS;
+  record.capabilityProfile.vulkanFp32NumericalSmoke.contractId =
+      std::string(viennaps::compute::kVulkanFp32NumericalSmokeContract);
+  record.capabilityProfile.vulkanFp32NumericalSmoke.caseCount = 18U;
+  record.capabilityProfile.vulkanFp32NumericalSmoke.mismatchCount = 0U;
+  record.capabilityProfile.vulkanFp32NumericalSmoke.maxUlp = 0U;
+  record.capabilityProfile.vulkanFp32NumericalSmoke.watchdogMs =
+      viennaps::compute::kVulkanFp32NumericalSmokeWatchdogMs;
+  record.capabilityProfile.vulkanFp32NumericalSmoke.elapsedMs = 1U;
   record.capabilityProfile.safeVulkanWorkingSetBytes =
       128ULL * 1024ULL * 1024ULL;
   const auto profilePath = directory / (hardware.deviceUuid + ".json");
@@ -263,10 +273,103 @@ struct StepResult {
   return {advect.getAdvectedTime(), collectSurfaceNodes(domain)};
 }
 
+void runResolvedDecisionCpuSmoke() {
+  const StageWorkload workload{Stage::LEVEL_SET,
+                               Precision::FP32,
+                               4096U,
+                               false,
+                               viennaps::compute::RayMode::NONE,
+                               true};
+  viennaps::compute::CapabilityProfile cpuProfile;
+  cpuProfile.cpuAvailable = true;
+  const HardwareFingerprint hardware{};
+
+  viennaps::compute::DeploymentProfileDecision validDecision;
+  validDecision.state = viennaps::compute::DeploymentProfileState::VALID;
+  validDecision.hasProfile = true;
+  validDecision.activeRecord.hardware = hardware;
+  validDecision.activeRecord.capabilityProfile = cpuProfile;
+  validDecision.plan =
+      viennaps::compute::buildSelectionPlan(cpuProfile, {workload});
+
+  viennaps::Process<float, 2> autoProcess;
+  Controller autoController;
+  const auto autoResult = autoController.configureResolved(
+      autoProcess, ManualSelectionConfig{}, hardware, workload, validDecision,
+      {}, {}, "missing-resolved-decision-profile.json");
+  VC_TEST_ASSERT(autoResult.ok);
+  VC_TEST_ASSERT(autoResult.prepared);
+  VC_TEST_ASSERT(!autoResult.usingVulkan);
+  VC_TEST_ASSERT(!autoResult.degraded);
+  VC_TEST_ASSERT(autoResult.selectedBackend == ComputeBackend::CPU);
+
+  auto mismatchedWorkload = workload;
+  mismatchedWorkload.stage = Stage::CUSTOM;
+  viennaps::compute::DeploymentProfileDecision mismatchedDecision;
+  mismatchedDecision.state = viennaps::compute::DeploymentProfileState::VALID;
+  mismatchedDecision.hasProfile = true;
+  mismatchedDecision.activeRecord.hardware = hardware;
+  mismatchedDecision.activeRecord.capabilityProfile = cpuProfile;
+  mismatchedDecision.plan =
+      viennaps::compute::buildSelectionPlan(cpuProfile, {mismatchedWorkload});
+  viennaps::Process<float, 2> mismatchedProcess;
+  Controller mismatchedController;
+  const auto mismatchedResult = mismatchedController.configureResolved(
+      mismatchedProcess, ManualSelectionConfig{}, hardware, workload,
+      mismatchedDecision, {}, {}, "missing-resolved-decision-profile.json");
+  VC_TEST_ASSERT(mismatchedResult.ok);
+  VC_TEST_ASSERT(!mismatchedResult.prepared);
+  VC_TEST_ASSERT(mismatchedResult.degraded);
+  VC_TEST_ASSERT(mismatchedResult.selectedBackend == ComputeBackend::CPU);
+
+  viennaps::compute::DeploymentProfileDecision missingDecision;
+  missingDecision.state = viennaps::compute::DeploymentProfileState::MISSING;
+  missingDecision.requiresProbe = true;
+  missingDecision.plan =
+      viennaps::compute::buildSelectionPlan(cpuProfile, {workload});
+  viennaps::Process<float, 2> missingProcess;
+  Controller missingController;
+  const auto missingResult = missingController.configureResolved(
+      missingProcess, ManualSelectionConfig{}, hardware, workload,
+      missingDecision, {}, {}, "missing-resolved-decision-profile.json");
+  VC_TEST_ASSERT(missingResult.ok);
+  VC_TEST_ASSERT(missingResult.prepared);
+  VC_TEST_ASSERT(missingResult.degraded);
+  VC_TEST_ASSERT(missingResult.selectedBackend == ComputeBackend::CPU);
+
+  ManualSelectionConfig manualCpu;
+  manualCpu.selectionMode = SelectionMode::MANUAL;
+  manualCpu.globalBackend = ComputeBackend::CPU;
+  viennaps::Process<float, 2> manualCpuProcess;
+  Controller manualCpuController;
+  const auto manualCpuResult = manualCpuController.configureResolved(
+      manualCpuProcess, manualCpu, HardwareFingerprint{}, workload,
+      missingDecision, {}, {}, "missing-resolved-decision-profile.json");
+  VC_TEST_ASSERT(manualCpuResult.ok);
+  VC_TEST_ASSERT(manualCpuResult.prepared);
+  VC_TEST_ASSERT(!manualCpuResult.degraded);
+  VC_TEST_ASSERT(manualCpuResult.selectedBackend == ComputeBackend::CPU);
+
+  ManualSelectionConfig manualVulkan;
+  manualVulkan.selectionMode = SelectionMode::MANUAL;
+  manualVulkan.globalBackend = ComputeBackend::VULKAN;
+  viennaps::Process<float, 2> manualVulkanProcess;
+  Controller manualVulkanController;
+  const auto manualVulkanResult = manualVulkanController.configureResolved(
+      manualVulkanProcess, manualVulkan, HardwareFingerprint{}, workload,
+      missingDecision, {}, {}, "missing-resolved-decision-profile.json");
+  VC_TEST_ASSERT(!manualVulkanResult.ok);
+  VC_TEST_ASSERT(manualVulkanResult.prepared);
+  VC_TEST_ASSERT(!manualVulkanResult.usingVulkan);
+  VC_TEST_ASSERT(manualVulkanResult.selectedBackend == ComputeBackend::CPU);
+}
+
 } // namespace
 
 int main() try {
   viennacore::Logger::setLogLevel(viennacore::LogLevel::WARNING);
+
+  runResolvedDecisionCpuSmoke();
 
   HardwareFingerprint hardware;
   std::string error;
@@ -284,6 +387,28 @@ int main() try {
                                false,
                                viennaps::compute::RayMode::NONE,
                                true};
+
+  const auto resolvedDecision = viennaps::compute::selectDeploymentProfile(
+      hardware, {workload}, ManualSelectionConfig{}, profile.path.string());
+  VC_TEST_ASSERT(resolvedDecision.state ==
+                 viennaps::compute::DeploymentProfileState::VALID);
+  VC_TEST_ASSERT(resolvedDecision.hasProfile);
+  auto sessionMismatchDecision = resolvedDecision;
+  sessionMismatchDecision.activeRecord.hardware.driverVersion += "-mismatch";
+  const auto sessionMismatchHardware =
+      sessionMismatchDecision.activeRecord.hardware;
+  viennaps::Process<float, 2> sessionMismatchProcess;
+  Controller sessionMismatchController;
+  const auto sessionMismatchResult =
+      sessionMismatchController.configureResolved(
+          sessionMismatchProcess, ManualSelectionConfig{},
+          sessionMismatchHardware, workload, sessionMismatchDecision, {},
+          VIENNAPS_LEVELSET_UPDATE_SPV_PATH, profile.path.string());
+  VC_TEST_ASSERT(sessionMismatchResult.ok);
+  VC_TEST_ASSERT(!sessionMismatchResult.prepared);
+  VC_TEST_ASSERT(sessionMismatchResult.degraded);
+  VC_TEST_ASSERT(!sessionMismatchResult.usingVulkan);
+  VC_TEST_ASSERT(sessionMismatchResult.selectedBackend == ComputeBackend::CPU);
 
   auto cpuDomain = makeProcessDomain();
   const auto cpu = runOneStep(cpuDomain->getSurface());

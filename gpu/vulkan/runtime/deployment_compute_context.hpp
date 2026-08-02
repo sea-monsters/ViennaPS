@@ -26,6 +26,15 @@ public:
           std::string_view configuredProfilePath, std::string &error,
           const ComputeSessionOptions &manualDevice = {});
 
+  // Consume a decision resolved by the deployment/configuration thread. This
+  // path is cache-only: it does not read the profile path or invoke a probe.
+  [[nodiscard]] bool
+  prepare(const compute::DeploymentProfileDecision &resolvedDecision,
+          const compute::HardwareFingerprint &currentHardware,
+          std::span<const compute::StageWorkload> workloads,
+          const compute::ManualSelectionConfig &selectionConfig,
+          std::string &error, const ComputeSessionOptions &manualDevice = {});
+
   void reset();
   [[nodiscard]] bool isPrepared() const;
   [[nodiscard]] bool hasVulkanSession() const;

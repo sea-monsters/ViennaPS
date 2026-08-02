@@ -21,14 +21,15 @@ namespace detail {
 
 [[nodiscard]] inline bool
 isValidHrleRebuildSourcePoint(const std::uint32_t sourcePointId,
-                             const std::size_t sourcePointCount) {
+                              const std::size_t sourcePointCount) {
   return sourcePointId != kInvalidHrlePointId &&
          static_cast<std::size_t>(sourcePointId) < sourcePointCount;
 }
 
 } // namespace detail
 
-template <int D> [[nodiscard]] inline bool reconstructHrleRebuildCpu(
+template <int D>
+[[nodiscard]] inline bool reconstructHrleRebuildCpu(
     const HrleRebuildCompactionResultFp32 &compactResult,
     const std::span<const viennahrle::Index<D>> candidateIndices,
     const std::size_t sourcePointCount, viennahrle::Grid<D> &grid,
@@ -174,20 +175,59 @@ template <int D> [[nodiscard]] inline bool reconstructHrleRebuildCpu(
       const auto &definedPoint =
           compactResult.definedPoints[definedPointCursorForOutput++];
       localDomain.insertNextDefinedPoint(0, candidateIndices[candidate],
-                                        definedPoint.value);
+                                         definedPoint.value);
       localDefinedSourcePointIds.push_back(definedPoint.sourcePointId);
     } else if (action == HrleRebuildAction::UNDEFINED_NEGATIVE) {
       localDomain.insertNextUndefinedPoint(0, candidateIndices[candidate],
-                                          kNegativeUndefinedValue);
+                                           kNegativeUndefinedValue);
     } else {
       localDomain.insertNextUndefinedPoint(0, candidateIndices[candidate],
-                                          kPositiveUndefinedValue);
+                                           kPositiveUndefinedValue);
     }
   }
 
   localDomain.finalize();
   output.deepCopy(grid, localDomain);
   definedSourcePointIds = std::move(localDefinedSourcePointIds);
+  return true;
+}
+
+// Reconstructs one validated compact result into a caller-owned HRLE segment.
+// The source result is first materialized through the legacy one-segment
+// routine, keeping its validation and bit-exact CPU oracle while allowing a
+// segmented caller to publish only after all segments have succeeded.
+template <int D>
+[[nodiscard]] inline bool reconstructHrleRebuildCpuIntoSegment(
+    const HrleRebuildCompactionResultFp32 &compactResult,
+    const std::span<const viennahrle::Index<D>> candidateIndices,
+    const std::size_t sourcePointCount, viennahrle::Grid<D> &grid,
+    const unsigned outputSegment, viennahrle::Domain<float, D> &output,
+    std::vector<std::uint32_t> &definedSourcePointIds, std::string &error) {
+  error.clear();
+  if (outputSegment >= output.getNumberOfSegments()) {
+    error = "HRLE rebuild reconstruction output segment is out of range.";
+    return false;
+  }
+
+  viennahrle::Domain<float, D> localOutput;
+  std::vector<std::uint32_t> localSourcePointIds;
+  if (!reconstructHrleRebuildCpu<D>(compactResult, candidateIndices,
+                                    sourcePointCount, grid, localOutput,
+                                    localSourcePointIds, error)) {
+    return false;
+  }
+
+  auto &targetSegment = output.getDomainSegment(outputSegment);
+  for (const auto &index : candidateIndices) {
+    viennahrle::ConstSparseIterator<viennahrle::Domain<float, D>> iterator(
+        localOutput, index);
+    if (iterator.isDefined()) {
+      targetSegment.insertNextDefinedPoint(index, iterator.getDefinedValue());
+    } else {
+      targetSegment.insertNextUndefinedPoint(index, iterator.getValue());
+    }
+  }
+  definedSourcePointIds = std::move(localSourcePointIds);
   return true;
 }
 

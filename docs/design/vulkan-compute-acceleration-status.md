@@ -1385,6 +1385,35 @@ pre-`apply()` snapshot is not the source addressed by the executor contract.
 `translateFromMultiData` consumes the callback's segment vectors in order, but
 each value is a global index into that callback-time flat PointData array.
 
+### P4C5-B: segmented ViennaLS Vulkan rebuild adapter
+
+- Status: accepted locally; controller connection pending
+- Date: 2026-08-02
+
+`ViennaLsRebuildExecutorFp32<D>` now owns its compute session, reduction/scan
+primitives, and three HRLE shader programs through shared state. The callback
+collects lexicographically ordered star-neighborhood candidates independently
+for every segment in the requested output segmentation, retains global
+callback-time source point IDs, and runs the resident
+classification/compaction transaction once per output segment.
+Canonical HRLE construction remains on the CPU. All segments are assembled in
+a private replacement, canonically re-segmented, and their flat source-ID order
+is repartitioned against the final per-segment defined counts before one
+`HANDLED` publication. Any invalid state, input, device-stage failure, session
+generation change, or source-map mismatch returns `ERROR` without changing the
+caller output.
+
+| Gate | Result |
+|---|---|
+| Real seam differential | a small 2D sphere runs one CPU Forward Euler step and one Vulkan rebuild step through the real ViennaLS callback |
+| Canonical structure | segment boundaries, defined/undefined values, run types, run breaks, and start indices match the CPU result exactly |
+| PointData | scalar and vector arrays match the CPU result exactly after callback-time global source-ID translation |
+| Multi-segment contract | the smoke runs with two OpenMP segments; a separate CPU seam matrix validates handled 3D and multi-segment PointData, including `updatePointData=false` |
+| Transaction failure | an empty classification program returns `ERROR` and preserves sentinel domain and source IDs |
+| Lifetime | the copyable executor captures shared ownership of session, primitives, and SPIR-V programs |
+| Residual boundary | the Vulkan adapter is not yet installed by the deployment controller; Vulkan 3D, RK2/RK3, and explicit empty-output-segment execution remain untested; session invalidation is assumed not to race the final publish |
+| Production boundary | device classification and compaction are accelerated; candidate collection, canonical HRLE construction, re-segmentation, and PointData translation remain CPU work |
+
 ## P4D-deployment-probe audit: persisted automatic selection gap
 
 - Status: audited; implementation pending
@@ -1450,17 +1479,12 @@ version 2.
 
 ## Next slice
 
-First complete the rebuild-seam acceptance matrix with valid `HANDLED`
-replacement domains, multiple HRLE segments, scalar and vector point data, and
-`updatePointData=false` in both 2D and 3D. Then add the segment-aware Vulkan
-adapter that invokes the resident P4C4 transaction once per segment, publishes
-the complete replacement only after every segment succeeds, and maps Auto
-failures to CPU fallback while strict Manual Vulkan errors preserve the
-snapshot. After these gates pass, include the exact transaction in the
-deployment-time primitive suite. Direct negative/non-finite time injection also
-remains a defensive-branch coverage gap. The optional VTK-enabled install/export
-conflict should be isolated from the compute backend before packaging
-validation.
+Next connect the segmented rebuild adapter to the level-set controller, map
+Auto failures to CPU fallback, and preserve the snapshot when strict Manual
+Vulkan fails. Then include the exact transaction in the deployment-time
+primitive suite. Vulkan 3D and RK2/RK3 execution, direct negative/non-finite
+time injection, and the optional VTK-enabled install/export conflict remain
+validation gaps.
 
 After those production-seam gates, the Level Set work advances to HRLE
 sparse rebuild integration, followed by particle/ray and surface/oxidation

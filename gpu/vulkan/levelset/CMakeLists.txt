@@ -253,6 +253,41 @@ if(TARGET viennaps_vulkan_reduction_scan_primitives)
     target_compile_options(viennaps-vulkan-hrle-compaction-smoke
                            PRIVATE -Wall -Wextra -Wpedantic)
   endif()
+
+  add_executable(viennaps-vulkan-hrle-rebuild-executor-smoke
+                 viennals_rebuild_executor_smoke.cpp)
+  add_dependencies(viennaps-vulkan-hrle-rebuild-executor-smoke
+                   viennaps-vulkan-hrle-classification-spv
+                   viennaps-vulkan-reduction-scan-smoke-spv
+                   viennaps-vulkan-hrle-compaction-spv)
+  target_compile_definitions(viennaps-vulkan-hrle-rebuild-executor-smoke PRIVATE
+    "VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH=\"${_VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH}\""
+    "VIENNAPS_REDUCTION_SCAN_SPV_PATH=\"${_VIENNAPS_REDUCTION_SCAN_SPV_PATH}\""
+    "VIENNAPS_HRLE_ACTION_FLAGS_SPV_PATH=\"${_VIENNAPS_HRLE_ACTION_FLAGS_SPV_PATH}\""
+    "VIENNAPS_HRLE_COMPACT_SPV_PATH=\"${_VIENNAPS_HRLE_COMPACT_SPV_PATH}\"")
+  target_link_libraries(viennaps-vulkan-hrle-rebuild-executor-smoke
+    PRIVATE ViennaPS viennaps_vulkan_levelset_update
+            viennaps_vulkan_hrle_compaction)
+  target_compile_features(viennaps-vulkan-hrle-rebuild-executor-smoke
+                          PRIVATE cxx_std_20)
+  if(WIN32)
+    find_package(TBB CONFIG REQUIRED COMPONENTS tbb)
+    add_custom_command(
+      TARGET viennaps-vulkan-hrle-rebuild-executor-smoke
+      POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              $<TARGET_RUNTIME_DLLS:viennaps-vulkan-hrle-rebuild-executor-smoke>
+              $<TARGET_FILE:TBB::tbb>
+              $<TARGET_FILE_DIR:viennaps-vulkan-hrle-rebuild-executor-smoke>
+      COMMAND_EXPAND_LISTS)
+  endif()
+  if(MSVC)
+    target_compile_options(viennaps-vulkan-hrle-rebuild-executor-smoke
+                           PRIVATE /W4)
+  else()
+    target_compile_options(viennaps-vulkan-hrle-rebuild-executor-smoke
+                           PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
 endif()
 
 add_executable(viennaps-vulkan-levelset-process-controller-smoke
@@ -312,5 +347,11 @@ if(BUILD_TESTING)
   if(TARGET viennaps-vulkan-hrle-compaction-smoke)
     add_test(NAME viennaps-vulkan-hrle-compaction-smoke
              COMMAND viennaps-vulkan-hrle-compaction-smoke)
+  endif()
+  if(TARGET viennaps-vulkan-hrle-rebuild-executor-smoke)
+    add_test(NAME viennaps-vulkan-hrle-rebuild-executor-smoke
+             COMMAND viennaps-vulkan-hrle-rebuild-executor-smoke)
+    set_tests_properties(viennaps-vulkan-hrle-rebuild-executor-smoke
+                         PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=2" TIMEOUT 30)
   endif()
 endif()

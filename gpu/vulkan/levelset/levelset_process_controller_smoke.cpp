@@ -23,6 +23,8 @@
 namespace {
 
 using Controller = viennaps::vulkan::levelset::LevelSetProcessController<2>;
+using RebuildSpirvPaths = Controller::RebuildSpirvPaths;
+using Advect = viennals::Advect<float, 2>;
 using viennaps::LevelSetUpdateFailurePolicy;
 using viennaps::compute::ComputeBackend;
 using viennaps::compute::HardwareFingerprint;
@@ -110,17 +112,24 @@ struct TempDirectoryGuard {
 struct ConfigureResult {
   Controller::Result controller;
   LevelSetUpdateFailurePolicy failurePolicy;
+  bool updateInstalled = false;
+  bool rebuildInstalled = false;
 };
 
-[[nodiscard]] ConfigureResult configure(
-    const ManualSelectionConfig &selection, const HardwareFingerprint &hardware,
-    const StageWorkload &workload, const ComputeSessionOptions &manualDevice,
-    const std::string_view spirvPath, const std::string_view profilePath) {
+[[nodiscard]] ConfigureResult
+configure(const ManualSelectionConfig &selection,
+          const HardwareFingerprint &hardware, const StageWorkload &workload,
+          const ComputeSessionOptions &manualDevice,
+          const std::string_view spirvPath, const std::string_view profilePath,
+          const RebuildSpirvPaths &rebuildPaths = {}) {
   viennaps::Process<float, 2> process;
   Controller controller;
-  auto result = controller.configure(process, selection, hardware, workload,
-                                     manualDevice, spirvPath, profilePath);
-  return {std::move(result), process.getLevelSetUpdateFailurePolicy()};
+  auto result =
+      controller.configure(process, selection, hardware, workload, manualDevice,
+                           spirvPath, profilePath, rebuildPaths);
+  return {std::move(result), process.getLevelSetUpdateFailurePolicy(),
+          static_cast<bool>(process.getLevelSetUpdateExecutor()),
+          static_cast<bool>(process.getLevelSetRebuildExecutor())};
 }
 
 } // namespace
@@ -165,6 +174,18 @@ int main() {
   VC_TEST_ASSERT(autoVulkan.selectedBackend == ComputeBackend::VULKAN);
   VC_TEST_ASSERT(autoConfiguration.failurePolicy ==
                  LevelSetUpdateFailurePolicy::FALLBACK);
+  VC_TEST_ASSERT(autoConfiguration.updateInstalled);
+  VC_TEST_ASSERT(autoConfiguration.rebuildInstalled);
+
+  RebuildSpirvPaths badRebuildPaths;
+  badRebuildPaths.classification = "missing-controller-rebuild.spv";
+  const auto autoRebuildFallback =
+      configure({}, hardware, workload, {}, VIENNAPS_LEVELSET_UPDATE_SPV_PATH,
+                validProfile.path.string(), badRebuildPaths);
+  VC_TEST_ASSERT(autoRebuildFallback.controller.ok);
+  VC_TEST_ASSERT(autoRebuildFallback.controller.degraded);
+  VC_TEST_ASSERT(!autoRebuildFallback.updateInstalled);
+  VC_TEST_ASSERT(!autoRebuildFallback.rebuildInstalled);
 
   const auto autoShaderConfiguration =
       configure({}, hardware, workload, {}, "missing-controller-shader.spv",
@@ -206,6 +227,53 @@ int main() {
   VC_TEST_ASSERT(manualShaderConfiguration.failurePolicy ==
                  LevelSetUpdateFailurePolicy::FALLBACK);
 
+  const auto manualRebuildError = configure(
+      manualVulkan, hardware, workload, {}, VIENNAPS_LEVELSET_UPDATE_SPV_PATH,
+      validProfile.path.string(), badRebuildPaths);
+  VC_TEST_ASSERT(!manualRebuildError.controller.ok);
+  VC_TEST_ASSERT(manualRebuildError.controller.prepared);
+  VC_TEST_ASSERT(!manualRebuildError.updateInstalled);
+  VC_TEST_ASSERT(!manualRebuildError.rebuildInstalled);
+
+  viennaps::Process<float, 2> preservedProcess;
+  const auto preservedUpdate =
+      [](const Advect::LevelSetUpdateContext &, Advect::LevelSetUpdateOutput &,
+         std::string &) { return Advect::LevelSetUpdateStatus::ERROR; };
+  const auto preservedRebuild = [](const Advect::LevelSetRebuildContext &,
+                                   Advect::LevelSetRebuildOutput &,
+                                   std::string &) {
+    return Advect::LevelSetRebuildStatus::ERROR;
+  };
+  preservedProcess.setLevelSetUpdateExecutor(preservedUpdate);
+  preservedProcess.setLevelSetRebuildExecutor(preservedRebuild);
+  preservedProcess.setLevelSetUpdateFailurePolicy(
+      LevelSetUpdateFailurePolicy::FAIL);
+  Controller preservedController;
+  const auto preservedFailure = preservedController.configure(
+      preservedProcess, manualVulkan, hardware, workload, {},
+      VIENNAPS_LEVELSET_UPDATE_SPV_PATH, validProfile.path.string(),
+      badRebuildPaths);
+  VC_TEST_ASSERT(!preservedFailure.ok);
+  VC_TEST_ASSERT(
+      static_cast<bool>(preservedProcess.getLevelSetUpdateExecutor()));
+  VC_TEST_ASSERT(
+      static_cast<bool>(preservedProcess.getLevelSetRebuildExecutor()));
+  VC_TEST_ASSERT(preservedProcess.getLevelSetUpdateFailurePolicy() ==
+                 LevelSetUpdateFailurePolicy::FAIL);
+
+  auto invalidPreservedWorkload = workload;
+  invalidPreservedWorkload.stage = Stage::RAY_TRACING;
+  const auto invalidPreservedFailure = preservedController.configure(
+      preservedProcess, manualVulkan, hardware, invalidPreservedWorkload, {},
+      VIENNAPS_LEVELSET_UPDATE_SPV_PATH, validProfile.path.string());
+  VC_TEST_ASSERT(!invalidPreservedFailure.ok);
+  VC_TEST_ASSERT(
+      static_cast<bool>(preservedProcess.getLevelSetUpdateExecutor()));
+  VC_TEST_ASSERT(
+      static_cast<bool>(preservedProcess.getLevelSetRebuildExecutor()));
+  VC_TEST_ASSERT(preservedProcess.getLevelSetUpdateFailurePolicy() ==
+                 LevelSetUpdateFailurePolicy::FAIL);
+
   ComputeSessionOptions selectedDevice;
   selectedDevice.manualDeviceName = hardware.deviceName;
   const auto manualVulkanConfiguration =
@@ -227,9 +295,13 @@ int main() {
   VC_TEST_ASSERT(clearConfiguration.ok);
   VC_TEST_ASSERT(clearProcess.getLevelSetUpdateFailurePolicy() ==
                  LevelSetUpdateFailurePolicy::FAIL);
+  VC_TEST_ASSERT(static_cast<bool>(clearProcess.getLevelSetUpdateExecutor()));
+  VC_TEST_ASSERT(static_cast<bool>(clearProcess.getLevelSetRebuildExecutor()));
   clearController.clear(clearProcess);
   VC_TEST_ASSERT(clearProcess.getLevelSetUpdateFailurePolicy() ==
                  LevelSetUpdateFailurePolicy::FALLBACK);
+  VC_TEST_ASSERT(!static_cast<bool>(clearProcess.getLevelSetUpdateExecutor()));
+  VC_TEST_ASSERT(!static_cast<bool>(clearProcess.getLevelSetRebuildExecutor()));
 
   auto staleHardware = hardware;
   staleHardware.driverVersion += "-stale";

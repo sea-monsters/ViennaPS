@@ -5,6 +5,7 @@
 
 #include "deployment_compute_context.hpp"
 #include "levelset_update.hpp"
+#include "viennals_rebuild_executor.hpp"
 #include "viennals_update_executor.hpp"
 
 #include <compute/backendPolicy.hpp>
@@ -34,6 +35,13 @@ public:
     std::string message;
   };
 
+  struct RebuildSpirvPaths {
+    std::string classification;
+    std::string reductionScan;
+    std::string actionFlags;
+    std::string compact;
+  };
+
   [[nodiscard]] Result
   configure(ProcessType &process,
             const compute::ManualSelectionConfig &selection,
@@ -41,10 +49,20 @@ public:
             const compute::StageWorkload &workload,
             const runtime::ComputeSessionOptions &manualDevice = {},
             const std::string_view configuredSpirvPath = {},
-            const std::string_view configuredProfilePath = {}) {
+            const std::string_view configuredProfilePath = {},
+            const RebuildSpirvPaths &configuredRebuildSpirvPaths = {}) {
+    const auto previousUpdateExecutor = process.getLevelSetUpdateExecutor();
+    const auto previousRebuildExecutor = process.getLevelSetRebuildExecutor();
+    const auto previousFailurePolicy = process.getLevelSetUpdateFailurePolicy();
+    const auto restoreManualState = [&]() {
+      process.setLevelSetUpdateExecutor(previousUpdateExecutor);
+      process.setLevelSetRebuildExecutor(previousRebuildExecutor);
+      process.setLevelSetUpdateFailurePolicy(previousFailurePolicy);
+    };
     process.setLevelSetUpdateFailurePolicy(
         viennaps::LevelSetUpdateFailurePolicy::FALLBACK);
     process.clearLevelSetUpdateExecutor();
+    process.clearLevelSetRebuildExecutor();
     Result result;
     result.manualMode =
         selection.selectionMode == compute::SelectionMode::MANUAL;
@@ -55,6 +73,7 @@ public:
 
     if (selection.selectionMode == compute::SelectionMode::MANUAL &&
         requestedBackend == compute::ComputeBackend::AUTO) {
+      restoreManualState();
       result.ok = false;
       result.usingVulkan = false;
       result.message = "Manual selection requires an explicit backend for the "
@@ -63,23 +82,30 @@ public:
     }
     if (workload.stage != compute::Stage::LEVEL_SET ||
         workload.precision != compute::Precision::FP32) {
+      if (result.manualMode)
+        restoreManualState();
       result.message =
           "Level-set Vulkan controller requires an FP32 LEVEL_SET workload.";
       return result;
     }
     if (workload.estimatedBytes == 0) {
+      if (result.manualMode)
+        restoreManualState();
       result.message =
           "Level-set Vulkan controller requires a non-zero estimated workload.";
       return result;
     }
     if (selection.precision != compute::Precision::MIXED &&
         selection.precision != compute::Precision::FP32) {
+      if (result.manualMode)
+        restoreManualState();
       result.message =
           "Level-set Vulkan controller supports FP32 selection only.";
       return result;
     }
     if (result.manualMode && requestedBackend != compute::ComputeBackend::CPU &&
         requestedBackend != compute::ComputeBackend::VULKAN) {
+      restoreManualState();
       result.message =
           "Level-set Vulkan controller supports manual CPU or Vulkan only.";
       return result;
@@ -99,7 +125,9 @@ public:
 
     if (!result.prepared) {
       process.clearLevelSetUpdateExecutor();
+      process.clearLevelSetRebuildExecutor();
       if (result.manualMode) {
+        restoreManualState();
         result.ok = false;
         if (wantVulkan && !result.message.empty() &&
             result.message.find("Manual Vulkan") == std::string::npos) {
@@ -122,6 +150,7 @@ public:
       result.usingVulkan = false;
       result.degraded = false;
       process.clearLevelSetUpdateExecutor();
+      process.clearLevelSetRebuildExecutor();
       return result;
     }
 
@@ -131,6 +160,7 @@ public:
       std::string spvPath;
       if (!resolveSpirvPath(configuredSpirvPath, spvPath, prepareError)) {
         if (result.manualMode) {
+          restoreManualState();
           result.ok = false;
           result.message = "Manual Vulkan selected, but no level-set SPIR-V "
                            "path is available.";
@@ -139,6 +169,7 @@ public:
         result.degraded = true;
         result.selectedBackend = compute::ComputeBackend::CPU;
         process.clearLevelSetUpdateExecutor();
+        process.clearLevelSetRebuildExecutor();
         result.ok = true;
         result.usingVulkan = false;
         return result;
@@ -148,6 +179,7 @@ public:
       std::string spirvError;
       if (!runtime::readSpirv(spvPath, *state->program, spirvError)) {
         if (result.manualMode) {
+          restoreManualState();
           result.ok = false;
           result.message =
               std::string("Manual Vulkan SPIR-V load failed: ") + spirvError;
@@ -157,6 +189,97 @@ public:
         result.message = spirvError;
         result.selectedBackend = compute::ComputeBackend::CPU;
         process.clearLevelSetUpdateExecutor();
+        process.clearLevelSetRebuildExecutor();
+        result.ok = true;
+        result.usingVulkan = false;
+        return result;
+      }
+
+      RebuildSpirvPaths rebuildPaths = configuredRebuildSpirvPaths;
+      std::string rebuildPathError;
+      if (!resolveRebuildSpirvPaths(rebuildPaths, rebuildPathError)) {
+        if (result.manualMode) {
+          restoreManualState();
+          result.ok = false;
+          result.message =
+              "Manual Vulkan rebuild SPIR-V paths are incomplete: " +
+              rebuildPathError;
+          return result;
+        }
+        result.degraded = true;
+        result.message = rebuildPathError;
+        result.selectedBackend = compute::ComputeBackend::CPU;
+        process.clearLevelSetUpdateExecutor();
+        process.clearLevelSetRebuildExecutor();
+        result.ok = true;
+        result.usingVulkan = false;
+        return result;
+      }
+
+      state->rebuildSession = std::make_shared<runtime::ComputeSession>();
+      if (!state->rebuildSession->initialize(spirvError, manualDevice)) {
+        if (result.manualMode) {
+          restoreManualState();
+          result.ok = false;
+          result.message =
+              "Manual Vulkan rebuild session initialization failed: " +
+              spirvError;
+          return result;
+        }
+        result.degraded = true;
+        result.message = spirvError;
+        result.selectedBackend = compute::ComputeBackend::CPU;
+        process.clearLevelSetUpdateExecutor();
+        process.clearLevelSetRebuildExecutor();
+        result.ok = true;
+        result.usingVulkan = false;
+        return result;
+      }
+      state->rebuildPrimitives =
+          std::make_shared<primitives::ReductionScanPrimitives>();
+      if (!state->rebuildPrimitives->initialize(
+              *state->rebuildSession, rebuildPaths.reductionScan, spirvError)) {
+        if (result.manualMode) {
+          restoreManualState();
+          result.ok = false;
+          result.message =
+              "Manual Vulkan rebuild primitive initialization failed: " +
+              spirvError;
+          return result;
+        }
+        result.degraded = true;
+        result.message = spirvError;
+        result.selectedBackend = compute::ComputeBackend::CPU;
+        process.clearLevelSetUpdateExecutor();
+        process.clearLevelSetRebuildExecutor();
+        result.ok = true;
+        result.usingVulkan = false;
+        return result;
+      }
+      state->rebuildClassificationProgram =
+          std::make_shared<runtime::SpirvProgram>();
+      state->rebuildActionFlagsProgram =
+          std::make_shared<runtime::SpirvProgram>();
+      state->rebuildCompactProgram = std::make_shared<runtime::SpirvProgram>();
+      if (!runtime::readSpirv(rebuildPaths.classification,
+                              *state->rebuildClassificationProgram,
+                              spirvError) ||
+          !runtime::readSpirv(rebuildPaths.actionFlags,
+                              *state->rebuildActionFlagsProgram, spirvError) ||
+          !runtime::readSpirv(rebuildPaths.compact,
+                              *state->rebuildCompactProgram, spirvError)) {
+        if (result.manualMode) {
+          restoreManualState();
+          result.ok = false;
+          result.message =
+              "Manual Vulkan rebuild SPIR-V load failed: " + spirvError;
+          return result;
+        }
+        result.degraded = true;
+        result.message = spirvError;
+        result.selectedBackend = compute::ComputeBackend::CPU;
+        process.clearLevelSetUpdateExecutor();
+        process.clearLevelSetRebuildExecutor();
         result.ok = true;
         result.usingVulkan = false;
         return result;
@@ -165,6 +288,7 @@ public:
       const auto *session = state->computeContext.session();
       if (session == nullptr) {
         if (result.manualMode) {
+          restoreManualState();
           result.ok = false;
           result.message =
               "Manual Vulkan selected, but compute session is absent.";
@@ -173,6 +297,7 @@ public:
         result.degraded = true;
         result.selectedBackend = compute::ComputeBackend::CPU;
         process.clearLevelSetUpdateExecutor();
+        process.clearLevelSetRebuildExecutor();
         result.ok = true;
         result.usingVulkan = false;
         return result;
@@ -195,6 +320,21 @@ public:
                 *activeSession, state->program);
             return executor(context, output, error);
           });
+      auto rebuildState = std::make_shared<ViennaLsRebuildExecutorStateFp32>();
+      rebuildState->session = state->rebuildSession;
+      rebuildState->primitives = state->rebuildPrimitives;
+      rebuildState->classificationProgram = state->rebuildClassificationProgram;
+      rebuildState->actionFlagsProgram = state->rebuildActionFlagsProgram;
+      rebuildState->compactProgram = state->rebuildCompactProgram;
+      const auto rebuildExecutor =
+          makeViennaLsRebuildExecutorFp32<D>(std::move(rebuildState));
+      process.setLevelSetRebuildExecutor(
+          [rebuildExecutor](
+              const viennals::Advect<float, D>::LevelSetRebuildContext &context,
+              viennals::Advect<float, D>::LevelSetRebuildOutput &output,
+              std::string &error) mutable {
+            return rebuildExecutor(context, output, error);
+          });
       if (result.manualMode) {
         process.setLevelSetUpdateFailurePolicy(
             viennaps::LevelSetUpdateFailurePolicy::FAIL);
@@ -207,6 +347,7 @@ public:
     }
 
     if (result.manualMode && wantVulkan) {
+      restoreManualState();
       result.message =
           "Manual Vulkan requested, but the deployment plan selected another "
           "backend.";
@@ -214,6 +355,7 @@ public:
     }
 
     process.clearLevelSetUpdateExecutor();
+    process.clearLevelSetRebuildExecutor();
     result.ok = true;
     result.usingVulkan = false;
     result.degraded =
@@ -223,6 +365,7 @@ public:
 
   void clear(ProcessType &process) const {
     process.clearLevelSetUpdateExecutor();
+    process.clearLevelSetRebuildExecutor();
     process.setLevelSetUpdateFailurePolicy(
         viennaps::LevelSetUpdateFailurePolicy::FALLBACK);
   }
@@ -231,6 +374,11 @@ private:
   struct RuntimeState {
     runtime::DeploymentComputeContext computeContext{};
     std::shared_ptr<runtime::SpirvProgram> program{};
+    std::shared_ptr<runtime::ComputeSession> rebuildSession{};
+    std::shared_ptr<primitives::ReductionScanPrimitives> rebuildPrimitives{};
+    std::shared_ptr<runtime::SpirvProgram> rebuildClassificationProgram{};
+    std::shared_ptr<runtime::SpirvProgram> rebuildActionFlagsProgram{};
+    std::shared_ptr<runtime::SpirvProgram> rebuildCompactProgram{};
   };
 
   [[nodiscard]] static compute::ComputeBackend
@@ -284,6 +432,43 @@ private:
     }
     error = "No level-set SPIR-V path configured.";
     return false;
+  }
+
+  [[nodiscard]] static bool resolveRebuildSpirvPaths(RebuildSpirvPaths &paths,
+                                                     std::string &error) {
+#ifdef VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH
+    if (paths.classification.empty())
+      paths.classification = VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH;
+#endif
+#ifdef VIENNAPS_REDUCTION_SCAN_SPV_PATH
+    if (paths.reductionScan.empty())
+      paths.reductionScan = VIENNAPS_REDUCTION_SCAN_SPV_PATH;
+#endif
+#ifdef VIENNAPS_HRLE_ACTION_FLAGS_SPV_PATH
+    if (paths.actionFlags.empty())
+      paths.actionFlags = VIENNAPS_HRLE_ACTION_FLAGS_SPV_PATH;
+#endif
+#ifdef VIENNAPS_HRLE_COMPACT_SPV_PATH
+    if (paths.compact.empty())
+      paths.compact = VIENNAPS_HRLE_COMPACT_SPV_PATH;
+#endif
+    if (paths.classification.empty())
+      readEnvironmentPath("VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH",
+                          paths.classification);
+    if (paths.reductionScan.empty())
+      readEnvironmentPath("VIENNAPS_REDUCTION_SCAN_SPV_PATH",
+                          paths.reductionScan);
+    if (paths.actionFlags.empty())
+      readEnvironmentPath("VIENNAPS_HRLE_ACTION_FLAGS_SPV_PATH",
+                          paths.actionFlags);
+    if (paths.compact.empty())
+      readEnvironmentPath("VIENNAPS_HRLE_COMPACT_SPV_PATH", paths.compact);
+    if (paths.classification.empty() || paths.reductionScan.empty() ||
+        paths.actionFlags.empty() || paths.compact.empty()) {
+      error = "one or more rebuild SPIR-V paths are unavailable";
+      return false;
+    }
+    return true;
   }
 };
 

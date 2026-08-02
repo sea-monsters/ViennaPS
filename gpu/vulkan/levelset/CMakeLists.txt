@@ -293,12 +293,28 @@ endif()
 add_executable(viennaps-vulkan-levelset-process-controller-smoke
                levelset_process_controller_smoke.cpp)
 add_dependencies(viennaps-vulkan-levelset-process-controller-smoke
-                 viennaps-vulkan-levelset-update-spv)
+                 viennaps-vulkan-levelset-update-spv
+                 viennaps-vulkan-hrle-classification-spv
+                 viennaps-vulkan-reduction-scan-smoke-spv
+                 viennaps-vulkan-hrle-compaction-spv)
+string(REPLACE "\\" "/" _VIENNAPS_REDUCTION_SCAN_SPV_PATH
+               "${_VIENNAPS_REDUCTION_SCAN_SPV}")
+string(REPLACE "\\" "/" _VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH
+               "${VIENNAPS_HRLE_CLASSIFICATION_SPV}")
+string(REPLACE "\\" "/" _VIENNAPS_HRLE_ACTION_FLAGS_SPV_PATH
+               "${VIENNAPS_HRLE_ACTION_FLAGS_SPV}")
+string(REPLACE "\\" "/" _VIENNAPS_HRLE_COMPACT_SPV_PATH
+               "${VIENNAPS_HRLE_COMPACT_SPV}")
 target_compile_definitions(
   viennaps-vulkan-levelset-process-controller-smoke PRIVATE
-  "VIENNAPS_LEVELSET_UPDATE_SPV_PATH=\"${_VIENNAPS_LEVELSET_UPDATE_SPV_PATH}\"")
+  "VIENNAPS_LEVELSET_UPDATE_SPV_PATH=\"${_VIENNAPS_LEVELSET_UPDATE_SPV_PATH}\""
+  "VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH=\"${_VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH}\""
+  "VIENNAPS_REDUCTION_SCAN_SPV_PATH=\"${_VIENNAPS_REDUCTION_SCAN_SPV_PATH}\""
+  "VIENNAPS_HRLE_ACTION_FLAGS_SPV_PATH=\"${_VIENNAPS_HRLE_ACTION_FLAGS_SPV_PATH}\""
+  "VIENNAPS_HRLE_COMPACT_SPV_PATH=\"${_VIENNAPS_HRLE_COMPACT_SPV_PATH}\"")
 target_link_libraries(viennaps-vulkan-levelset-process-controller-smoke
-  PRIVATE ViennaPS viennaps_vulkan_levelset_update)
+  PRIVATE ViennaPS viennaps_vulkan_levelset_update
+          viennaps_vulkan_hrle_compaction)
 target_compile_features(viennaps-vulkan-levelset-process-controller-smoke
   PRIVATE cxx_std_20)
 if(MSVC)
@@ -312,12 +328,20 @@ endif()
 add_executable(viennaps-vulkan-levelset-process-controller-execution-smoke
                levelset_process_controller_execution_smoke.cpp)
 add_dependencies(viennaps-vulkan-levelset-process-controller-execution-smoke
-                 viennaps-vulkan-levelset-update-spv)
+                 viennaps-vulkan-levelset-update-spv
+                 viennaps-vulkan-hrle-classification-spv
+                 viennaps-vulkan-reduction-scan-smoke-spv
+                 viennaps-vulkan-hrle-compaction-spv)
 target_compile_definitions(
   viennaps-vulkan-levelset-process-controller-execution-smoke PRIVATE
-  "VIENNAPS_LEVELSET_UPDATE_SPV_PATH=\"${_VIENNAPS_LEVELSET_UPDATE_SPV_PATH}\"")
+  "VIENNAPS_LEVELSET_UPDATE_SPV_PATH=\"${_VIENNAPS_LEVELSET_UPDATE_SPV_PATH}\""
+  "VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH=\"${_VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH}\""
+  "VIENNAPS_REDUCTION_SCAN_SPV_PATH=\"${_VIENNAPS_REDUCTION_SCAN_SPV_PATH}\""
+  "VIENNAPS_HRLE_ACTION_FLAGS_SPV_PATH=\"${_VIENNAPS_HRLE_ACTION_FLAGS_SPV_PATH}\""
+  "VIENNAPS_HRLE_COMPACT_SPV_PATH=\"${_VIENNAPS_HRLE_COMPACT_SPV_PATH}\"")
 target_link_libraries(viennaps-vulkan-levelset-process-controller-execution-smoke
-  PRIVATE ViennaPS viennaps_vulkan_levelset_update)
+  PRIVATE ViennaPS viennaps_vulkan_levelset_update
+          viennaps_vulkan_hrle_compaction)
 target_compile_features(viennaps-vulkan-levelset-process-controller-execution-smoke
                          PRIVATE cxx_std_20)
 if(WIN32)

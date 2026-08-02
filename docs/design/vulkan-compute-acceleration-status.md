@@ -1414,6 +1414,32 @@ caller output.
 | Residual boundary | the Vulkan adapter is not yet installed by the deployment controller; Vulkan 3D, RK2/RK3, and explicit empty-output-segment execution remain untested; session invalidation is assumed not to race the final publish |
 | Production boundary | device classification and compaction are accelerated; candidate collection, canonical HRLE construction, re-segmentation, and PointData translation remain CPU work |
 
+### P4C5-C: level-set controller installation and policy routing
+
+- Status: accepted locally; deployment-time suite connection pending
+- Date: 2026-08-02
+
+`LevelSetProcessController` now installs the segmented ViennaLS rebuild
+executor together with the existing level-set update executor. The controller
+keeps rebuild runtime state (session, reduction/scan primitives, and the three
+HRLE programs) under shared ownership, and accepts optional rebuild SPIR-V
+paths while retaining generated target defaults. Auto mode clears both
+executors and returns a degraded CPU result when any rebuild program, primitive,
+or session initialization fails. Manual Vulkan returns a strict error, restores
+the complete pre-call controller state, and does not install new executors. CPU
+selection and `clear()` remove both executor callbacks and restore `FALLBACK`
+policy.
+
+| Gate | Result |
+|---|---|
+| Auto pair install | update and rebuild callbacks are both observable after a valid profile/configuration |
+| Auto bad rebuild | missing classification program clears both callbacks and falls back to CPU |
+| Manual bad rebuild | returns failure and restores the pre-call update/rebuild callbacks and policy (an initially empty process remains empty) |
+| Clear | clears update and rebuild callbacks and restores fallback policy |
+| Existing controller regression | auto/manual/stale/shader/gate smoke passes; execution smoke preserves strict rollback |
+| Residual boundary | deployment probe does not yet execute the full primitive/rebuild suite; Vulkan 3D and RK2/RK3 remain untested |
+| Path policy | all SDK and generated SPIR-V paths enter through environment/CMake configuration and are not persisted in tracked source |
+
 ## P4D-deployment-probe audit: persisted automatic selection gap
 
 - Status: audited; implementation pending

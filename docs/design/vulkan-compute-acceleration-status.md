@@ -2682,3 +2682,27 @@ uninitialized callbacks leave caller output and metadata unchanged.
 | Hardware acceptance | Fresh MSVC 19.44.35223 + `VULKAN_SDK` build on the local Intel Arc; focused CTest `viennaps-vulkan-surface-diffusion-executor-smoke` passed 1/1 in 0.21 s. |
 | Root Process mapping | Patched-ViennaLS root Debug CTest `surfaceDiffusionExecutor` passed 1/1 in 0.46 s, including SUCCESS/FAILURE status adaptation through the legacy ProcessContext callback. |
 | Scope boundary | Only the status alias/adapter, bridge, surface CMake wiring, smoke, and this record are in scope; no Flux strategy, shader, primitive, dependency, or backend-policy changes. |
+
+### PD0: coverage stage policy and per-stage manual CPU bypass
+
+- Status: accepted locally as a policy/runtime gate; shared Process deployment
+  session binding remains the next stage
+- Date: 2026-08-03
+
+`Stage::COVERAGE` is now an independent backend-policy stage and serializes as
+`coverage`; it is appended after the existing stage values so prior enum-backed
+indices remain stable. `DeploymentComputeContext` resolves the effective manual
+backend for every supplied workload (`perStageBackend` first, then
+`globalBackend`). The fail-closed CPU bypass is taken only when every effective
+manual request is CPU. A single per-stage Vulkan/CUDA/AUTO request therefore
+keeps the profile/session gate active, while automatic selection remains
+fail-closed to CPU when no valid profile exists.
+
+| Gate | Result |
+|---|---|
+| Independent policy | Backend-policy focused test selects `Stage::COVERAGE` independently and verifies `toString` is `coverage`. |
+| Manual CPU bypass | Vulkan runtime smoke covers multi-stage global CPU with all per-stage effective CPU and a missing profile; it prepares CPU without a Vulkan session. |
+| Manual override precedence | The same smoke covers global CPU plus coverage Vulkan and a mixed Level Set/Vulkan plan; both reject without a valid profile instead of bypassing. |
+| Existing route | Existing single-stage auto/manual/profile/session checks remain in the focused runtime smoke; the fixture now carries the strict-FP32 evidence required by the current automatic Vulkan gate. |
+| Validation | RED MSVC build failed on the missing `Stage::COVERAGE`; GREEN backend-policy executable passed, and `viennaps-deployment-compute-context-smoke` CTest passed 1/1 on the local Vulkan SDK/device. |
+| Scope boundary | Only backend policy, deployment context runtime/smoke, backend-policy test, and this status entry changed; no bridge, Process/Flux, profile schema, CUDA, algorithm, or CMake dependency logic changed. |

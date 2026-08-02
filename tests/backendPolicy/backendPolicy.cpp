@@ -136,6 +136,25 @@ void TestAutoPrefersVulkanWhenCapabilitiesPass() {
   VC_TEST_ASSERT(plan.stages[0].selectedBackend == ComputeBackend::VULKAN);
 }
 
+void TestCoverageStageCanBeSelectedIndependently() {
+  CapabilityProfile profile{};
+  profile.cpuAvailable = true;
+  profile.vulkanAvailable = true;
+  profile.vulkanPrimitiveSuitePass = true;
+  profile.vulkanCompute = true;
+  profile.safeVulkanWorkingSetBytes = 1024ULL * 1024ULL;
+  enableValidatedFp32Smoke(profile);
+
+  const std::vector<StageWorkload> workloads = {
+      {Stage::COVERAGE, Precision::FP32, 1024U, false, RayMode::NONE, true}};
+  const auto plan = buildSelectionPlan(profile, workloads);
+  VC_TEST_ASSERT(plan.ok);
+  VC_TEST_ASSERT(plan.stages.size() == 1U);
+  VC_TEST_ASSERT(plan.stages[0].stage == Stage::COVERAGE);
+  VC_TEST_ASSERT(plan.stages[0].selectedBackend == ComputeBackend::VULKAN);
+  VC_TEST_ASSERT(toString(Stage::COVERAGE) == "coverage");
+}
+
 void TestAutoUsesTheLowestValidatedRayTier() {
   CapabilityProfile profile{};
   profile.cpuAvailable = true;
@@ -386,6 +405,8 @@ int main() {
   viennacore::TestAutoFallsBackToCPUWhenOnlyCPUAvailable();
   std::cerr << "TestAutoPrefersVulkanWhenCapabilitiesPass\n";
   viennacore::TestAutoPrefersVulkanWhenCapabilitiesPass();
+  std::cerr << "TestCoverageStageCanBeSelectedIndependently\n";
+  viennacore::TestCoverageStageCanBeSelectedIndependently();
   std::cerr << "TestAutoUsesTheLowestValidatedRayTier\n";
   viennacore::TestAutoUsesTheLowestValidatedRayTier();
   std::cerr << "TestVulkanRejectsFP64WithoutSupportThenFallsBackCPU\n";

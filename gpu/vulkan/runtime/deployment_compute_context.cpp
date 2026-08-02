@@ -19,6 +19,30 @@ namespace {
   return false;
 }
 
+[[nodiscard]] bool manualSelectionIsCpuOnly(
+    const std::span<const viennaps::compute::StageWorkload> workloads,
+    const viennaps::compute::ManualSelectionConfig &selectionConfig) {
+  if (selectionConfig.selectionMode !=
+          viennaps::compute::SelectionMode::MANUAL ||
+      workloads.empty()) {
+    return false;
+  }
+
+  for (const auto &workload : workloads) {
+    const auto index = static_cast<std::size_t>(workload.stage);
+    if (index >= viennaps::compute::stageCount) {
+      return false;
+    }
+    const auto requestedBackend =
+        selectionConfig.perStageBackend.at(index).value_or(
+            selectionConfig.globalBackend);
+    if (requestedBackend != viennaps::compute::ComputeBackend::CPU) {
+      return false;
+    }
+  }
+  return true;
+}
+
 [[nodiscard]] std::string normalizeIdentifier(const std::string_view value) {
   std::string normalized;
   normalized.reserve(value.size());
@@ -121,23 +145,16 @@ bool DeploymentComputeContext::prepare(
   // A supplied decision is authoritative for automatic routing, but a caller's
   // explicit manual override must still be evaluated against the persisted
   // capability record. This recomputation is in-memory and performs no I/O.
-  if (selectionConfig.selectionMode == compute::SelectionMode::MANUAL) {
-    const auto requestedBackend =
-        workloadVector.size() == 1U
-            ? selectionConfig.perStageBackend
-                  .at(static_cast<std::size_t>(workloadVector.front().stage))
-                  .value_or(selectionConfig.globalBackend)
-            : selectionConfig.globalBackend;
-    if (requestedBackend == compute::ComputeBackend::CPU) {
-      decision_.plan =
-          compute::buildSelectionPlan(compute::detail::failClosedCpuProfile(),
-                                      workloadVector, selectionConfig);
-    } else if (decision_.state == compute::DeploymentProfileState::VALID &&
-               decision_.hasProfile) {
-      decision_.plan =
-          compute::buildSelectionPlan(decision_.activeRecord.capabilityProfile,
-                                      workloadVector, selectionConfig);
-    }
+  if (manualSelectionIsCpuOnly(workloads, selectionConfig)) {
+    decision_.plan = compute::buildSelectionPlan(
+        compute::detail::failClosedCpuProfile(), workloadVector,
+        selectionConfig);
+  } else if (selectionConfig.selectionMode == compute::SelectionMode::MANUAL &&
+             decision_.state == compute::DeploymentProfileState::VALID &&
+             decision_.hasProfile) {
+    decision_.plan = compute::buildSelectionPlan(
+        decision_.activeRecord.capabilityProfile, workloadVector,
+        selectionConfig);
   }
 
   if (!decision_.plan.ok) {

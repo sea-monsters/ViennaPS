@@ -90,6 +90,13 @@ int main() {
   record.capabilityProfile.vulkanCompute = true;
   record.capabilityProfile.safeVulkanWorkingSetBytes =
       128ULL * 1024ULL * 1024ULL;
+  record.capabilityProfile.vulkanFp32NumericalSmoke.status =
+      VulkanNumericalSmokeStatus::PASS;
+  record.capabilityProfile.vulkanFp32NumericalSmoke.contractId =
+      std::string(kVulkanFp32NumericalSmokeContract);
+  record.capabilityProfile.vulkanFp32NumericalSmoke.caseCount = 1U;
+  record.capabilityProfile.vulkanFp32NumericalSmoke.watchdogMs =
+      kVulkanFp32NumericalSmokeWatchdogMs;
 
   const TempDirectoryGuard tempDirectory{uniqueTempDirectory()};
   const auto &profileDirectory = tempDirectory.path;
@@ -156,6 +163,51 @@ int main() {
   pass = context.prepare(fingerprint, workloads, ManualSelectionConfig{},
                          profileDirectory.string(), error, manualDevice) &&
          context.hasVulkanSession() && pass;
+
+  // Manual CPU must bypass profile/session work for every requested stage,
+  // including the new independent coverage stage, when no profile exists.
+  const std::array<StageWorkload, 2> multiWorkloads = {
+      StageWorkload{Stage::LEVEL_SET, Precision::FP32, 4096U, false,
+                    RayMode::NONE, true},
+      StageWorkload{Stage::COVERAGE, Precision::FP32, 4096U, false,
+                    RayMode::NONE, true}};
+  const auto missingProfileDirectory = profileDirectory / "missing";
+  DeploymentComputeContext multiContext{};
+  ManualSelectionConfig allCpu{};
+  allCpu.selectionMode = SelectionMode::MANUAL;
+  allCpu.globalBackend = ComputeBackend::CPU;
+  pass = multiContext.prepare(fingerprint, multiWorkloads, allCpu,
+                              missingProfileDirectory.string(), error) &&
+         multiContext.isPrepared() && !multiContext.hasVulkanSession() &&
+         multiContext.backendFor(Stage::LEVEL_SET) == ComputeBackend::CPU &&
+         multiContext.backendFor(Stage::COVERAGE) == ComputeBackend::CPU && pass;
+
+  // A per-stage Vulkan override must win over the global CPU request. With no
+  // profile available, this must remain fail-closed instead of bypassing the
+  // profile/session gate as an all-CPU request would.
+  multiContext.reset();
+  ManualSelectionConfig coverageVulkan = allCpu;
+  coverageVulkan.perStageBackend.at(static_cast<std::size_t>(Stage::COVERAGE)) =
+      ComputeBackend::VULKAN;
+  const bool rejectedCoverageOverride =
+      !multiContext.prepare(fingerprint, multiWorkloads, coverageVulkan,
+                            missingProfileDirectory.string(), error);
+  pass = rejectedCoverageOverride && !multiContext.isPrepared() &&
+         !multiContext.hasVulkanSession() && !multiContext.decision().plan.ok &&
+         pass;
+
+  // The same rule applies when any other stage in the multi-stage plan forces
+  // Vulkan; one non-CPU stage is enough to prevent the CPU bypass.
+  multiContext.reset();
+  ManualSelectionConfig mixedVulkan = allCpu;
+  mixedVulkan.perStageBackend.at(static_cast<std::size_t>(Stage::LEVEL_SET)) =
+      ComputeBackend::VULKAN;
+  const bool rejectedMixedOverride =
+      !multiContext.prepare(fingerprint, multiWorkloads, mixedVulkan,
+                            missingProfileDirectory.string(), error);
+  pass = rejectedMixedOverride && !multiContext.isPrepared() &&
+         !multiContext.hasVulkanSession() && !multiContext.decision().plan.ok &&
+         pass;
 
   if (!pass) {
     reportFailure(error.empty() ? "policy/session checks failed" : error);

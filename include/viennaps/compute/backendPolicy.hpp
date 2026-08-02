@@ -35,6 +35,10 @@ enum class Stage {
   OXIDATION_LINEAR_SOLVE,
   SURFACE_DIFFUSION,
   CUSTOM,
+  // Coverage convergence is an independent process stage. Keep it separate
+  // from surface diffusion so per-stage deployment policy can select it on
+  // its own; append after existing values to preserve their indices.
+  COVERAGE,
   COUNT
 };
 enum class RayMode { NONE, COMPUTE_BVH, RAY_QUERY, RAY_TRACING_PIPELINE };
@@ -102,6 +106,8 @@ toString(const SelectionMode mode) {
     return "surfaceDiffusion";
   case Stage::CUSTOM:
     return "custom";
+  case Stage::COVERAGE:
+    return "coverage";
   case Stage::COUNT:
     return "count";
   }

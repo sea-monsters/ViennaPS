@@ -1,0 +1,160 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+struct CenterData {
+  float value;
+  float definedValue;
+  uint pointId;
+  uint padding;
+};
+
+struct NeighborData {
+  float value;
+  float definedValue;
+  uint pointId;
+  uint padding;
+};
+
+struct DecisionData {
+  float value;
+  uint sourcePointId;
+  uint action;
+  uint padding;
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer CenterBuffer {
+  CenterData centers[];
+};
+layout(std430, set = 0, binding = 1) readonly buffer NeighborBuffer {
+  NeighborData neighbors[];
+};
+layout(std430, set = 0, binding = 2) writeonly buffer DecisionBuffer {
+  DecisionData decisions[];
+};
+layout(std430, set = 0, binding = 3) buffer StatusBuffer { uint status; };
+
+layout(push_constant) uniform Parameters {
+  uint elementCount;
+  uint dimensions;
+  float cutoff;
+  uint padding;
+} parameters;
+
+const uint ACTION_UNDEFINED_POSITIVE = 0u;
+const uint ACTION_UNDEFINED_NEGATIVE = 1u;
+const uint ACTION_DEFINED = 2u;
+const uint INVALID_POINT_ID = 0xffffffffu;
+const float POS_VALUE = 3.402823466e+38;
+const float NEG_VALUE = -3.402823466e+38;
+const float SIGN_EPSILON = 1.0e-7;
+
+bool negativeSign(float value) {
+  return (floatBitsToUint(value) & 0x80000000u) != 0u;
+}
+
+void reportFailure(uint code) { atomicCompSwap(status, 0u, code); }
+
+void writeUndefined(uint index, bool negative) {
+  decisions[index].value = negative ? NEG_VALUE : POS_VALUE;
+  decisions[index].sourcePointId = INVALID_POINT_ID;
+  decisions[index].action =
+      negative ? ACTION_UNDEFINED_NEGATIVE : ACTION_UNDEFINED_POSITIVE;
+  decisions[index].padding = 0u;
+}
+
+void writeDefined(uint index, float value, uint sourcePointId) {
+  if (sourcePointId == INVALID_POINT_ID) {
+    reportFailure(1u);
+  }
+  if (isnan(value) || isinf(value)) {
+    reportFailure(2u);
+  }
+  decisions[index].value = value;
+  decisions[index].sourcePointId = sourcePointId;
+  decisions[index].action = ACTION_DEFINED;
+  decisions[index].padding = 0u;
+}
+
+void main() {
+  const uint index = gl_GlobalInvocationID.x;
+  if (index >= parameters.elementCount) {
+    return;
+  }
+
+  const CenterData center = centers[index];
+  const uint neighborCount = 2u * parameters.dimensions;
+  const uint neighborOffset = 6u * index;
+
+  if (abs(center.value) <= 1.0) {
+    bool crossesInterface = false;
+    for (uint neighbor = 0u; neighbor < neighborCount; ++neighbor) {
+      const float neighborValue = neighbors[neighborOffset + neighbor].value;
+      if (negativeSign(neighborValue - SIGN_EPSILON) !=
+          negativeSign(center.value + SIGN_EPSILON)) {
+        crossesInterface = true;
+        break;
+      }
+    }
+
+    if (!crossesInterface) {
+      writeUndefined(index, center.definedValue < 0.0);
+      return;
+    }
+
+    if (center.definedValue > 0.5) {
+      for (uint neighbor = 0u; neighbor < neighborCount; ++neighbor) {
+        const NeighborData candidate = neighbors[neighborOffset + neighbor];
+        if (abs(candidate.value) <= 1.0 && candidate.definedValue < -0.5) {
+          writeDefined(index, 0.5, candidate.pointId);
+          return;
+        }
+      }
+    } else if (center.definedValue < -0.5) {
+      for (uint neighbor = 0u; neighbor < neighborCount; ++neighbor) {
+        const NeighborData candidate = neighbors[neighborOffset + neighbor];
+        if (abs(candidate.value) <= 1.0 && candidate.definedValue > 0.5) {
+          writeDefined(index, -0.5, candidate.pointId);
+          return;
+        }
+      }
+    }
+    writeDefined(index, center.definedValue, center.pointId);
+    return;
+  }
+
+  if (center.value >= 0.0) {
+    float distance = POS_VALUE;
+    uint sourcePointId = INVALID_POINT_ID;
+    for (uint neighbor = 0u; neighbor < neighborCount; ++neighbor) {
+      const NeighborData candidate = neighbors[neighborOffset + neighbor];
+      if (abs(candidate.value) <= 1.0 && candidate.value < 0.0 &&
+          distance > candidate.value + 1.0) {
+        distance = candidate.value + 1.0;
+        sourcePointId = candidate.pointId;
+      }
+    }
+    if (distance <= parameters.cutoff) {
+      writeDefined(index, distance, sourcePointId);
+    } else {
+      writeUndefined(index, false);
+    }
+    return;
+  }
+
+  float distance = NEG_VALUE;
+  uint sourcePointId = INVALID_POINT_ID;
+  for (uint neighbor = 0u; neighbor < neighborCount; ++neighbor) {
+    const NeighborData candidate = neighbors[neighborOffset + neighbor];
+    if (abs(candidate.value) <= 1.0 && candidate.value > 0.0 &&
+        distance < candidate.value - 1.0) {
+      distance = candidate.value - 1.0;
+      sourcePointId = candidate.pointId;
+    }
+  }
+  if (distance >= -parameters.cutoff) {
+    writeDefined(index, distance, sourcePointId);
+  } else {
+    writeUndefined(index, true);
+  }
+}

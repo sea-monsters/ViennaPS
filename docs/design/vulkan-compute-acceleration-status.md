@@ -948,13 +948,65 @@ that packaging conflict remains a separate follow-up.
 | Runtime deployment | Embree/TBB DLLs are copied from imported targets, not resolved paths |
 | Path policy | tracked inputs contain environment-variable names only and no machine-local path |
 
+## P4A-HRLE-classification: CPU contract and Vulkan candidate kernel
+
+- Status: accepted locally
+- Date: 2026-08-02
+- Scope: reproduce the ViennaLS HRLE rebuild candidate-classification branches
+  as a standalone CPU oracle and an exact FP32 Vulkan compute kernel
+
+The new CPU contract classifies the center and its four or six sparse-star
+neighbors into positive undefined, negative undefined, or defined output. It
+preserves the ViennaLS interface-crossing epsilon, positive and negative
+half-cell clamps, neighbor-distance propagation, cutoff handling, source point
+IDs, dimension-dependent neighbor order, and stable batch order. Invalid
+dimensions, non-finite active inputs, invalid source IDs, and invalid cutoffs
+fail without changing the caller's previous output.
+
+The Vulkan adapter packs centers and six neighbor slots into 16-byte storage
+records, validates dispatch, storage-buffer, descriptor, and push-constant
+limits, then executes one classification invocation per candidate. Shader
+status and returned actions are validated before the result vector is
+committed. The integration smoke obtains its candidates through the real
+two-dimensional ViennaHRLE sparse-star traversal of a small sphere. All 183
+candidates, including 68 defined outputs, match the CPU oracle exactly in
+action, source point ID, and FP32 bit pattern.
+
+This slice does not change capability-profile schema v2. Automatic and manual
+Vulkan selection remain behind the persisted primitive-suite result and safe
+working-set budget. Unknown budgets and estimates above the known safe budget
+exclude Vulkan; manual selection reports a hard failure instead of bypassing
+these gates. The explicit above-budget policy test covers both Auto fallback
+and manual rejection. Before this kernel is wired into the production Level
+Set stage, its smoke result must also become part of the deployment-time
+primitive suite so a stored profile can unlock it without a per-job prompt.
+
+The production boundary remains Host Canonical Field: ViennaHRLE traversal and
+final domain-segment insertion still execute on the CPU. Classification output
+is not yet connected to the backend router or ViennaLS rebuild seam. The next
+slice must add stable compaction and sparse reconstruction, then connect the
+complete transactional path; a standalone low-level Vulkan call is not
+evidence that automatic production routing is complete.
+
+| Gate | Result |
+|---|---|
+| No-SDK CPU contract | active/inactive, clamp, cutoff, 2D/3D, ordering, empty, and transactional validation branches pass |
+| Real Vulkan oracle | 183 of 183 sphere candidates match CPU action, point ID, and FP32 bits |
+| Device limits | workgroup, buffer range, descriptor count, and push constants fail before dispatch |
+| Output transaction | validation, session, shader, dispatch, and readback faults preserve the caller output |
+| Deployment policy | primitive-suite and memory-budget gates cover Auto and manual Vulkan; no schema change |
+| Integration boundary | traversal, compaction, sparse rebuild, and ViennaLS routing remain pending |
+| Path policy | SDK and dependency discovery remain environment/cache supplied; tracked inputs contain no resolved local path |
+
 ## Next slice
 
-Advance to HRLE active-run classification and sparse rebuild kernels. Direct
-negative/non-finite time injection also remains a defensive-branch coverage
-gap. The optional VTK-enabled install/export conflict should be isolated from
-the compute backend before packaging validation.
+Advance to stable HRLE decision compaction and sparse reconstruction, then wire
+the complete classification/rebuild path into the ViennaLS executor and the
+deployment-time primitive suite. Direct negative/non-finite time injection
+also remains a defensive-branch coverage gap. The optional VTK-enabled
+install/export conflict should be isolated from the compute backend before
+packaging validation.
 
 After those production-seam gates, the Level Set work advances to HRLE
-active-run classification and sparse rebuild, followed by particle/ray and
-surface/oxidation stages.
+sparse rebuild integration, followed by particle/ray and surface/oxidation
+stages.

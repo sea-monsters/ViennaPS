@@ -190,6 +190,37 @@ void TestAutoRejectsVulkanWhenMemoryBudgetIsUnknown() {
   VC_TEST_ASSERT(plan.stages[0].selectedBackend == ComputeBackend::CPU);
 }
 
+void TestVulkanRejectsWorkloadAboveSafeMemoryBudget() {
+  CapabilityProfile profile{};
+  profile.cpuAvailable = true;
+  profile.vulkanAvailable = true;
+  profile.vulkanPrimitiveSuitePass = true;
+  profile.vulkanCompute = true;
+  profile.safeVulkanWorkingSetBytes = 4096;
+
+  const std::vector<StageWorkload> workloads = {
+      {Stage::LEVEL_SET, Precision::FP32, 4097, false, RayMode::NONE, false}};
+
+  const auto automaticPlan = buildSelectionPlan(profile, workloads);
+  VC_TEST_ASSERT(automaticPlan.ok);
+  VC_TEST_ASSERT(automaticPlan.stages[0].selectedBackend ==
+                 ComputeBackend::CPU);
+  VC_TEST_ASSERT(!automaticPlan.stages[0].rejectionReasons.empty());
+  VC_TEST_ASSERT(automaticPlan.stages[0].rejectionReasons.front() ==
+                 "Estimated working set exceeds Vulkan safe budget.");
+
+  ManualSelectionConfig manualConfig{};
+  manualConfig.selectionMode = SelectionMode::MANUAL;
+  manualConfig.globalBackend = ComputeBackend::VULKAN;
+  const auto manualPlan = buildSelectionPlan(profile, workloads, manualConfig);
+  VC_TEST_ASSERT(!manualPlan.ok);
+  VC_TEST_ASSERT(!manualPlan.stages[0].selected);
+  VC_TEST_ASSERT(!manualPlan.stages[0].rejectionReasons.empty());
+  VC_TEST_ASSERT(manualPlan.stages[0].rejectionReasons.front() ==
+                 "Manual backend blocked: Estimated working set exceeds "
+                 "Vulkan safe budget.");
+}
+
 void TestManualRayTierCannotSilentlyDowngrade() {
   CapabilityProfile profile{};
   profile.cpuAvailable = true;
@@ -288,6 +319,8 @@ int main() {
   viennacore::TestVulkanRejectsFP64WithoutSupportThenFallsBackCPU();
   std::cerr << "TestAutoRejectsVulkanWhenMemoryBudgetIsUnknown\n";
   viennacore::TestAutoRejectsVulkanWhenMemoryBudgetIsUnknown();
+  std::cerr << "TestVulkanRejectsWorkloadAboveSafeMemoryBudget\n";
+  viennacore::TestVulkanRejectsWorkloadAboveSafeMemoryBudget();
   std::cerr << "TestManualRayTierCannotSilentlyDowngrade\n";
   viennacore::TestManualRayTierCannotSilentlyDowngrade();
   std::cerr << "TestManualOverrideAlwaysWinsOverAutoRanking\n";

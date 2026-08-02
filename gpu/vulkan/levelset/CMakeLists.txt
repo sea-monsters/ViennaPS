@@ -2,6 +2,10 @@ set(VIENNAPS_LEVELSET_UPDATE_SHADER
     "${CMAKE_CURRENT_SOURCE_DIR}/shaders/levelset_update.comp")
 set(VIENNAPS_LEVELSET_UPDATE_SPV
     "${CMAKE_CURRENT_BINARY_DIR}/levelset_update.comp.spv")
+set(VIENNAPS_HRLE_CLASSIFICATION_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hrle_rebuild_classification.comp")
+set(VIENNAPS_HRLE_CLASSIFICATION_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/hrle_rebuild_classification.comp.spv")
 
 find_program(VIENNAPS_LEVELSET_SHADER_COMPILER
              NAMES glslc glslangValidator
@@ -46,12 +50,36 @@ endif()
 add_custom_target(viennaps-vulkan-levelset-update-spv
                   DEPENDS "${VIENNAPS_LEVELSET_UPDATE_SPV}")
 
-add_library(viennaps_vulkan_levelset_update levelset_update.cpp)
+if("${VIENNAPS_LEVELSET_SHADER_COMPILER}" MATCHES "glslangValidator")
+  add_custom_command(
+    OUTPUT "${VIENNAPS_HRLE_CLASSIFICATION_SPV}"
+    COMMAND "${VIENNAPS_LEVELSET_SHADER_COMPILER}" -V
+            "${VIENNAPS_HRLE_CLASSIFICATION_SHADER}"
+            -o "${VIENNAPS_HRLE_CLASSIFICATION_SPV}"
+    DEPENDS "${VIENNAPS_HRLE_CLASSIFICATION_SHADER}"
+    COMMENT "Generating Vulkan HRLE rebuild classification SPIR-V")
+else()
+  add_custom_command(
+    OUTPUT "${VIENNAPS_HRLE_CLASSIFICATION_SPV}"
+    COMMAND "${VIENNAPS_LEVELSET_SHADER_COMPILER}"
+            -o "${VIENNAPS_HRLE_CLASSIFICATION_SPV}"
+            "${VIENNAPS_HRLE_CLASSIFICATION_SHADER}"
+    DEPENDS "${VIENNAPS_HRLE_CLASSIFICATION_SHADER}"
+    COMMENT "Generating Vulkan HRLE rebuild classification SPIR-V")
+endif()
+
+add_custom_target(viennaps-vulkan-hrle-classification-spv
+                  DEPENDS "${VIENNAPS_HRLE_CLASSIFICATION_SPV}")
+
+add_library(viennaps_vulkan_levelset_update
+            levelset_update.cpp
+            hrle_rebuild_classification.cpp)
 set_property(TARGET viennaps_vulkan_levelset_update
              PROPERTY VIENNAPS_LEVELSET_UPDATE_SPV
                       "${VIENNAPS_LEVELSET_UPDATE_SPV}")
 target_include_directories(viennaps_vulkan_levelset_update
-  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
+         "${CMAKE_CURRENT_LIST_DIR}/../../../include/viennaps")
 target_link_libraries(viennaps_vulkan_levelset_update
   PUBLIC viennaps_vulkan_compute_runtime Vulkan::Vulkan)
 target_compile_features(viennaps_vulkan_levelset_update PUBLIC cxx_std_20)
@@ -78,6 +106,37 @@ if(MSVC)
 else()
   target_compile_options(viennaps-vulkan-levelset-update-smoke
                          PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+string(REPLACE "\\" "/" _VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH
+               "${VIENNAPS_HRLE_CLASSIFICATION_SPV}")
+add_executable(viennaps-vulkan-hrle-classification-smoke
+               hrle_rebuild_classification_smoke.cpp)
+add_dependencies(viennaps-vulkan-hrle-classification-smoke
+                 viennaps-vulkan-hrle-classification-spv)
+target_compile_definitions(viennaps-vulkan-hrle-classification-smoke PRIVATE
+  "VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH=\"${_VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-hrle-classification-smoke
+  PRIVATE ViennaPS viennaps_vulkan_levelset_update)
+target_compile_features(viennaps-vulkan-hrle-classification-smoke
+                        PRIVATE cxx_std_20)
+if(WIN32)
+  find_package(TBB CONFIG REQUIRED COMPONENTS tbb)
+  add_custom_command(
+    TARGET viennaps-vulkan-hrle-classification-smoke
+    POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:viennaps-vulkan-hrle-classification-smoke>
+            $<TARGET_FILE:TBB::tbb>
+            $<TARGET_FILE_DIR:viennaps-vulkan-hrle-classification-smoke>
+    COMMAND_EXPAND_LISTS)
+endif()
+if(MSVC)
+  target_compile_options(viennaps-vulkan-hrle-classification-smoke
+                         PRIVATE /W4)
+else()
+  target_compile_options(viennaps-vulkan-hrle-classification-smoke
+                         PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 add_executable(viennaps-vulkan-levelset-process-controller-smoke
@@ -132,4 +191,6 @@ endif()
 if(BUILD_TESTING)
   add_test(NAME viennaps-vulkan-levelset-update-smoke
            COMMAND viennaps-vulkan-levelset-update-smoke)
+  add_test(NAME viennaps-vulkan-hrle-classification-smoke
+           COMMAND viennaps-vulkan-hrle-classification-smoke)
 endif()

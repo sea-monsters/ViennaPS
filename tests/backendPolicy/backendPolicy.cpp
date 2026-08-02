@@ -155,6 +155,49 @@ void TestCoverageStageCanBeSelectedIndependently() {
   VC_TEST_ASSERT(toString(Stage::COVERAGE) == "coverage");
 }
 
+void TestNeutralTransportVelocityStagePolicy() {
+  CapabilityProfile profile{};
+  profile.cpuAvailable = true;
+  profile.vulkanAvailable = true;
+  profile.vulkanPrimitiveSuitePass = true;
+  profile.vulkanCompute = true;
+  profile.safeVulkanWorkingSetBytes = 1024ULL * 1024ULL;
+  enableValidatedFp32Smoke(profile);
+
+  const std::vector<StageWorkload> workloads = {
+      {Stage::NEUTRAL_TRANSPORT_VELOCITY, Precision::FP32, 1024U, false,
+       RayMode::NONE, true}};
+  const auto automaticPlan = buildSelectionPlan(profile, workloads);
+  VC_TEST_ASSERT(automaticPlan.ok);
+  VC_TEST_ASSERT(automaticPlan.stages[0].selectedBackend ==
+                 ComputeBackend::VULKAN);
+  VC_TEST_ASSERT(toString(Stage::NEUTRAL_TRANSPORT_VELOCITY) ==
+                 "neutralTransportVelocity");
+
+  ManualSelectionConfig manualConfig{};
+  manualConfig.selectionMode = SelectionMode::MANUAL;
+  manualConfig.globalBackend = ComputeBackend::CPU;
+  manualConfig.perStageBackend[static_cast<std::size_t>(
+      Stage::NEUTRAL_TRANSPORT_VELOCITY)] = ComputeBackend::VULKAN;
+  const auto manualVulkanPlan =
+      buildSelectionPlan(profile, workloads, manualConfig);
+  VC_TEST_ASSERT(manualVulkanPlan.ok);
+  VC_TEST_ASSERT(manualVulkanPlan.stages[0].requestedBackend ==
+                 ComputeBackend::VULKAN);
+  VC_TEST_ASSERT(manualVulkanPlan.stages[0].selectedBackend ==
+                 ComputeBackend::VULKAN);
+
+  manualConfig.globalBackend = ComputeBackend::VULKAN;
+  manualConfig.perStageBackend[static_cast<std::size_t>(
+      Stage::NEUTRAL_TRANSPORT_VELOCITY)] = ComputeBackend::CPU;
+  const auto manualCpuPlan =
+      buildSelectionPlan(profile, workloads, manualConfig);
+  VC_TEST_ASSERT(manualCpuPlan.ok);
+  VC_TEST_ASSERT(manualCpuPlan.stages[0].requestedBackend ==
+                 ComputeBackend::CPU);
+  VC_TEST_ASSERT(manualCpuPlan.stages[0].selectedBackend == ComputeBackend::CPU);
+}
+
 void TestAutoUsesTheLowestValidatedRayTier() {
   CapabilityProfile profile{};
   profile.cpuAvailable = true;
@@ -407,6 +450,8 @@ int main() {
   viennacore::TestAutoPrefersVulkanWhenCapabilitiesPass();
   std::cerr << "TestCoverageStageCanBeSelectedIndependently\n";
   viennacore::TestCoverageStageCanBeSelectedIndependently();
+  std::cerr << "TestNeutralTransportVelocityStagePolicy\n";
+  viennacore::TestNeutralTransportVelocityStagePolicy();
   std::cerr << "TestAutoUsesTheLowestValidatedRayTier\n";
   viennacore::TestAutoUsesTheLowestValidatedRayTier();
   std::cerr << "TestVulkanRejectsFP64WithoutSupportThenFallsBackCPU\n";

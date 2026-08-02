@@ -2751,3 +2751,23 @@ ordered before session teardown.
 | Scope boundary | Only the surface binding facade, its smoke target, CMake registration, and this status entry are in scope; core Process APIs, Level Set, shaders, policy/profile schema, CUDA, and dependencies remain untouched. |
 | Hardware acceptance | A fresh root Visual Studio 2022 configuration with the local CPM cache and a temporary patched ViennaLS source built the binding smoke; Intel Arc focused CTest `viennaps-vulkan-process-deployment-binding-smoke` passed 1/1 in 0.34 s. Both exact temporary directories were removed after the run. |
 | Validation coverage | The binding smoke covers unsupported-stage rejection, manual mixed-profile fail-closed behavior, automatic empty-shader degradation, real profile/session binding, raw-bit coverage/surface executor checks, and callback retention after binding destruction. |
+
+### PD2-A: neutral-transport velocity stage policy
+
+- Status: accepted locally as a policy-visible stage; neutral velocity binding
+  implementation remains the next card
+- Date: 2026-08-03
+
+`Stage::NEUTRAL_TRANSPORT_VELOCITY` is appended after `COVERAGE` and before
+`COUNT`, preserving all existing stage-backed indices. It serializes as
+`neutralTransportVelocity` and uses the existing generic backend policy for
+automatic and independent manual selection. No neutral transport binding,
+Process integration, bridge, shader, dependency, or deployment-context change
+is included.
+
+| Gate | Result |
+|---|---|
+| RED | MSVC compile of the focused backend-policy test failed on the absent `Stage::NEUTRAL_TRANSPORT_VELOCITY` member before the header change. |
+| GREEN | Focused backend-policy executable passed all existing tests plus automatic strict-FP32 Vulkan selection, global CPU/per-stage neutral Vulkan override, direct neutral CPU override, and stable `toString`. |
+| Fresh root CTest | Fresh Visual Studio 2022 CMake tree under `C:\tmp` (VTK/Vulkan disabled, existing CPM cache) built `backendPolicy`; focused CTest passed 1/1. |
+| Scope boundary | Only `backendPolicy.hpp`, the focused backend-policy test, and this status entry changed; no neutral binding implementation or unrelated policy behavior changed. |

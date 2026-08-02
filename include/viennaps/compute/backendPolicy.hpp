@@ -39,6 +39,9 @@ enum class Stage {
   // from surface diffusion so per-stage deployment policy can select it on
   // its own; append after existing values to preserve their indices.
   COVERAGE,
+  // Neutral-transport velocity binding is an independent process stage.
+  // Append before COUNT to preserve all existing stage-backed indices.
+  NEUTRAL_TRANSPORT_VELOCITY,
   COUNT
 };
 enum class RayMode { NONE, COMPUTE_BVH, RAY_QUERY, RAY_TRACING_PIPELINE };
@@ -108,6 +111,8 @@ toString(const SelectionMode mode) {
     return "custom";
   case Stage::COVERAGE:
     return "coverage";
+  case Stage::NEUTRAL_TRANSPORT_VELOCITY:
+    return "neutralTransportVelocity";
   case Stage::COUNT:
     return "count";
   }

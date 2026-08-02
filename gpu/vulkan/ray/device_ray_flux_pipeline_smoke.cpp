@@ -207,11 +207,83 @@ int main() {
   assert(pipeline.lastComputeSubmissionCount() == 1U);
   const auto preparedSurfaceFirst = preparedSurface;
   const auto preparedWeightFirst = preparedWeight;
+  const auto preparedCountFirst = prepared.count;
+  auto invalidCountTriangles = tieTriangles;
+  invalidCountTriangles.pop_back();
+  assert(!pipeline.refitPreparedGeometry(invalidCountTriangles, error));
+  assert(pipeline.runGpuPrepared(tieRays, tieWeights, prepared, error));
+  assert(prepared.count == preparedCountFirst &&
+         preparedSurface == preparedSurfaceFirst &&
+         preparedWeight == preparedWeightFirst);
+  auto invalidNanTriangles = tieTriangles;
+  invalidNanTriangles[0].a[0] = std::numeric_limits<float>::quiet_NaN();
+  assert(!pipeline.refitPreparedGeometry(invalidNanTriangles, error));
+  assert(pipeline.runGpuPrepared(tieRays, tieWeights, prepared, error));
+  assert(prepared.count == preparedCountFirst &&
+         preparedSurface == preparedSurfaceFirst &&
+         preparedWeight == preparedWeightFirst);
+  auto invalidSubnormalTriangles = tieTriangles;
+  invalidSubnormalTriangles[0].a[0] =
+      std::numeric_limits<float>::denorm_min();
+  assert(!pipeline.refitPreparedGeometry(invalidSubnormalTriangles, error));
+  assert(pipeline.runGpuPrepared(tieRays, tieWeights, prepared, error));
+  assert(prepared.count == preparedCountFirst &&
+         preparedSurface == preparedSurfaceFirst &&
+         preparedWeight == preparedWeightFirst);
+  auto movedTieTriangles = tieTriangles;
+  for (auto &point : {&movedTieTriangles[9].a, &movedTieTriangles[9].b,
+                      &movedTieTriangles[9].c})
+    (*point)[0] += 8.0F;
+  std::vector<std::uint32_t> movedTieCpuSurface(tieRays.size(),
+                                                kSurfaceSentinel);
+  std::vector<float> movedTieCpuWeight(tieRays.size(), kWeightSentinel);
+  RayFluxResult movedTieCpu{movedTieCpuSurface, movedTieCpuWeight, 0U};
+  assert(pipeline.runCpu(tieRays, movedTieTriangles, tieWeights, movedTieCpu,
+                         error));
+  assert(pipeline.refitPreparedGeometry(movedTieTriangles, error));
+  assert(pipeline.lastComputeSubmissionCount() == 1U);
+  std::vector<std::uint32_t> movedTieGpuSurface(tieRays.size(),
+                                                kSurfaceSentinel);
+  std::vector<float> movedTieGpuWeight(tieRays.size(), kWeightSentinel);
+  RayFluxResult movedTieGpu{movedTieGpuSurface, movedTieGpuWeight, 0U};
+  assert(pipeline.runGpuPrepared(tieRays, tieWeights, movedTieGpu, error));
+  assert(pipeline.lastComputeSubmissionCount() == 1U);
+  assert(movedTieGpu.count == movedTieCpu.count);
+  for (std::size_t i = 0U; i < movedTieGpu.count; ++i) {
+    assert(movedTieGpuSurface[i] == movedTieCpuSurface[i]);
+    assert(std::bit_cast<std::uint32_t>(movedTieGpuWeight[i]) ==
+           std::bit_cast<std::uint32_t>(movedTieCpuWeight[i]));
+  }
+  assert(pipeline.refitPreparedGeometry(tieTriangles, error));
+  assert(pipeline.lastComputeSubmissionCount() == 1U);
   assert(pipeline.runGpuPrepared(tieRays, tieWeights, prepared, error));
   assert(pipeline.lastComputeSubmissionCount() == 1U);
   assert(prepared.count == tieCpu.count &&
          preparedSurface == preparedSurfaceFirst &&
          preparedWeight == preparedWeightFirst);
+  std::vector<std::uint32_t> defaultSurface(tieRays.size(), kSurfaceSentinel);
+  std::vector<float> defaultWeight(tieRays.size(), kWeightSentinel);
+  RayFluxResult defaultGpu{defaultSurface, defaultWeight, 0U};
+  assert(pipeline.runGpu(tieRays, movedTieTriangles, tieWeights, defaultGpu,
+                         error));
+  assert(pipeline.lastComputeSubmissionCount() == 1U &&
+         defaultGpu.count == movedTieCpu.count);
+  for (std::size_t i = 0U; i < defaultGpu.count; ++i) {
+    assert(defaultSurface[i] == movedTieCpuSurface[i]);
+    assert(std::bit_cast<std::uint32_t>(defaultWeight[i]) ==
+           std::bit_cast<std::uint32_t>(movedTieCpuWeight[i]));
+  }
+  std::vector<std::uint32_t> invalidatedSurface(tieRays.size(),
+                                                kSurfaceSentinel);
+  std::vector<float> invalidatedWeight(tieRays.size(), kWeightSentinel);
+  RayFluxResult invalidatedPrepared{invalidatedSurface, invalidatedWeight,
+                                    76U};
+  assert(!pipeline.runGpuPrepared(tieRays, tieWeights, invalidatedPrepared,
+                                  error));
+  assert(pipeline.lastComputeSubmissionCount() == 0U &&
+         invalidatedPrepared.count == 76U &&
+         invalidatedSurface[0] == kSurfaceSentinel &&
+         invalidatedWeight[0] == kWeightSentinel);
   assert(!pipeline.prepareGeometry({}, error));
   std::vector<std::uint32_t> failedPrepareSurface(tieRays.size(),
                                                   kSurfaceSentinel);

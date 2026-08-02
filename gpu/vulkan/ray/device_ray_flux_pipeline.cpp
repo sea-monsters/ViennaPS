@@ -4,6 +4,7 @@
 #include "device_ray_flux_pipeline.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -71,6 +72,20 @@ bool bytesFor(std::size_t count, std::size_t elementBytes, std::size_t &bytes) {
   return true;
 }
 
+bool packTriangles(std::span<const Triangle> triangles,
+                   std::vector<std::array<float, 4>> &packed,
+                   std::size_t &bytes, std::string &error) {
+  if (!bytesFor(triangles.size(), 3U * sizeof(std::array<float, 4>),
+                bytes))
+    return fail(error, "triangle vertex buffer size overflow");
+  packed.clear();
+  packed.reserve(bytes / sizeof(std::array<float, 4>));
+  for (const auto &triangle : triangles)
+    for (const auto point : {triangle.a, triangle.b, triangle.c})
+      packed.push_back({point[0], point[1], point[2], 0.0F});
+  return true;
+}
+
 } // namespace
 
 DeviceRayFluxPipeline::~DeviceRayFluxPipeline() { reset(); }
@@ -125,6 +140,7 @@ void DeviceRayFluxPipeline::reset() {
   fence_.destroy();
   commandBuffer_ = VK_NULL_HANDLE;
   scanScratch_.reset();
+  preparedVertices_.reset();
   lastComputeSubmissionCount_ = 0U;
   reducer_.reset();
   sorter_.reset();
@@ -192,9 +208,12 @@ bool DeviceRayFluxPipeline::runGpu(std::span<const Ray> rays,
     output.count = 0U;
     return true;
   }
-  if (useTriangleBvh_ && !reusePrepared_ &&
-      !triangleBvh_.build(triangles, error))
-    return false;
+  if (useTriangleBvh_ && !reusePrepared_) {
+    if (preparedGeometry_)
+      resetPreparedGeometry();
+    if (!triangleBvh_.build(triangles, error))
+      return false;
+  }
   if (output.surfaceId.size() < rays.size())
     return fail(error,
                 "device ray-flux output capacity must cover every input ray");
@@ -316,18 +335,98 @@ bool DeviceRayFluxPipeline::prepareGeometry(std::span<const Triangle> triangles,
   if (!ready(error) || !useTriangleBvh_)
     return fail(error, "prepared geometry requires an initialized BVH path");
   preparedGeometry_ = false;
+  preparedVertices_.reset();
   preparedTriangles_.clear();
   if (triangles.empty())
     return fail(error, "prepared geometry cannot be empty");
   if (!triangleBvh_.build(triangles, error))
     return false;
+  std::vector<std::array<float, 4>> packed;
+  std::size_t bytes{};
+  if (!packTriangles(triangles, packed, bytes, error) ||
+      !preparedVertices_.create(*session_, static_cast<VkDeviceSize>(bytes),
+                                error) ||
+      !preparedVertices_.upload(*session_, packed.data(),
+                                static_cast<VkDeviceSize>(bytes), 0U,
+                                error)) {
+    resetPreparedGeometry();
+    return false;
+  }
   preparedTriangles_.assign(triangles.begin(), triangles.end());
   preparedGeometry_ = true;
   return true;
 }
 
+bool DeviceRayFluxPipeline::refitPreparedGeometry(
+    std::span<const Triangle> triangles, std::string &error) {
+  error.clear();
+  lastComputeSubmissionCount_ = 0U;
+  if (!ready(error) || !useTriangleBvh_ || !preparedGeometry_)
+    return fail(error, "prepared geometry is unavailable");
+  if (triangles.empty() || triangles.size() != preparedTriangles_.size())
+    return fail(error, "prepared refit triangle count is invalid");
+  if (!validateInputs(std::span<const Ray>{}, triangles,
+                      std::span<const float>{}, error))
+    return false;
+  std::vector<std::array<float, 4>> packed;
+  std::size_t bytes{};
+  if (!packTriangles(triangles, packed, bytes, error))
+    return false;
+  if (!preparedVertices_.isValid() ||
+      preparedVertices_.ownerDevice() != session_->device().get() ||
+      preparedVertices_.ownerSessionGeneration() != session_->generation() ||
+      preparedVertices_.size() < bytes) {
+    resetPreparedGeometry();
+    return fail(error, "prepared refit vertex buffer is stale");
+  }
+  if (!preparedVertices_.upload(*session_, packed.data(),
+                                static_cast<VkDeviceSize>(bytes), 0U,
+                                error)) {
+    resetPreparedGeometry();
+    return false;
+  }
+  if (vkResetCommandBuffer(commandBuffer_, 0U) != VK_SUCCESS) {
+    resetPreparedGeometry();
+    return fail(error, "failed to reset prepared refit command buffer");
+  }
+  VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+  begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  if (vkBeginCommandBuffer(commandBuffer_, &begin) != VK_SUCCESS) {
+    resetPreparedGeometry();
+    return fail(error, "failed to begin prepared refit command buffer");
+  }
+  if (!triangleBvh_.recordRefit(commandBuffer_, preparedVertices_, triangles,
+                                error)) {
+    vkEndCommandBuffer(commandBuffer_);
+    resetPreparedGeometry();
+    return false;
+  }
+  if (vkEndCommandBuffer(commandBuffer_) != VK_SUCCESS) {
+    resetPreparedGeometry();
+    return fail(error, "failed to end prepared refit command buffer");
+  }
+  VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+  submit.commandBufferCount = 1U;
+  submit.pCommandBuffers = &commandBuffer_;
+  if (vkQueueSubmit(session_->device().computeQueue(), 1U, &submit,
+                    fence_.get()) != VK_SUCCESS) {
+    resetPreparedGeometry();
+    return fail(error, "failed to submit prepared refit command buffer");
+  }
+  lastComputeSubmissionCount_ = 1U;
+  if (!fence_.wait(std::numeric_limits<std::uint64_t>::max(), error)) {
+    preparedGeometry_ = false;
+    preparedTriangles_.clear();
+    return false;
+  }
+  fence_.reset();
+  preparedTriangles_.assign(triangles.begin(), triangles.end());
+  return true;
+}
+
 void DeviceRayFluxPipeline::resetPreparedGeometry() {
   preparedGeometry_ = false;
+  preparedVertices_.reset();
   preparedTriangles_.clear();
 }
 
@@ -336,6 +435,7 @@ bool DeviceRayFluxPipeline::runGpuPrepared(std::span<const Ray> rays,
                                            RayFluxResult &output,
                                            std::string &error) {
   error.clear();
+  lastComputeSubmissionCount_ = 0U;
   if (!preparedGeometry_ || !useTriangleBvh_)
     return fail(error, "prepared geometry is unavailable");
   reusePrepared_ = true;

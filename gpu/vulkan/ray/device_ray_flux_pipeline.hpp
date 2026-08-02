@@ -69,14 +69,16 @@ public:
                             RayFluxResult &output, std::string &error);
   [[nodiscard]] bool prepareGeometry(std::span<const Triangle> triangles,
                                      std::string &error);
+  [[nodiscard]] bool refitPreparedGeometry(
+      std::span<const Triangle> triangles, std::string &error);
   void resetPreparedGeometry();
   [[nodiscard]] bool runGpuPrepared(std::span<const Ray> rays,
                                     std::span<const float> weights,
                                     RayFluxResult &output, std::string &error);
 
-  // Counts the compute submission in the last runGpu() call. It intentionally
-  // excludes input uploads and terminal downloads, which use explicit transfer
-  // helpers outside the recorded compute chain.
+  // Counts the compute submission in the last runGpu() or prepared-refit
+  // operation. It intentionally excludes input uploads and terminal downloads,
+  // which use explicit transfer helpers outside the recorded compute chain.
   [[nodiscard]] std::uint32_t lastComputeSubmissionCount() const;
 
 private:
@@ -92,6 +94,7 @@ private:
   bool preparedGeometry_{false};
   bool reusePrepared_{false};
   std::vector<Triangle> preparedTriangles_{};
+  runtime::DeviceBuffer preparedVertices_{};
   DeviceRayRecordCompactor compactor_{};
   DeviceRayRecordRadixSort sorter_{};
   DeviceRaySurfaceReducer reducer_{};

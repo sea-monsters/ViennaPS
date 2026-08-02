@@ -2237,6 +2237,32 @@ count, capacity, device, and session generation.
 | Alias boundary | The public API cannot alias the primitive's private BVH buffers; the implementation retains a defensive handle-alias check, but no test hook exposes those private buffers. |
 | Scope boundary | This is fixed-topology refit only. It does not add GPU BVH construction, topology mutation, Process routing, surface diffusion, Vulkan RT extensions, or automatic backend promotion. |
 
+### P5-R6: prepared-pipeline dynamic vertex refit
+
+- Status: accepted locally as an explicit prepared-geometry refit route; no
+  automatic production selection is enabled
+- Date: 2026-08-03
+
+`DeviceRayFluxPipeline::refitPreparedGeometry` keeps the existing default
+`runGpu(rays, triangles, ...)` rebuild path unchanged while updating an
+already prepared fixed-topology BVH through R5's caller-command refit. The
+pipeline owns a persistent packed float4 vertex buffer, performs strict
+triangle-count and normal-or-zero FP32 preflight, submits the refit once, and
+only then replaces the prepared host mirror. Invalid user preflight preserves
+the prior prepared route; an untrusted refit submission or wait clears its
+prepared marker fail-closed. A successful default `runGpu` rebuild explicitly
+invalidates any prepared route before replacing the shared BVH, so a later
+`runGpuPrepared` cannot mix two geometry generations.
+
+| Gate | Result |
+|---|---|
+| Prepared-state transaction | Count, NaN, and subnormal refit attempts are rejected while the old prepared geometry still produces the original raw CPU/GPU result. |
+| Dynamic refit oracle | A moved tie triangle refits, then `runGpuPrepared` matches the moved CPU count, surface IDs, and weight bits; a second refit restores the original prepared result. |
+| Submission semantics | The refit and each prepared traversal report one compute submission; uploads and terminal transfers remain outside that compute count. |
+| Rebuild interlock | `prepare(A) -> runGpu(B) -> runGpuPrepared` rejects with zero compute submissions and unchanged output sentinels after the default rebuild invalidates A's marker. |
+| Build and hardware smoke | A fresh standalone Vulkan build under MSVC `19.44.35223` succeeded; local Intel Arc focused CTest passed 1/1. |
+| Scope boundary | No automatic backend promotion, policy selection, topology mutation, Process integration, or B2A coupling is added. |
+
 ## Next slice
 
 The segmented rebuild adapter is installed by the level-set controller, the

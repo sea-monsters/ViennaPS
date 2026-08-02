@@ -11,9 +11,17 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <utility>
 #include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
 
 #include "backendPolicy.hpp"
 
@@ -561,23 +569,18 @@ writeCapabilityProfileRecordToFile(std::string_view filePath,
   out.close();
 
   std::error_code replaceEc;
-  std::filesystem::rename(tempPath, targetPath, replaceEc);
-  if (replaceEc) {
-    if (std::filesystem::exists(targetPath)) {
-      std::error_code removeEc;
-      std::filesystem::remove(targetPath, removeEc);
-      if (removeEc) {
-        std::error_code cleanupEc;
-        std::filesystem::remove(tempPath, cleanupEc);
-        if (error) {
-          *error =
-              "Failed to replace existing profile file: " + removeEc.message();
-        }
-        return false;
-      }
-    }
-    std::filesystem::rename(tempPath, targetPath, replaceEc);
+#ifdef _WIN32
+  // MoveFileEx replaces atomically from the perspective of readers and, unlike
+  // remove-then-rename, never destroys a last-known-good target on failure.
+  if (!MoveFileExW(tempPath.c_str(), targetPath.c_str(),
+                   MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+    replaceEc = std::error_code(static_cast<int>(GetLastError()),
+                                std::system_category());
   }
+#else
+  // POSIX rename replaces an existing target atomically.
+  std::filesystem::rename(tempPath, targetPath, replaceEc);
+#endif
   if (replaceEc) {
     std::error_code cleanupEc;
     std::filesystem::remove(tempPath, cleanupEc);

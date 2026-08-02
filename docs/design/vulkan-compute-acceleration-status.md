@@ -2120,3 +2120,28 @@ candidate, without weakening the current fail-closed gate.
 After those production-seam gates, the Level Set work advances to HRLE
 sparse rebuild integration, followed by particle/ray and surface/oxidation
 stages.
+
+### P5-K3: synchronous deployment-profile provisioning seam
+
+- Status: accepted locally as a deployment-thread-only provisioning seam; it
+  does not yet expose a Process/controller configuration API
+- Date: 2026-08-02
+
+`provisionDeploymentProfile` resolves the existing per-device profile first and
+invokes a caller-supplied synchronous probe at most once for missing, stale, or
+invalid state. Probe output must be schema-valid and match all seven current
+hardware-fingerprint fields before it is atomically persisted and re-read. An
+incomplete current fingerprint is rejected before lookup or callback
+invocation, including the `unknown-device.json` path. Any callback, validation,
+directory, write, or re-read failure returns an explicit failure while retaining
+the CPU fail-closed plan. Replacement uses a temporary file and platform-safe
+atomic move, preserving a last-known-good target when a replacement fails; no
+fixed local paths are introduced.
+
+| Gate | Result |
+|---|---|
+| Reuse/probe cardinality | focused CPU-only test covers valid reuse with zero callback calls and one-call provisioning for missing/stale/invalid profiles |
+| Fail closed | incomplete fingerprint, callback absence, throw, failure, mismatch, and persistence/re-read failures retain CPU routing and report an error |
+| Persistence hygiene | provisioning creates the parent directory only when needed, re-reads a VALID record, and leaves no temporary files |
+| Replacement safety | failed replacement preserves the prior target and cleans its temporary artifact |
+| Scope boundary | no Process routing, Vulkan probe implementation, flux-engine, or worker-thread changes are included |

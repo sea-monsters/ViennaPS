@@ -647,7 +647,7 @@ private:
                    ", total=" +
                    std::to_string(time_) +
                    " hr"
-                   ", initial_dt≤" +
+                                 ", initial_dt<=" +
                    std::to_string(initDt) + " hr")
           .print();
     }

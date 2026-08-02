@@ -106,6 +106,13 @@ struct VulkanCoverageDeltaExecutor::State {
     return model.initialize(spirvPath, error);
   }
 
+  bool initialize(runtime::ComputeSession &session,
+                  const std::string_view spirvPath, std::string &error) {
+    std::lock_guard lock(mutex);
+    resetUnlocked();
+    return model.initialize(session, spirvPath, error);
+  }
+
   void reset() {
     std::lock_guard lock(mutex);
     resetUnlocked();
@@ -214,6 +221,12 @@ VulkanCoverageDeltaExecutor::~VulkanCoverageDeltaExecutor() = default;
 bool VulkanCoverageDeltaExecutor::initialize(const std::string_view spirvPath,
                                              std::string &error) {
   return state_->initialize(spirvPath, error);
+}
+
+bool VulkanCoverageDeltaExecutor::initialize(runtime::ComputeSession &session,
+                                             const std::string_view spirvPath,
+                                             std::string &error) {
+  return state_->initialize(session, spirvPath, error);
 }
 
 void VulkanCoverageDeltaExecutor::reset() { state_->reset(); }

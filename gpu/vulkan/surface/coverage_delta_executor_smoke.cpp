@@ -3,6 +3,8 @@
 
 #include "coverage_delta_executor.hpp"
 
+#include "../runtime/compute_session.hpp"
+
 #include <array>
 #include <bit>
 #include <cmath>
@@ -116,6 +118,73 @@ template <class Mutator>
 
 int main() {
   std::string error;
+  viennaps::vulkan::runtime::ComputeSession borrowedSession;
+  if (!check(borrowedSession.initialize(error),
+             "failed to initialize borrowed compute session")) {
+    std::cerr << error << '\n';
+    return 1;
+  }
+  const auto borrowedGeneration = borrowedSession.generation();
+  auto borrowedBridge = std::make_unique<Bridge>();
+  if (!check(borrowedBridge->initialize(
+                 borrowedSession,
+                 VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV_PATH, error),
+             "failed to initialize borrowed Vulkan coverage bridge")) {
+    std::cerr << error << '\n';
+    return 1;
+  }
+  auto borrowedExecutor = borrowedBridge->makeExecutor();
+  borrowedBridge->reset();
+  if (!check(borrowedSession.isValid() &&
+                 borrowedSession.generation() == borrowedGeneration,
+             "coverage bridge reset reset borrowed session"))
+    return 1;
+  const std::vector<float> borrowedUpdated(3U * 16U, 1.0F);
+  const std::vector<float> borrowedPrevious(3U * 16U, 0.5F);
+  const std::vector<std::size_t> borrowedOffsets{0U, 16U, 32U, 48U};
+  if (!runRejected(borrowedExecutor, borrowedUpdated, borrowedPrevious,
+                   borrowedOffsets, 3U, [](Work &) {},
+                   "reset borrowed coverage callback unexpectedly succeeded"))
+    return 1;
+  borrowedBridge = std::make_unique<Bridge>();
+  if (!check(borrowedBridge->initialize(
+                 borrowedSession,
+                 VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV_PATH, error),
+             "failed to reinitialize borrowed Vulkan coverage bridge"))
+    return 1;
+  borrowedExecutor = borrowedBridge->makeExecutor();
+  borrowedBridge.reset();
+  if (!check(borrowedSession.isValid() &&
+                 borrowedSession.generation() == borrowedGeneration,
+             "coverage bridge destruction reset borrowed session"))
+    return 1;
+  for (const auto points : std::array<std::size_t, 2U>{1U, 16U})
+    if (!runCase(borrowedExecutor, 3U, points))
+      return 1;
+  // Release all borrowed bridge state before resetting its external session.
+  borrowedExecutor = nullptr;
+  borrowedSession.reset();
+  if (!check(!borrowedSession.isValid(), "borrowed session reset unexpectedly failed"))
+    return 1;
+
+  viennaps::vulkan::runtime::ComputeSession invalidSession;
+  auto invalidBridge = std::make_unique<Bridge>();
+  if (!check(!invalidBridge->initialize(
+                 invalidSession,
+                 VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV_PATH, error),
+             "invalid borrowed coverage session was accepted") ||
+      !check(!invalidBridge->isInitialized(),
+             "invalid borrowed coverage bridge remained initialized"))
+    return 1;
+  auto invalidExecutor = invalidBridge->makeExecutor();
+  const std::vector<float> invalidUpdated(3U * 16U, 1.0F);
+  const std::vector<float> invalidPrevious(3U * 16U, 0.5F);
+  const std::vector<std::size_t> invalidOffsets{0U, 16U, 32U, 48U};
+  if (!runRejected(invalidExecutor, invalidUpdated, invalidPrevious,
+                   invalidOffsets, 3U, [](Work &) {},
+                   "invalid borrowed coverage callback unexpectedly succeeded"))
+    return 1;
+
   auto bridge = std::make_unique<Bridge>();
   if (!check(bridge->initialize(VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV_PATH,
                                 error),

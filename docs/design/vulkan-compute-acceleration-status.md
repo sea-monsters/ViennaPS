@@ -2706,3 +2706,24 @@ fail-closed to CPU when no valid profile exists.
 | Existing route | Existing single-stage auto/manual/profile/session checks remain in the focused runtime smoke; the fixture now carries the strict-FP32 evidence required by the current automatic Vulkan gate. |
 | Validation | RED MSVC build failed on the missing `Stage::COVERAGE`; GREEN backend-policy executable passed, and `viennaps-deployment-compute-context-smoke` CTest passed 1/1 on the local Vulkan SDK/device. |
 | Scope boundary | Only backend policy, deployment context runtime/smoke, backend-policy test, and this status entry changed; no bridge, Process/Flux, profile schema, CUDA, algorithm, or CMake dependency logic changed. |
+
+### PD1-A: borrowed deployment-session bridge initialization
+
+- Status: implemented at the coverage-delta and surface-diffusion bridge layer;
+  Process deployment binding remains the next stage
+- Date: 2026-08-03
+
+Both FP32 surface bridges now accept a validated caller-owned
+`runtime::ComputeSession&` in addition to their existing self-owned
+`initialize(shaderPath, error)` path. Borrowed initialization rejects an
+invalid/reset session, never resets or owns the caller session, and documents
+that the session must outlive bridge state and every executor callback. Smoke
+coverage exercises exact CPU raw-bit output for borrowed and self-owned paths,
+rejection without output/metadata mutation, and session survival across bridge
+reset/destruction.
+
+| Gate | Result |
+|---|---|
+| Hardware acceptance | Root Visual Studio 2022 configuration using the local CPM cache built both bridge smoke targets; Intel Arc focused CTest passed 2/2 (`viennaps-vulkan-surface-diffusion-executor-smoke` in 0.29 s and `viennaps-vulkan-coverage-delta-executor-smoke` in 0.32 s). |
+| Standalone CMake note | The direct `gpu/vulkan` configuration hit an Embree FetchContent directory-removal failure before compilation; its exact temporary directory was removed. The accepted root configuration uses the project CPM cache and does not depend on that FetchContent path. |
+| Scope boundary | Only the two surface bridge headers/implementations, their smokes, and this record changed; no Process binding, shaders, numerical primitives, backend policy, CUDA, or dependency logic changed. |

@@ -3,6 +3,8 @@
 
 #include "surface_diffusion_executor.hpp"
 
+#include "../runtime/compute_session.hpp"
+
 #include <array>
 #include <bit>
 #include <cmath>
@@ -151,6 +153,65 @@ int main() {
   subnormal.front() = std::numeric_limits<float>::denorm_min();
   if (!runRejected(executor, offsets, columns, subnormal, field,
                    [](Work &) {}, "subnormal weight accepted"))
+    return 1;
+
+  viennaps::vulkan::runtime::ComputeSession borrowedSession;
+  if (!check(borrowedSession.initialize(error),
+             "failed to initialize borrowed compute session")) {
+    std::cerr << error << '\n';
+    return 1;
+  }
+  const auto borrowedGeneration = borrowedSession.generation();
+  auto borrowedBridge = std::make_unique<Bridge>();
+  if (!check(borrowedBridge->initialize(
+                 borrowedSession, VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH,
+                 error),
+             "failed to initialize borrowed Vulkan surface bridge")) {
+    std::cerr << error << '\n';
+    return 1;
+  }
+  auto borrowedExecutor = borrowedBridge->makeExecutor();
+  borrowedBridge->reset();
+  if (!check(borrowedSession.isValid() &&
+                 borrowedSession.generation() == borrowedGeneration,
+             "surface bridge reset reset borrowed session") ||
+      !runRejected(borrowedExecutor, offsets, columns, weights, field,
+                   [](Work &) {},
+                   "reset borrowed surface callback unexpectedly succeeded"))
+    return 1;
+  borrowedBridge = std::make_unique<Bridge>();
+  if (!check(borrowedBridge->initialize(
+                 borrowedSession, VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH,
+                 error),
+             "failed to reinitialize borrowed Vulkan surface bridge"))
+    return 1;
+  borrowedExecutor = borrowedBridge->makeExecutor();
+  borrowedBridge.reset();
+  if (!check(borrowedSession.isValid() &&
+                 borrowedSession.generation() == borrowedGeneration,
+             "surface bridge destruction reset borrowed session") ||
+      !runCase(borrowedExecutor, field.size()))
+    return 1;
+  // Release all borrowed bridge state before resetting its external session.
+  borrowedExecutor = nullptr;
+  borrowedSession.reset();
+  if (!check(!borrowedSession.isValid(),
+             "borrowed surface session reset unexpectedly failed"))
+    return 1;
+
+  viennaps::vulkan::runtime::ComputeSession invalidSession;
+  auto invalidBridge = std::make_unique<Bridge>();
+  if (!check(!invalidBridge->initialize(
+                 invalidSession, VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH,
+                 error),
+             "invalid borrowed surface session was accepted") ||
+      !check(!invalidBridge->isInitialized(),
+             "invalid borrowed surface bridge remained initialized"))
+    return 1;
+  auto invalidExecutor = invalidBridge->makeExecutor();
+  if (!runRejected(invalidExecutor, offsets, columns, weights, field,
+                   [](Work &) {},
+                   "invalid borrowed surface callback unexpectedly succeeded"))
     return 1;
 
   auto resetBridge = std::make_unique<Bridge>();

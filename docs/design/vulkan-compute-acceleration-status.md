@@ -1694,6 +1694,27 @@ publish a result.
 | Build and test | the local ray-only Intel Arc smoke prints `triangle hit Vulkan dispatch PASS`; the focused CTest passes 1/1 |
 | Scope boundary | this is a bounded O(rays times triangles) primitive only; no BVH, ray generation/reflection, particle sampling, surface-flux routing, or process selection is accelerated |
 
+### P5-E feasibility gate: neutral-transport coverage reaction remains CPU
+
+- Status: FP32 Vulkan implementation declined; a separate FP64 capability-gated
+  proposal is required before reconsidering it
+- Date: 2026-08-02
+
+The actual `NeutralTransportSurfaceModel<float, D>::updateCoverages` loop is
+not an FP32-only contract. `constants::N_A` is declared as `double`; its
+product with `surfaceSiteDensity` promotes the adsorption division to double.
+The optional desorbed-flux fallback uses `0.` and the explicit update uses
+`1.`, which also promote their respective expressions. Both the steady-state
+ratio and explicit time-step calculation therefore execute with double
+intermediates and only round when the coverage vector is written.
+
+No FP32 shader or build directory was created for this slice. Substituting an
+FP32 equation would be a different numerical model and cannot satisfy the
+required CPU bitwise oracle. This work remains CPU by default. A future Vulkan
+route must first pass the selected device's `shaderFloat64` gate and a direct
+CPU/GPU double-intermediate differential, or separately specify and validate a
+software-double implementation; manual selection cannot bypass either gate.
+
 ## Next slice
 
 The segmented rebuild adapter is installed by the level-set controller, the
@@ -1703,9 +1724,9 @@ RK2/RK3 remain deliberately CPU-only until a multi-stage device state machine
 is proven. The first surface velocity formula is now exact but intentionally
 unwired to process selection. Direct negative/non-finite time injection and
 the optional VTK-enabled install/export conflict remain validation gaps. The
-next implementation slices are surface coverage integration and bounded ray
-batch composition, followed by a scalable deterministic sort/reduce design,
-without weakening the current fail-closed gate.
+next implementation slices are bounded ray batch composition and a scalable
+deterministic sort/reduce design. Coverage reaction is a capability-gated FP64
+candidate, without weakening the current fail-closed gate.
 
 After those production-seam gates, the Level Set work advances to HRLE
 sparse rebuild integration, followed by particle/ray and surface/oxidation

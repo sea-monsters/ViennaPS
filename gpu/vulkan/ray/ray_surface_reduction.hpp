@@ -60,6 +60,19 @@ public:
          runtime::DeviceBuffer &outputWeight, std::size_t outputCapacity,
          DeviceRaySurfaceReductionOutput &output, std::string &error);
 
+  // Record segment construction, scan/count, and ordered reduction into a
+  // caller-owned command buffer using preallocated output buffers. The command
+  // buffer must already be recording; no reset/begin/end/submit/wait/download
+  // occurs here. `scanScratch` and every buffer must live through completion.
+  [[nodiscard]] bool recordReduce(
+      VkCommandBuffer commandBuffer, const runtime::DeviceBuffer &inputRecords,
+      const runtime::DeviceBuffer &inputCount, std::size_t inputCapacity,
+      runtime::DeviceBuffer &outputSurfaceId,
+      runtime::DeviceBuffer &outputWeight, std::size_t outputCapacity,
+      DeviceRaySurfaceReductionOutput &output,
+      primitives::ReductionScanPrimitives::DeviceScanScratch &scanScratch,
+      std::string &error);
+
 private:
   [[nodiscard]] bool setup(std::string_view segmentSpirv,
                            std::string_view reduceSpirv,

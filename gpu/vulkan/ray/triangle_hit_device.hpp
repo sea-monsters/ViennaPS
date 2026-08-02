@@ -61,6 +61,16 @@ public:
                               runtime::DeviceBuffer &hits,
                               std::size_t outputCapacity, std::string &error);
 
+  // Record the triangle-hit dispatch into a command buffer owned by the
+  // caller. The command buffer must already be recording; this method never
+  // resets, begins, ends, submits, waits, or performs host transfers.
+  [[nodiscard]] bool
+  recordDispatch(VkCommandBuffer commandBuffer, runtime::DeviceBuffer &origins,
+                 runtime::DeviceBuffer &directions,
+                 runtime::DeviceBuffer &triangles, std::size_t rayCount,
+                 std::size_t triangleCount, runtime::DeviceBuffer &hits,
+                 std::size_t outputCapacity, std::string &error);
+
 private:
   [[nodiscard]] bool setup(std::string_view path,
                            runtime::ComputeSession *external,

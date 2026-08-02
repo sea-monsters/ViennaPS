@@ -89,6 +89,7 @@ int main() {
   std::vector<float> gpuWeight(rays.size(), kWeightSentinel);
   RayFluxResult gpu{gpuSurface, gpuWeight, 99U};
   assert(pipeline.runGpu(rays, triangles, weights, gpu, error));
+  assert(pipeline.lastComputeSubmissionCount() == 1U);
   assert(gpu.count == cpu.count);
   for (std::size_t i = 0U; i < gpu.count; ++i) {
     assert(gpuSurface[i] == cpuSurface[i]);

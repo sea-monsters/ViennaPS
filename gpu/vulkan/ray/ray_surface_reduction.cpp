@@ -323,4 +323,143 @@ bool DeviceRaySurfaceReducer::reduce(const runtime::DeviceBuffer &inputRecords,
   return true;
 }
 
+bool DeviceRaySurfaceReducer::recordReduce(
+    const VkCommandBuffer commandBuffer,
+    const runtime::DeviceBuffer &inputRecords,
+    const runtime::DeviceBuffer &inputCount, const std::size_t inputCapacity,
+    runtime::DeviceBuffer &outputSurfaceId, runtime::DeviceBuffer &outputWeight,
+    const std::size_t outputCapacity, DeviceRaySurfaceReductionOutput &output,
+    primitives::ReductionScanPrimitives::DeviceScanScratch &scanScratch,
+    std::string &error) {
+  error.clear();
+  if (!ready(error))
+    return false;
+  if (commandBuffer == VK_NULL_HANDLE)
+    return fail(error, "ray surface-reduction command buffer is invalid");
+  if (inputCapacity > std::numeric_limits<std::uint32_t>::max() ||
+      outputCapacity < inputCapacity)
+    return fail(error, "ray surface-reduction capacity is invalid");
+  if (inputCapacity == 0U)
+    return true;
+  std::size_t recordBytes{}, indexBytes{}, weightBytes{};
+  if (!bytesFor(inputCapacity, sizeof(RayRecord), recordBytes) ||
+      !bytesFor(inputCapacity, sizeof(std::uint32_t), indexBytes) ||
+      !bytesFor(inputCapacity, sizeof(float), weightBytes))
+    return fail(error, "ray surface-reduction buffer size overflows");
+  const auto groups = ceilDivide(inputCapacity, kWorkgroupSize);
+  const auto &limits = session_->device().selection().properties.limits;
+  if (groups > limits.maxComputeWorkGroupCount[0] ||
+      limits.maxComputeWorkGroupInvocations < kWorkgroupSize ||
+      limits.maxComputeWorkGroupSize[0] < kWorkgroupSize)
+    return fail(
+        error, "ray surface-reduction dispatch exceeds device workgroup limit");
+  const auto sameSession = [&](const runtime::DeviceBuffer &buffer) {
+    return buffer.isValid() &&
+           buffer.ownerDevice() == session_->deviceHandle() &&
+           buffer.ownerSessionGeneration() == session_->generation();
+  };
+  if (!sameSession(inputRecords) || !sameSession(inputCount) ||
+      !sameSession(outputSurfaceId) || !sameSession(outputWeight) ||
+      !sameSession(output.flags) || !sameSession(output.offsets) ||
+      !sameSession(output.count) ||
+      inputRecords.size() < static_cast<VkDeviceSize>(recordBytes) ||
+      inputCount.size() < sizeof(std::uint32_t) ||
+      output.flags.size() < static_cast<VkDeviceSize>(indexBytes) ||
+      output.offsets.size() < static_cast<VkDeviceSize>(indexBytes) ||
+      output.count.size() < sizeof(std::uint32_t) ||
+      outputSurfaceId.size() < static_cast<VkDeviceSize>(indexBytes) ||
+      outputWeight.size() < static_cast<VkDeviceSize>(weightBytes))
+    return fail(
+        error, "ray surface-reduction buffer is invalid, stale, or undersized");
+  const std::array<VkBuffer, 7U> handles{
+      inputRecords.handle(),   inputCount.handle(),      output.flags.handle(),
+      output.offsets.handle(), outputSurfaceId.handle(), outputWeight.handle(),
+      output.count.handle()};
+  for (std::size_t i = 0U; i < handles.size(); ++i)
+    for (std::size_t j = i + 1U; j < handles.size(); ++j)
+      if (handles[i] == handles[j])
+        return fail(error, "ray surface-reduction buffers must not alias");
+  const std::array<VkDescriptorBufferInfo, 6U> infos{
+      {{handles[0], 0U, static_cast<VkDeviceSize>(recordBytes)},
+       {handles[1], 0U, sizeof(std::uint32_t)},
+       {handles[2], 0U, static_cast<VkDeviceSize>(indexBytes)},
+       {handles[3], 0U, static_cast<VkDeviceSize>(indexBytes)},
+       {handles[4], 0U, static_cast<VkDeviceSize>(indexBytes)},
+       {handles[5], 0U, static_cast<VkDeviceSize>(weightBytes)}}};
+  std::array<VkWriteDescriptorSet, 6U> writes{};
+  for (std::uint32_t i = 0U; i < writes.size(); ++i)
+    writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                 nullptr,
+                 descriptorSet_,
+                 i,
+                 0U,
+                 1U,
+                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                 nullptr,
+                 &infos[i],
+                 nullptr};
+  vkUpdateDescriptorSets(session_->deviceHandle(),
+                         static_cast<std::uint32_t>(writes.size()),
+                         writes.data(), 0U, nullptr);
+  const std::uint32_t capacity = static_cast<std::uint32_t>(inputCapacity);
+  const VkMemoryBarrier pre{
+      VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr,
+      VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT};
+  const VkMemoryBarrier computeBarrier{
+      VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_SHADER_WRITE_BIT,
+      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT};
+  vkCmdPipelineBarrier(commandBuffer,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT |
+                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 1U, &pre, 0U,
+                       nullptr, 0U, nullptr);
+  vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          pipelineLayout_.get(), 0U, 1U, &descriptorSet_, 0U,
+                          nullptr);
+  vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                    pipelines_[0].get());
+  vkCmdPushConstants(commandBuffer, pipelineLayout_.get(),
+                     VK_SHADER_STAGE_COMPUTE_BIT, 0U, sizeof(capacity),
+                     &capacity);
+  vkCmdDispatch(commandBuffer, static_cast<std::uint32_t>(groups), 1U, 1U);
+  vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 1U,
+                       &computeBarrier, 0U, nullptr, 0U, nullptr);
+  if (!scan_.recordExclusiveScanInt(commandBuffer, output.flags, inputCapacity,
+                                    output.offsets, inputCapacity, scanScratch,
+                                    error) ||
+      !scan_.recordWriteCompactionCount(commandBuffer, output.flags,
+                                        output.offsets, inputCapacity,
+                                        output.count, error))
+    return false;
+  vkCmdPipelineBarrier(commandBuffer,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT |
+                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 1U, &pre, 0U,
+                       nullptr, 0U, nullptr);
+  // The scan helpers bind their own pipeline layout. Rebind this stage's
+  // descriptor set before the reduction dispatch so its six storage buffers
+  // are restored in the external command buffer.
+  vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          pipelineLayout_.get(), 0U, 1U, &descriptorSet_, 0U,
+                          nullptr);
+  vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                    pipelines_[1].get());
+  vkCmdPushConstants(commandBuffer, pipelineLayout_.get(),
+                     VK_SHADER_STAGE_COMPUTE_BIT, 0U, sizeof(capacity),
+                     &capacity);
+  vkCmdDispatch(commandBuffer, static_cast<std::uint32_t>(groups), 1U, 1U);
+  const VkMemoryBarrier post{
+      VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_SHADER_WRITE_BIT,
+      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT};
+  vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                           VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       0U, 1U, &post, 0U, nullptr, 0U, nullptr);
+  output.inputCapacity = capacity;
+  output.sessionGeneration = session_->generation();
+  return true;
+}
+
 } // namespace viennaps::vulkan::ray

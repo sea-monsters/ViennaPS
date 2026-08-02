@@ -107,7 +107,9 @@ bool DeviceRayFluxPipeline::setup(runtime::ComputeSession *external,
       !sorter_.initialize(*session_, spirv.radixHistogram, spirv.radixPrefix,
                           spirv.radixScatter, error) ||
       !reducer_.initialize(*session_, spirv.surfaceSegments,
-                           spirv.surfaceReduce, spirv.reductionScan, error)) {
+                           spirv.surfaceReduce, spirv.reductionScan, error) ||
+      !session_->commandContext().allocatePrimary(commandBuffer_, error) ||
+      !fence_.create(session_->device(), error)) {
     reset();
     return false;
   }
@@ -116,6 +118,10 @@ bool DeviceRayFluxPipeline::setup(runtime::ComputeSession *external,
 
 void DeviceRayFluxPipeline::reset() {
   const bool ownsSession = session_ == &ownedSession_;
+  fence_.destroy();
+  commandBuffer_ = VK_NULL_HANDLE;
+  scanScratch_.reset();
+  lastComputeSubmissionCount_ = 0U;
   reducer_.reset();
   sorter_.reset();
   compactor_.reset();
@@ -128,7 +134,8 @@ void DeviceRayFluxPipeline::reset() {
 bool DeviceRayFluxPipeline::isInitialized() const {
   return session_ != nullptr && session_->isValid() &&
          triangleHit_.isInitialized() && compactor_.isInitialized() &&
-         sorter_.isInitialized() && reducer_.isInitialized();
+         sorter_.isInitialized() && reducer_.isInitialized() &&
+         commandBuffer_ != VK_NULL_HANDLE && fence_.get() != VK_NULL_HANDLE;
 }
 
 const runtime::VulkanDevice &DeviceRayFluxPipeline::device() const {
@@ -140,6 +147,10 @@ bool DeviceRayFluxPipeline::ready(std::string &error) const {
   return isInitialized()
              ? true
              : fail(error, "device ray-flux pipeline is not initialized");
+}
+
+std::uint32_t DeviceRayFluxPipeline::lastComputeSubmissionCount() const {
+  return lastComputeSubmissionCount_;
 }
 
 bool DeviceRayFluxPipeline::runCpu(std::span<const Ray> rays,
@@ -156,6 +167,7 @@ bool DeviceRayFluxPipeline::runGpu(std::span<const Ray> rays,
                                    std::span<const float> weights,
                                    RayFluxResult &output, std::string &error) {
   error.clear();
+  lastComputeSubmissionCount_ = 0U;
   if (!ready(error))
     return false;
   if (!validOutput(output) ||
@@ -190,8 +202,18 @@ bool DeviceRayFluxPipeline::runGpu(std::span<const Ray> rays,
       !triangleHit_.createHitBuffer(capacity, hits, error) ||
       !weightBuffer.create(*session_, static_cast<VkDeviceSize>(weightBytes),
                            error) ||
+      !compacted.flags.create(*session_, static_cast<VkDeviceSize>(idBytes),
+                              error) ||
+      !compacted.offsets.create(*session_, static_cast<VkDeviceSize>(idBytes),
+                                error) ||
+      !compacted.count.create(*session_, sizeof(std::uint32_t), error) ||
       !compactor_.createRecordBuffer(capacity, compacted.records, error) ||
       !compactor_.createRecordBuffer(capacity, sortedRecords, error) ||
+      !reduced.flags.create(*session_, static_cast<VkDeviceSize>(idBytes),
+                            error) ||
+      !reduced.offsets.create(*session_, static_cast<VkDeviceSize>(idBytes),
+                              error) ||
+      !reduced.count.create(*session_, sizeof(std::uint32_t), error) ||
       !outputSurface.create(*session_, static_cast<VkDeviceSize>(idBytes),
                             error) ||
       !outputWeight.create(*session_, static_cast<VkDeviceSize>(weightBytes),
@@ -201,16 +223,42 @@ bool DeviceRayFluxPipeline::runGpu(std::span<const Ray> rays,
       !triangleHit_.uploadTriangles(triangles, triangleBuffer, error) ||
       !weightBuffer.upload(*session_, weights.data(),
                            static_cast<VkDeviceSize>(weightBytes), 0U, error) ||
-      !triangleHit_.dispatch(origins, directions, triangleBuffer, capacity,
-                             triangles.size(), hits, capacity, error) ||
-      !compactor_.compact(hits, weightBuffer, capacity,
-                          static_cast<std::uint32_t>(triangles.size()),
-                          capacity, compacted, error) ||
-      !sorter_.sort(compacted.records, compacted.count, capacity, sortedRecords,
-                    capacity, error) ||
-      !reducer_.reduce(sortedRecords, compacted.count, capacity, outputSurface,
-                       outputWeight, capacity, reduced, error))
+      vkResetCommandBuffer(commandBuffer_, 0U) != VK_SUCCESS)
     return false;
+
+  VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+  begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  if (vkBeginCommandBuffer(commandBuffer_, &begin) != VK_SUCCESS)
+    return fail(error, "failed to begin device ray-flux command buffer");
+  scanScratch_.reset();
+  const auto recordFailure = [&]() {
+    vkEndCommandBuffer(commandBuffer_);
+    return false;
+  };
+  if (!triangleHit_.recordDispatch(commandBuffer_, origins, directions,
+                                   triangleBuffer, capacity, triangles.size(),
+                                   hits, capacity, error) ||
+      !compactor_.recordCompact(commandBuffer_, hits, weightBuffer, capacity,
+                                static_cast<std::uint32_t>(triangles.size()),
+                                capacity, compacted, scanScratch_, error) ||
+      !sorter_.recordSort(commandBuffer_, compacted.records, compacted.count,
+                          capacity, sortedRecords, capacity, error) ||
+      !reducer_.recordReduce(commandBuffer_, sortedRecords, compacted.count,
+                             capacity, outputSurface, outputWeight, capacity,
+                             reduced, scanScratch_, error))
+    return recordFailure();
+  if (vkEndCommandBuffer(commandBuffer_) != VK_SUCCESS)
+    return fail(error, "failed to end device ray-flux command buffer");
+  VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+  submit.commandBufferCount = 1U;
+  submit.pCommandBuffers = &commandBuffer_;
+  if (vkQueueSubmit(session_->device().computeQueue(), 1U, &submit,
+                    fence_.get()) != VK_SUCCESS)
+    return fail(error, "failed to submit device ray-flux command buffer");
+  lastComputeSubmissionCount_ = 1U;
+  if (!fence_.wait(std::numeric_limits<std::uint64_t>::max(), error))
+    return false;
+  fence_.reset();
 
   std::uint32_t resultCount = 0U;
   if (!reduced.count.download(*session_, &resultCount, sizeof(resultCount), 0U,

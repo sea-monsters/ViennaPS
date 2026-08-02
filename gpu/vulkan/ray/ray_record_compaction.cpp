@@ -55,10 +55,12 @@ bool DeviceRayRecordCompactor::setup(const std::string_view compactionSpirv,
       !pipelineLayout_.create(session_->device(), descriptorSetLayout_.get(),
                               std::span<const VkPushConstantRange>(&push, 1),
                               error) ||
-      !descriptorPool_.create(session_->device(), 1U, 5U,
+      !descriptorPool_.create(session_->device(), 2U, 10U,
                               VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, error) ||
       !descriptorPool_.allocate(descriptorSetLayout_.get(), descriptorSet_,
                                 error) ||
+      !descriptorPool_.allocate(descriptorSetLayout_.get(),
+                                recordDescriptorSet_, error) ||
       !session_->commandContext().allocatePrimary(commandBuffer_, error) ||
       !fence_.create(session_->device(), error) ||
       !pipeline_.create(session_->device(), shaderModule_, pipelineLayout_,
@@ -92,6 +94,7 @@ void DeviceRayRecordCompactor::reset() {
   shaderModule_.reset();
   scan_.reset();
   descriptorSet_ = VK_NULL_HANDLE;
+  recordDescriptorSet_ = VK_NULL_HANDLE;
   commandBuffer_ = VK_NULL_HANDLE;
   session_ = nullptr;
   if (own)
@@ -103,8 +106,10 @@ bool DeviceRayRecordCompactor::isInitialized() const {
          descriptorSetLayout_.get() != VK_NULL_HANDLE &&
          pipelineLayout_.get() != VK_NULL_HANDLE &&
          descriptorPool_.get() != VK_NULL_HANDLE &&
-         descriptorSet_ != VK_NULL_HANDLE && commandBuffer_ != VK_NULL_HANDLE &&
-         fence_.get() != VK_NULL_HANDLE && pipeline_.get() != VK_NULL_HANDLE;
+         descriptorSet_ != VK_NULL_HANDLE &&
+         recordDescriptorSet_ != VK_NULL_HANDLE &&
+         commandBuffer_ != VK_NULL_HANDLE && fence_.get() != VK_NULL_HANDLE &&
+         pipeline_.get() != VK_NULL_HANDLE;
 }
 bool DeviceRayRecordCompactor::ready(std::string &error) const {
   return isInitialized()
@@ -272,6 +277,141 @@ bool DeviceRayRecordCompactor::compact(const runtime::DeviceBuffer &hits,
   local.inputCount = static_cast<std::uint32_t>(rayCount);
   local.sessionGeneration = session_->generation();
   output = std::move(local);
+  return true;
+}
+
+bool DeviceRayRecordCompactor::recordCompact(
+    const VkCommandBuffer commandBuffer, const runtime::DeviceBuffer &hits,
+    const runtime::DeviceBuffer &weights, const std::size_t rayCount,
+    const std::uint32_t surfaceDomain, const std::size_t outputCapacity,
+    RayRecordCompactionDeviceOutput &output,
+    primitives::ReductionScanPrimitives::DeviceScanScratch &scanScratch,
+    std::string &error) {
+  error.clear();
+  if (!ready(error))
+    return false;
+  if (commandBuffer == VK_NULL_HANDLE)
+    return fail(error, "ray-record compaction command buffer is invalid");
+  if (rayCount > std::numeric_limits<std::uint32_t>::max() ||
+      (rayCount != 0U && surfaceDomain == 0U))
+    return fail(error, "ray-record compaction domain or count is invalid");
+  std::size_t hitBytes{}, weightBytes{}, flagBytes{}, recordBytes{};
+  if (!mul(rayCount, sizeof(TriangleHit), hitBytes) ||
+      !mul(rayCount, sizeof(std::uint32_t), weightBytes) ||
+      !mul(rayCount, sizeof(std::uint32_t), flagBytes) ||
+      !mul(outputCapacity, sizeof(RayRecord), recordBytes))
+    return fail(error, "ray-record compaction buffer size overflow");
+  if (rayCount == 0U)
+    return true;
+  if (outputCapacity < rayCount)
+    return fail(error, "ray-record output capacity is insufficient");
+  const std::array<const runtime::DeviceBuffer *, 5U> buffers{
+      &hits, &weights, &output.flags, &output.offsets, &output.records};
+  for (const auto *buffer : buffers) {
+    if (!buffer->isValid() ||
+        buffer->ownerDevice() != session_->deviceHandle() ||
+        buffer->ownerSessionGeneration() != session_->generation())
+      return fail(error,
+                  "ray-record compaction buffer is invalid, stale, or foreign");
+  }
+  if (!output.count.isValid() ||
+      output.count.ownerDevice() != session_->deviceHandle() ||
+      output.count.ownerSessionGeneration() != session_->generation())
+    return fail(error, "ray-record compaction count buffer is invalid");
+  if (hits.size() < hitBytes || weights.size() < weightBytes ||
+      output.flags.size() < flagBytes || output.offsets.size() < flagBytes ||
+      output.count.size() < sizeof(std::uint32_t) ||
+      output.records.size() < recordBytes)
+    return fail(error, "ray-record compaction buffer is undersized");
+  for (std::size_t i = 0U; i < buffers.size(); ++i)
+    for (std::size_t j = i + 1U; j < buffers.size(); ++j)
+      if (buffers[i]->handle() == buffers[j]->handle())
+        return fail(error, "ray-record compaction buffers must not alias");
+  const std::array<const runtime::DeviceBuffer *, 6U> allBuffers{
+      &hits,           &weights,      &output.flags,
+      &output.offsets, &output.count, &output.records};
+  for (std::size_t i = 0U; i < allBuffers.size(); ++i)
+    for (std::size_t j = i + 1U; j < allBuffers.size(); ++j)
+      if (allBuffers[i]->handle() == allBuffers[j]->handle())
+        return fail(error, "ray-record compaction buffers must not alias");
+
+  const auto recordMode = [&](const VkDescriptorSet descriptorSet,
+                              const std::uint32_t mode) -> bool {
+    const std::array<VkBuffer, 5U> handles{
+        hits.handle(), weights.handle(), output.flags.handle(),
+        output.offsets.handle(), output.records.handle()};
+    std::array<VkDescriptorBufferInfo, 5U> infos{};
+    std::array<VkWriteDescriptorSet, 5U> writes{};
+    for (std::uint32_t i = 0U; i < 5U; ++i) {
+      infos[i] = {handles[i], 0U, VK_WHOLE_SIZE};
+      writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                   nullptr,
+                   descriptorSet,
+                   i,
+                   0U,
+                   1U,
+                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                   nullptr,
+                   &infos[i],
+                   nullptr};
+    }
+    vkUpdateDescriptorSets(session_->deviceHandle(), 5U, writes.data(), 0U,
+                           nullptr);
+    std::array<VkBufferMemoryBarrier, 5U> pre{};
+    for (std::size_t i = 0U; i < pre.size(); ++i)
+      pre[i] = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+                nullptr,
+                VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                VK_QUEUE_FAMILY_IGNORED,
+                VK_QUEUE_FAMILY_IGNORED,
+                handles[i],
+                0U,
+                VK_WHOLE_SIZE};
+    vkCmdPipelineBarrier(commandBuffer,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT |
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 0U, nullptr,
+                         5U, pre.data(), 0U, nullptr);
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      pipeline_.get());
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            pipelineLayout_.get(), 0U, 1U, &descriptorSet, 0U,
+                            nullptr);
+    const std::array<std::uint32_t, 3U> pc{static_cast<std::uint32_t>(rayCount),
+                                           surfaceDomain, mode};
+    vkCmdPushConstants(commandBuffer, pipelineLayout_.get(),
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0U, sizeof(pc), pc.data());
+    vkCmdDispatch(commandBuffer,
+                  static_cast<std::uint32_t>((rayCount + 63U) / 64U), 1U, 1U);
+    const auto outputBinding = mode == 0U ? 2U : 4U;
+    const VkBufferMemoryBarrier post{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+                                     nullptr,
+                                     VK_ACCESS_SHADER_WRITE_BIT,
+                                     VK_ACCESS_SHADER_READ_BIT |
+                                         VK_ACCESS_SHADER_WRITE_BIT,
+                                     VK_QUEUE_FAMILY_IGNORED,
+                                     VK_QUEUE_FAMILY_IGNORED,
+                                     handles[outputBinding],
+                                     0U,
+                                     VK_WHOLE_SIZE};
+    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 0U, nullptr,
+                         1U, &post, 0U, nullptr);
+    return true;
+  };
+
+  if (!recordMode(descriptorSet_, 0U) ||
+      !scan_.recordExclusiveScanInt(commandBuffer, output.flags, rayCount,
+                                    output.offsets, rayCount, scanScratch,
+                                    error) ||
+      !scan_.recordWriteCompactionCount(commandBuffer, output.flags,
+                                        output.offsets, rayCount, output.count,
+                                        error) ||
+      !recordMode(recordDescriptorSet_, 1U))
+    return false;
+  output.inputCount = static_cast<std::uint32_t>(rayCount);
+  output.sessionGeneration = session_->generation();
   return true;
 }
 } // namespace viennaps::vulkan::ray

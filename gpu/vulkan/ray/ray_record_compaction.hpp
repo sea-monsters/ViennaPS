@@ -65,6 +65,19 @@ public:
                              RayRecordCompactionDeviceOutput &output,
                              std::string &error);
 
+  // Record both compaction dispatches and their device-resident scan/count
+  // steps into a caller-owned command buffer. All output buffers (including
+  // flags, offsets, count, and records) must be preallocated and remain alive
+  // together with scanScratch until command completion. This method never
+  // resets, begins, ends, submits, waits, or performs host transfers.
+  [[nodiscard]] bool recordCompact(
+      VkCommandBuffer commandBuffer, const runtime::DeviceBuffer &hits,
+      const runtime::DeviceBuffer &weights, std::size_t rayCount,
+      std::uint32_t surfaceDomain, std::size_t outputCapacity,
+      RayRecordCompactionDeviceOutput &output,
+      primitives::ReductionScanPrimitives::DeviceScanScratch &scanScratch,
+      std::string &error);
+
 private:
   [[nodiscard]] bool setup(std::string_view compactionSpirv,
                            std::string_view reductionScanSpirv,
@@ -81,6 +94,7 @@ private:
   runtime::DescriptorPool descriptorPool_{};
   runtime::Fence fence_{};
   VkDescriptorSet descriptorSet_{VK_NULL_HANDLE};
+  VkDescriptorSet recordDescriptorSet_{VK_NULL_HANDLE};
   VkCommandBuffer commandBuffer_{VK_NULL_HANDLE};
 };
 

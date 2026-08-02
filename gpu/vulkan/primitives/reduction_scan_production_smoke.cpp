@@ -24,9 +24,22 @@ using viennaps::vulkan::primitives::ReductionScanPrimitives;
 using viennaps::vulkan::primitives::ReductionScanStats;
 namespace runtime = viennaps::vulkan::runtime;
 
+[[maybe_unused]] bool recordApiSurfaceProbe(ReductionScanPrimitives &primitives,
+                                            VkCommandBuffer commandBuffer,
+                                            runtime::DeviceBuffer &input,
+                                            runtime::DeviceBuffer &output,
+                                            runtime::DeviceBuffer &count,
+                                            std::string &error) {
+  ReductionScanPrimitives::DeviceScanScratch scratch{};
+  return primitives.recordExclusiveScanInt(commandBuffer, input, 1u, output, 1u,
+                                           scratch, error) &&
+         primitives.recordWriteCompactionCount(commandBuffer, input, output, 1u,
+                                               count, error);
+}
+
 constexpr std::size_t kWorkgroupSize = 256u;
-constexpr std::array<std::size_t, 6u> kLengths = {
-    0u, 1u, 16u, 257u, 65'535u, 1'000'003u};
+constexpr std::array<std::size_t, 6u> kLengths = {0u,   1u,      16u,
+                                                  257u, 65'535u, 1'000'003u};
 
 template <typename T>
 [[nodiscard]] bool writeBuffer(runtime::HostVisibleBuffer &buffer,
@@ -42,8 +55,8 @@ template <typename T>
 
 template <typename T>
 [[nodiscard]] bool readBuffer(runtime::HostVisibleBuffer &buffer,
-                              const std::size_t count,
-                              std::vector<T> &values, std::string &error) {
+                              const std::size_t count, std::vector<T> &values,
+                              std::string &error) {
   values.resize(count);
   if (count == 0u) {
     return true;
@@ -67,8 +80,8 @@ cpuReductionOracle(const std::vector<float> &values,
   bool firstPass = true;
   std::size_t currentCount = elementCount;
   while (true) {
-    const auto blockCount = currentCount / kWorkgroupSize +
-                            (currentCount % kWorkgroupSize != 0u);
+    const auto blockCount =
+        currentCount / kWorkgroupSize + (currentCount % kWorkgroupSize != 0u);
     std::vector<ReductionScanStats> next(blockCount);
     for (std::size_t block = 0u; block < blockCount; ++block) {
       std::array<float, kWorkgroupSize> sums{};
@@ -276,8 +289,8 @@ scanOracle(const std::vector<std::int32_t> &input,
 [[nodiscard]] bool runDeviceScanCases(runtime::ComputeSession &session,
                                       ReductionScanPrimitives &primitives,
                                       std::string &error) {
-  constexpr std::array<std::size_t, 6u> lengths = {0u, 1u, 255u,
-                                                    256u, 257u, 513u};
+  constexpr std::array<std::size_t, 6u> lengths = {0u,   1u,   255u,
+                                                   256u, 257u, 513u};
   constexpr std::int32_t guard = 0x13579bdf;
   for (const auto length : lengths) {
     const auto capacity = std::max<std::size_t>(1u, length);
@@ -332,11 +345,58 @@ scanOracle(const std::vector<std::int32_t> &input,
   }
   std::int32_t actualCount = -1;
   if (!count.download(session, &actualCount, sizeof(actualCount), 0u, error) ||
-      actualCount != static_cast<std::int32_t>(
-                         (countLength + 2u) / 3u)) {
+      actualCount != static_cast<std::int32_t>((countLength + 2u) / 3u)) {
     error = "device compaction count mismatch";
     return false;
   }
+
+  // Record-only scan/count must share one externally-owned command buffer and
+  // leave all scratch alive until this terminal submission completes.
+  runtime::DeviceBuffer recordedOffsets{};
+  runtime::DeviceBuffer recordedCount{};
+  if (!recordedOffsets.create(session, countLength * sizeof(std::int32_t),
+                              error) ||
+      !recordedCount.create(session, sizeof(std::int32_t), error)) {
+    return false;
+  }
+  ReductionScanPrimitives::DeviceScanScratch recordScratch{};
+  VkCommandBuffer recordCommand = VK_NULL_HANDLE;
+  if (!session.commandContext().allocatePrimary(recordCommand, error))
+    return false;
+  VkCommandBufferBeginInfo recordBegin{
+      VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+  recordBegin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  if (vkBeginCommandBuffer(recordCommand, &recordBegin) != VK_SUCCESS ||
+      !primitives.recordExclusiveScanInt(recordCommand, flags, countLength,
+                                         recordedOffsets, countLength,
+                                         recordScratch, error) ||
+      !primitives.recordWriteCompactionCount(recordCommand, flags,
+                                             recordedOffsets, countLength,
+                                             recordedCount, error) ||
+      vkEndCommandBuffer(recordCommand) != VK_SUCCESS) {
+    return false;
+  }
+  runtime::Fence recordFence{};
+  if (!recordFence.create(session.device(), error))
+    return false;
+  VkSubmitInfo recordSubmit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+  recordSubmit.commandBufferCount = 1u;
+  recordSubmit.pCommandBuffers = &recordCommand;
+  if (vkQueueSubmit(session.device().computeQueue(), 1u, &recordSubmit,
+                    recordFence.get()) != VK_SUCCESS ||
+      !recordFence.wait(std::numeric_limits<std::uint64_t>::max(), error)) {
+    return false;
+  }
+  recordFence.reset();
+  std::int32_t recordedActual = -1;
+  if (!recordedCount.download(session, &recordedActual, sizeof(recordedActual),
+                              0u, error) ||
+      recordedActual != actualCount) {
+    error = "record-only compaction count mismatch";
+    return false;
+  }
+  vkFreeCommandBuffers(session.device().get(), session.commandContext().pool(),
+                       1u, &recordCommand);
   runtime::ComputeSession foreignSession{};
   if (!foreignSession.initialize(error)) {
     return false;
@@ -367,17 +427,18 @@ scanOracle(const std::vector<std::int32_t> &input,
     return false;
   }
   error.clear();
-  if (primitives.exclusiveScanInt(flags, countLength, offsets,
-                                  countLength - 1u, error)) {
+  if (primitives.exclusiveScanInt(flags, countLength, offsets, countLength - 1u,
+                                  error)) {
     error = "device length mismatch succeeded unexpectedly";
     return false;
   }
   return true;
 }
 
-[[nodiscard]] bool runGenerationRecoveryCases(
-    runtime::ComputeSession &session, ReductionScanPrimitives &primitives,
-    std::string &error) {
+[[nodiscard]] bool
+runGenerationRecoveryCases(runtime::ComputeSession &session,
+                           ReductionScanPrimitives &primitives,
+                           std::string &error) {
   runtime::DeviceBuffer staleInput{};
   runtime::DeviceBuffer staleOutput{};
   if (!staleInput.create(session, 257u * sizeof(std::int32_t), error) ||
@@ -399,8 +460,7 @@ scanOracle(const std::vector<std::int32_t> &input,
     return false;
   }
   error.clear();
-  if (primitives.exclusiveScanInt(staleInput, 1u, staleOutput, 1u,
-                                  error) ||
+  if (primitives.exclusiveScanInt(staleInput, 1u, staleOutput, 1u, error) ||
       error.find("stale compute session generation") == std::string::npos) {
     error = "stale reduction/scan primitive accepted a device operation";
     return false;
@@ -421,8 +481,7 @@ scanOracle(const std::vector<std::int32_t> &input,
   staleOutput.reset();
   primitives.reset();
   if (!primitives.initialize(movedSession,
-                             VIENNAPS_VULKAN_REDUCTION_SCAN_SPV_PATH,
-                             error)) {
+                             VIENNAPS_VULKAN_REDUCTION_SCAN_SPV_PATH, error)) {
     return false;
   }
 
@@ -490,10 +549,9 @@ int main() {
   ReductionScanPrimitives primitives{};
   if (!session.initialize(error) ||
       !primitives.initialize(session, VIENNAPS_VULKAN_REDUCTION_SCAN_SPV_PATH,
-                              error) ||
+                             error) ||
       !runReductionCases(primitives, error) ||
-      !runScanCases(primitives, error) ||
-      !runScanWrapCase(primitives, error) ||
+      !runScanCases(primitives, error) || !runScanWrapCase(primitives, error) ||
       !runInPlaceCases(primitives, error) ||
       !runValidationCases(primitives, error) ||
       !runDeviceScanCases(session, primitives, error) ||

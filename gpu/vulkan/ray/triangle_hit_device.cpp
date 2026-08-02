@@ -228,6 +228,55 @@ bool DeviceTriangleHitPrimitive::dispatch(
   }
   if (rays == 0U)
     return true;
+  if (vkResetCommandBuffer(commandBuffer_, 0) != VK_SUCCESS)
+    return fail(e, "failed to reset triangle-hit command buffer");
+  VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+  begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  if (vkBeginCommandBuffer(commandBuffer_, &begin) != VK_SUCCESS)
+    return fail(e, "failed to begin triangle-hit command buffer");
+  if (!recordDispatch(commandBuffer_, o, d, t, rays, tris, h, capacity, e))
+    return false;
+  if (vkEndCommandBuffer(commandBuffer_) != VK_SUCCESS)
+    return fail(e, "failed to end triangle-hit command buffer");
+  VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+  submit.commandBufferCount = 1;
+  submit.pCommandBuffers = &commandBuffer_;
+  if (vkQueueSubmit(session_->device().computeQueue(), 1, &submit,
+                    fence_.get()) != VK_SUCCESS ||
+      !fence_.wait(10'000'000'000ULL, e))
+    return false;
+  fence_.reset();
+  return true;
+}
+
+bool DeviceTriangleHitPrimitive::recordDispatch(
+    const VkCommandBuffer commandBuffer, runtime::DeviceBuffer &o,
+    runtime::DeviceBuffer &d, runtime::DeviceBuffer &t, const std::size_t rays,
+    const std::size_t tris, runtime::DeviceBuffer &h,
+    const std::size_t capacity, std::string &e) {
+  e.clear();
+  if (!ready(e))
+    return false;
+  if (commandBuffer == VK_NULL_HANDLE)
+    return fail(e, "triangle-hit command buffer is invalid");
+  if (rays > std::numeric_limits<std::uint32_t>::max() ||
+      tris > std::numeric_limits<std::uint32_t>::max() || capacity < rays ||
+      rays > o.size() / 16U || rays > d.size() / 16U || tris > t.size() / 48U ||
+      capacity > h.size() / sizeof(TriangleHit))
+    return fail(
+        e, "triangle-hit device buffer capacity or index range is invalid");
+  const std::array<runtime::DeviceBuffer *, 4> bs{&o, &d, &t, &h};
+  for (std::size_t i = 0; i < bs.size(); ++i) {
+    if (!bs[i]->isValid() || bs[i]->ownerDevice() != session_->device().get() ||
+        bs[i]->ownerSessionGeneration() != session_->generation())
+      return fail(e,
+                  "triangle-hit buffer has wrong device, session, or validity");
+    for (std::size_t j = i + 1; j < bs.size(); ++j)
+      if (bs[i]->handle() == bs[j]->handle())
+        return fail(e, "triangle-hit buffers must not alias");
+  }
+  if (rays == 0U)
+    return true;
   const std::array<VkBuffer, 4> handles{o.handle(), d.handle(), t.handle(),
                                         h.handle()};
   std::array<VkDescriptorBufferInfo, 4> infos{};
@@ -247,12 +296,6 @@ bool DeviceTriangleHitPrimitive::dispatch(
   }
   vkUpdateDescriptorSets(session_->device().get(), 4, writes.data(), 0,
                          nullptr);
-  if (vkResetCommandBuffer(commandBuffer_, 0) != VK_SUCCESS)
-    return fail(e, "failed to reset triangle-hit command buffer");
-  VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-  begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-  if (vkBeginCommandBuffer(commandBuffer_, &begin) != VK_SUCCESS)
-    return fail(e, "failed to begin triangle-hit command buffer");
   std::array<VkBufferMemoryBarrier, 4> pre{};
   for (std::size_t i = 0; i < 4; ++i)
     pre[i] = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
@@ -264,19 +307,19 @@ bool DeviceTriangleHitPrimitive::dispatch(
               handles[i],
               0,
               VK_WHOLE_SIZE};
-  vkCmdPipelineBarrier(commandBuffer_, VK_PIPELINE_STAGE_TRANSFER_BIT,
+  vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 4,
                        pre.data(), 0, nullptr);
-  vkCmdBindPipeline(commandBuffer_, VK_PIPELINE_BIND_POINT_COMPUTE,
+  vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                     pipeline_.get());
-  vkCmdBindDescriptorSets(commandBuffer_, VK_PIPELINE_BIND_POINT_COMPUTE,
+  vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                           pipelineLayout_.get(), 0, 1, &descriptorSet_, 0,
                           nullptr);
   const std::array<std::uint32_t, 2> pc{static_cast<std::uint32_t>(rays),
                                         static_cast<std::uint32_t>(tris)};
-  vkCmdPushConstants(commandBuffer_, pipelineLayout_.get(),
+  vkCmdPushConstants(commandBuffer, pipelineLayout_.get(),
                      VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), pc.data());
-  vkCmdDispatch(commandBuffer_, static_cast<std::uint32_t>((rays + 63U) / 64U),
+  vkCmdDispatch(commandBuffer, static_cast<std::uint32_t>((rays + 63U) / 64U),
                 1, 1);
   const VkBufferMemoryBarrier post{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
                                    nullptr,
@@ -288,19 +331,9 @@ bool DeviceTriangleHitPrimitive::dispatch(
                                    h.handle(),
                                    0,
                                    VK_WHOLE_SIZE};
-  vkCmdPipelineBarrier(commandBuffer_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+  vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
                        &post, 0, nullptr);
-  if (vkEndCommandBuffer(commandBuffer_) != VK_SUCCESS)
-    return fail(e, "failed to end triangle-hit command buffer");
-  VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-  submit.commandBufferCount = 1;
-  submit.pCommandBuffers = &commandBuffer_;
-  if (vkQueueSubmit(session_->device().computeQueue(), 1, &submit,
-                    fence_.get()) != VK_SUCCESS ||
-      !fence_.wait(10'000'000'000ULL, e))
-    return false;
-  fence_.reset();
   return true;
 }
 const runtime::VulkanDevice &DeviceTriangleHitPrimitive::device() const {

@@ -29,9 +29,9 @@ struct DeviceRayFluxSpirv {
 
 // Composes device triangle intersection, record compaction, stable radix
 // ordering, and ordered surface reduction. All intermediate hits, records,
-// flags, offsets, and counts remain device-local. The current primitive APIs
-// submit their own ordered command buffers, so this class is device-resident
-// composition rather than the later one-command fusion path.
+// flags, offsets, and counts remain device-local. The four device stages are
+// recorded into one primary command buffer and submitted once; input upload and
+// terminal result download remain explicit host-transfer boundaries.
 class DeviceRayFluxPipeline {
 public:
   DeviceRayFluxPipeline() = default;
@@ -65,6 +65,11 @@ public:
                             std::span<const float> weights,
                             RayFluxResult &output, std::string &error);
 
+  // Counts the compute submission in the last runGpu() call. It intentionally
+  // excludes input uploads and terminal downloads, which use explicit transfer
+  // helpers outside the recorded compute chain.
+  [[nodiscard]] std::uint32_t lastComputeSubmissionCount() const;
+
 private:
   [[nodiscard]] bool setup(runtime::ComputeSession *external,
                            const DeviceRayFluxSpirv &spirv, std::string &error);
@@ -76,6 +81,10 @@ private:
   DeviceRayRecordCompactor compactor_{};
   DeviceRayRecordRadixSort sorter_{};
   DeviceRaySurfaceReducer reducer_{};
+  primitives::ReductionScanPrimitives::DeviceScanScratch scanScratch_{};
+  runtime::Fence fence_{};
+  VkCommandBuffer commandBuffer_{VK_NULL_HANDLE};
+  std::uint32_t lastComputeSubmissionCount_{0U};
 };
 
 } // namespace viennaps::vulkan::ray

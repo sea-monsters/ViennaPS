@@ -1998,6 +1998,30 @@ therefore device residency and CPU-bitwise terminal differential only.
 | Transaction | malformed inputs and conservative output-capacity rejection leave caller output spans and count unchanged; zero rays preserve the caller output, while nonempty rays with no triangles produce a zero count without dispatch |
 | Scope boundary | no claim of one-command fusion, strict intermediate FP32 rejection equivalence, BVH, particle transport, Process routing, or automatic backend eligibility |
 
+### P5-JE: single-command device-resident ray-flux compute chain
+
+- Status: accepted locally as a compute-submission fusion slice; it is not a
+  production Process route or strict-FP32 deployment promotion
+- Date: 2026-08-02
+
+P5-JE turns the P5-I -> P5-JA -> P5-JB2B -> P5-JC composition into one
+primary compute command buffer and one queue submission guarded by one fence.
+The primitive stages now expose record-only APIs: they validate ownership and
+capacity, update their descriptors, record their barriers/dispatches, and
+never reset, begin, end, submit, wait, or download. The aggregate owns the
+command buffer, the shared recursive scan scratch, and every intermediate
+buffer through the terminal fence. Input upload and terminal result download
+remain explicit transfer boundaries and are intentionally excluded from the
+compute-submission count.
+
+| Gate | Result |
+|---|---|
+| One-compute-submit contract | `DeviceRayFluxPipeline::lastComputeSubmissionCount()` reports exactly `1` after the complete recorded chain; all record-only APIs were checked to contain no lifecycle, submit, wait, or download operation |
+| CPU bitwise differential | the real Intel Arc device runs the five-ray/three-triangle fixture; count, dense surface ids, FP32 weight words (including singleton `-0`), and output-tail sentinels match `RayFluxPipeline::runCpu` exactly |
+| Integration correction | the initial differential exposed a compact count of 5 instead of 4: `recordDispatch` had recorded into its private member command buffer rather than the supplied primary buffer. It now records every Vulkan command into the supplied buffer; the compact and reduced device counts are 4 and 2 respectively before terminal readback |
+| Regression group | standalone `gpu/vulkan` build under MSVC succeeds and five focused CTests pass: triangle-hit device, ray-record compaction, recursive radix sort, surface reduction, and the full device ray-flux pipeline |
+| Scope boundary | no device-visible non-finite/overflow intermediate status, strict-FP32 deployment probe, exact dynamic output admission, BVH, particle transport, Process routing, or automatic backend eligibility is claimed |
+
 ## Next slice
 
 The segmented rebuild adapter is installed by the level-set controller, the
@@ -2010,12 +2034,12 @@ the optional VTK-enabled install/export conflict remain validation gaps.
 P5-JD first proves physical device-resident composition of P5-I, P5-JA,
 P5-JB2B, and P5-JC while retaining the sixteen stable P5-JB2B LSD passes,
 their full `RayRecord` bit contract, and device-local count storage. P5-JE
-then refactors those stages to command recording with explicit barriers and a
-single terminal submission. The same later path must add a device-visible
-status and fail-closed policy for non-finite or out-of-domain intermediate
-FP32 sums before claiming full `reduceCpu` rejection equivalence. The strict
-FP32 deployment profile additionally needs the isolated watchdog probe
-described above; HostVisible radix helpers cannot be reused.
+then records those stages with explicit barriers into one compute submission.
+The next path must add a device-visible status and fail-closed policy for
+non-finite or out-of-domain intermediate FP32 sums before claiming full
+`reduceCpu` rejection equivalence. The strict FP32 deployment profile
+additionally needs the isolated watchdog probe described above; HostVisible
+radix helpers cannot be reused.
 CPU differential checking remains an explicit validation gate, not a
 production per-call guard. Coverage reaction is a capability-gated FP64
 candidate, without weakening the current fail-closed gate.

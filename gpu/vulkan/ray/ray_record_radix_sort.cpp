@@ -463,4 +463,228 @@ bool DeviceRayRecordRadixSort::sort(const runtime::DeviceBuffer &inputRecords,
   return true;
 }
 
+bool DeviceRayRecordRadixSort::recordSort(
+    const VkCommandBuffer commandBuffer,
+    const runtime::DeviceBuffer &inputRecords,
+    const runtime::DeviceBuffer &inputCount, const std::size_t inputCapacity,
+    runtime::DeviceBuffer &outputRecords, const std::size_t outputCapacity,
+    std::string &error) {
+  error.clear();
+  if (!ready(error))
+    return false;
+  if (commandBuffer == VK_NULL_HANDLE)
+    return fail(error, "ray-record radix command buffer is invalid");
+  if (inputCapacity > std::numeric_limits<std::uint32_t>::max() ||
+      outputCapacity < inputCapacity)
+    return fail(error, "ray-record radix capacity is invalid");
+  if (inputCapacity == 0U)
+    return true;
+  std::size_t inputBytes{}, outputBytes{};
+  if (!bytesFor(inputCapacity, sizeof(RayRecord), inputBytes) ||
+      !bytesFor(outputCapacity, sizeof(RayRecord), outputBytes))
+    return fail(error, "ray-record radix buffer size overflows");
+  const auto groupsSize = ceilDivide(inputCapacity, 64U);
+  if (groupsSize > std::numeric_limits<std::uint32_t>::max())
+    return fail(error, "ray-record radix dispatch dimensions overflow");
+  const auto groups = static_cast<std::uint32_t>(groupsSize);
+  const auto &limits = session_->device().selection().properties.limits;
+  if (limits.maxComputeWorkGroupInvocations < kPrefixWorkgroupSize ||
+      limits.maxComputeWorkGroupSize[0] < kPrefixWorkgroupSize ||
+      limits.maxComputeWorkGroupCount[1] < kRadixDigitCount ||
+      limits.maxComputeSharedMemorySize <
+          kPrefixWorkgroupSize * sizeof(std::uint32_t))
+    return fail(error, "ray-record radix prefix is unsupported by this device");
+  if (groups > limits.maxComputeWorkGroupCount[0])
+    return fail(error,
+                "ray-record radix dispatch exceeds device workgroup limit");
+  const auto tiles = static_cast<std::uint32_t>(
+      ceilDivide(static_cast<std::size_t>(groups), kPrefixWorkgroupSize));
+  if (!inputRecords.isValid() || !inputCount.isValid() ||
+      !outputRecords.isValid() ||
+      inputRecords.ownerDevice() != session_->deviceHandle() ||
+      inputCount.ownerDevice() != session_->deviceHandle() ||
+      outputRecords.ownerDevice() != session_->deviceHandle() ||
+      inputRecords.ownerSessionGeneration() != session_->generation() ||
+      inputCount.ownerSessionGeneration() != session_->generation() ||
+      outputRecords.ownerSessionGeneration() != session_->generation() ||
+      inputRecords.size() < static_cast<VkDeviceSize>(inputBytes) ||
+      inputCount.size() < sizeof(std::uint32_t) ||
+      outputRecords.size() < static_cast<VkDeviceSize>(outputBytes))
+    return fail(error,
+                "ray-record radix buffer is invalid, stale, or undersized");
+  if (inputRecords.handle() == inputCount.handle() ||
+      inputRecords.handle() == outputRecords.handle() ||
+      inputCount.handle() == outputRecords.handle())
+    return fail(error, "ray-record radix buffers must not alias");
+  if (!ensureScratch(inputCapacity, groups, error))
+    return false;
+
+  std::vector<std::uint32_t> levelLengths;
+  std::vector<std::uint32_t> levelBases;
+  std::size_t levelBaseWords = 0U;
+  for (std::size_t level = tiles;;
+       level = ceilDivide(level, kPrefixWorkgroupSize)) {
+    if (level > std::numeric_limits<std::uint32_t>::max() ||
+        levelBaseWords > std::numeric_limits<std::uint32_t>::max())
+      return fail(error, "ray-record radix hierarchy offsets overflow");
+    levelLengths.push_back(static_cast<std::uint32_t>(level));
+    levelBases.push_back(static_cast<std::uint32_t>(levelBaseWords));
+    if (level > std::numeric_limits<std::size_t>::max() / 16U ||
+        levelBaseWords > std::numeric_limits<std::size_t>::max() - level * 16U)
+      return fail(error, "ray-record radix hierarchy offsets overflow");
+    levelBaseWords += level * 16U;
+    if (level <= kPrefixWorkgroupSize)
+      break;
+  }
+  const std::array<VkBuffer, 16U> sources{
+      inputRecords.handle(), scratchA_.handle(), scratchB_.handle(),
+      scratchA_.handle(),    scratchB_.handle(), scratchA_.handle(),
+      scratchB_.handle(),    scratchA_.handle(), scratchB_.handle(),
+      scratchA_.handle(),    scratchB_.handle(), scratchA_.handle(),
+      scratchB_.handle(),    scratchA_.handle(), scratchB_.handle(),
+      scratchA_.handle()};
+  std::array<VkBuffer, 16U> targets{};
+  for (std::size_t pass = 0U; pass < 16U; ++pass)
+    targets[pass] = pass == 15U ? outputRecords.handle()
+                                : (pass % 2U == 0U ? scratchA_.handle()
+                                                   : scratchB_.handle());
+  for (std::size_t pass = 0U; pass < 16U; ++pass) {
+    const std::array<VkDescriptorBufferInfo, 8U> infos{
+        {{sources[pass], 0U, scratchRecordBytes_},
+         {targets[pass], 0U, scratchRecordBytes_},
+         {inputCount.handle(), 0U, sizeof(std::uint32_t)},
+         {histogram_.handle(), 0U, histogramBytes_},
+         {offsets_.handle(), 0U, histogramBytes_},
+         {blockSums_.handle(), 0U, hierarchyBytes_},
+         {blockOffsets_.handle(), 0U, hierarchyBytes_},
+         {digitBases_.handle(), 0U, kRadixDigitCount * sizeof(std::uint32_t)}}};
+    std::array<VkWriteDescriptorSet, 8U> writes{};
+    for (std::uint32_t i = 0U; i < writes.size(); ++i)
+      writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                   nullptr,
+                   descriptorSets_[pass],
+                   i,
+                   0U,
+                   1U,
+                   VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                   nullptr,
+                   &infos[i],
+                   nullptr};
+    vkUpdateDescriptorSets(session_->deviceHandle(), 8U, writes.data(), 0U,
+                           nullptr);
+  }
+  const VkMemoryBarrier pre{
+      VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr,
+      VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT};
+  vkCmdPipelineBarrier(commandBuffer,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT |
+                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 1U, &pre, 0U,
+                       nullptr, 0U, nullptr);
+  for (std::uint32_t pass = 0U; pass < 16U; ++pass) {
+    const std::uint32_t key = pass < 8U ? 0U : 1U;
+    const std::uint32_t shift = (pass & 7U) * 4U;
+    std::array<std::uint32_t, 6U> params{
+        static_cast<std::uint32_t>(inputCapacity),
+        groups,
+        shift,
+        key,
+        0U,
+        tiles};
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            pipelineLayout_.get(), 0U, 1U,
+                            &descriptorSets_[pass], 0U, nullptr);
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      pipelines_[0].get());
+    vkCmdPushConstants(commandBuffer, pipelineLayout_.get(),
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0U, 24U, params.data());
+    vkCmdDispatch(commandBuffer, groups, 1U, 1U);
+    const VkMemoryBarrier barrier{
+        VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_SHADER_WRITE_BIT,
+        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT};
+    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 1U, &barrier,
+                         0U, nullptr, 0U, nullptr);
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      pipelines_[1].get());
+    params[4] = 0U;
+    params[5] = tiles;
+    vkCmdPushConstants(commandBuffer, pipelineLayout_.get(),
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0U, 24U, params.data());
+    vkCmdDispatch(commandBuffer, tiles, 16U, 1U);
+    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 1U, &barrier,
+                         0U, nullptr, 0U, nullptr);
+    for (std::size_t level = 0U; level < levelLengths.size(); ++level) {
+      params[2] = levelBases[level];
+      params[4] = 1U;
+      params[5] = levelLengths[level];
+      const auto dispatch = static_cast<std::uint32_t>(
+          ceilDivide(levelLengths[level], kPrefixWorkgroupSize));
+      vkCmdPushConstants(commandBuffer, pipelineLayout_.get(),
+                         VK_SHADER_STAGE_COMPUTE_BIT, 0U, 24U, params.data());
+      vkCmdDispatch(commandBuffer, dispatch, 16U, 1U);
+      vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 1U,
+                           &barrier, 0U, nullptr, 0U, nullptr);
+      if (levelLengths[level] <= 256U)
+        break;
+    }
+    for (std::size_t level = levelLengths.size() - 1U; level-- > 0U;) {
+      params[2] = levelBases[level];
+      params[3] = levelBases[level + 1U];
+      params[4] = 2U;
+      params[5] = levelLengths[level];
+      const auto dispatch = static_cast<std::uint32_t>(
+          ceilDivide(levelLengths[level], kPrefixWorkgroupSize));
+      vkCmdPushConstants(commandBuffer, pipelineLayout_.get(),
+                         VK_SHADER_STAGE_COMPUTE_BIT, 0U, 24U, params.data());
+      vkCmdDispatch(commandBuffer, dispatch, 16U, 1U);
+      vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 1U,
+                           &barrier, 0U, nullptr, 0U, nullptr);
+    }
+    params[4] = 3U;
+    vkCmdPushConstants(commandBuffer, pipelineLayout_.get(),
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0U, 24U, params.data());
+    vkCmdDispatch(commandBuffer, 1U, 1U, 1U);
+    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 1U, &barrier,
+                         0U, nullptr, 0U, nullptr);
+    params[2] = levelBases.front();
+    params[4] = 4U;
+    params[5] = tiles;
+    vkCmdPushConstants(commandBuffer, pipelineLayout_.get(),
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0U, 24U, params.data());
+    vkCmdDispatch(
+        commandBuffer,
+        static_cast<std::uint32_t>(ceilDivide(groups, kPrefixWorkgroupSize)),
+        kRadixDigitCount, 1U);
+    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 1U, &barrier,
+                         0U, nullptr, 0U, nullptr);
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      pipelines_[2].get());
+    params[2] = shift;
+    params[3] = key;
+    params[4] = 0U;
+    vkCmdPushConstants(commandBuffer, pipelineLayout_.get(),
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0U, 24U, params.data());
+    vkCmdDispatch(commandBuffer, groups, 1U, 1U);
+    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 1U, &barrier,
+                         0U, nullptr, 0U, nullptr);
+  }
+  const VkMemoryBarrier post{
+      VK_STRUCTURE_TYPE_MEMORY_BARRIER, nullptr, VK_ACCESS_SHADER_WRITE_BIT,
+      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
+          VK_ACCESS_TRANSFER_READ_BIT};
+  vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                           VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       0U, 1U, &post, 0U, nullptr, 0U, nullptr);
+  return true;
+}
+
 } // namespace viennaps::vulkan::ray

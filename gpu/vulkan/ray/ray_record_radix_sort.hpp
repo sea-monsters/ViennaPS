@@ -47,6 +47,17 @@ public:
                           runtime::DeviceBuffer &outputRecords,
                           std::size_t outputCapacity, std::string &error);
 
+  // Record all sixteen LSD passes and recursive prefix work into a caller-owned
+  // command buffer. Scratch is retained by the sorter until reset/destruction;
+  // the caller must keep input/output buffers alive until command completion.
+  // This method never resets, begins, ends, submits, waits, or downloads.
+  [[nodiscard]] bool recordSort(VkCommandBuffer commandBuffer,
+                                const runtime::DeviceBuffer &inputRecords,
+                                const runtime::DeviceBuffer &inputCount,
+                                std::size_t inputCapacity,
+                                runtime::DeviceBuffer &outputRecords,
+                                std::size_t outputCapacity, std::string &error);
+
 private:
   [[nodiscard]] bool setup(std::string_view histogramSpirv,
                            std::string_view prefixSpirv,

@@ -193,7 +193,8 @@ if(TARGET viennaps_vulkan_reduction_scan_primitives)
   endif()
 
   add_library(viennaps_vulkan_hrle_compaction
-              hrle_rebuild_compaction.cpp)
+              hrle_rebuild_compaction.cpp
+              hrle_rebuild_pipeline.hpp)
   set_property(TARGET viennaps_vulkan_hrle_compaction
                PROPERTY VIENNAPS_HRLE_ACTION_FLAGS_SPV
                         "${VIENNAPS_HRLE_ACTION_FLAGS_SPV}")

@@ -3,6 +3,7 @@
 
 #include "hrle_rebuild_classification.hpp"
 #include "hrle_rebuild_compaction.hpp"
+#include "hrle_rebuild_pipeline.hpp"
 
 #include <levelset/psHrleRebuildClassification.hpp>
 #include <levelset/psHrleRebuildCompaction.hpp>
@@ -85,7 +86,8 @@ template <class Iterator>
 }
 
 [[nodiscard]] std::vector<Candidate>
-collectCandidates(const ls::SmartPointer<ls::Domain<float, 2>> &levelSet) {
+collectCandidates(const ls::SmartPointer<ls::Domain<float, 2>> &levelSet,
+                  std::vector<viennahrle::Index<2>> &candidateIndices) {
   std::vector<Candidate> candidates;
   const auto &grid = levelSet->getGrid();
   const auto &domain = levelSet->getDomain();
@@ -103,6 +105,7 @@ collectCandidates(const ls::SmartPointer<ls::Domain<float, 2>> &levelSet) {
              iterator(domain, start);
          iterator.getIndices() < end; ++iterator) {
       candidates.push_back(makeCandidate(iterator));
+      candidateIndices.push_back(iterator.getIndices());
     }
   }
   return candidates;
@@ -126,12 +129,31 @@ void assertExactResult(const CompactResult &actual,
   }
 }
 
+void assertDomainExact(const viennahrle::Domain<float, 2> &actual,
+                       const viennahrle::Domain<float, 2> &expected,
+                       const std::span<const viennahrle::Index<2>> indices) {
+  for (const auto &index : indices) {
+    viennahrle::ConstSparseIterator<viennahrle::Domain<float, 2>> left(actual,
+                                                                       index);
+    viennahrle::ConstSparseIterator<viennahrle::Domain<float, 2>> right(
+        expected, index);
+    VC_TEST_ASSERT(left.isDefined() == right.isDefined());
+    VC_TEST_ASSERT(std::bit_cast<std::uint32_t>(left.getValue()) ==
+                   std::bit_cast<std::uint32_t>(right.getValue()));
+    if (left.isDefined())
+      VC_TEST_ASSERT(std::bit_cast<std::uint32_t>(left.getDefinedValue()) ==
+                     std::bit_cast<std::uint32_t>(right.getDefinedValue()));
+  }
+}
+
 } // namespace
 
 int main() try {
   auto levelSet = makeDomain();
-  const auto candidates = collectCandidates(levelSet);
+  std::vector<viennahrle::Index<2>> candidateIndices;
+  const auto candidates = collectCandidates(levelSet, candidateIndices);
   VC_TEST_ASSERT(candidates.size() == 183U);
+  VC_TEST_ASSERT(candidateIndices.size() == candidates.size());
 
   std::string error;
   std::vector<Decision> cpuDecisions;
@@ -162,6 +184,53 @@ int main() try {
   VC_TEST_ASSERT(compactionPrimitives.initialize(
       session, VIENNAPS_REDUCTION_SCAN_SPV_PATH, error));
   VC_TEST_ASSERT(compactionPrimitives.device().get() == session.device().get());
+
+  viennahrle::Domain<float, 2> pipelineDomain;
+  std::vector<std::uint32_t> pipelineSourcePointIds = {99U};
+  VC_TEST_ASSERT(vkLevelSet::rebuildHrleRebuildFp32DeviceToCpu<2>(
+      session, classificationProgram, actionFlagsProgram, compactProgram,
+      compactionPrimitives, candidates, 2U, 1.0F, candidateIndices,
+      levelSet->getDomain().getNumberOfPoints(), levelSet->getGrid(),
+      pipelineDomain, pipelineSourcePointIds, error));
+  VC_TEST_ASSERT(error.empty());
+  viennahrle::Domain<float, 2> cpuDomain;
+  std::vector<std::uint32_t> cpuSourcePointIds;
+  VC_TEST_ASSERT(classification::reconstructHrleRebuildCpu<2>(
+      cpuResult, candidateIndices, levelSet->getDomain().getNumberOfPoints(),
+      levelSet->getGrid(), cpuDomain, cpuSourcePointIds, error));
+  VC_TEST_ASSERT(pipelineSourcePointIds == cpuSourcePointIds);
+  assertDomainExact(pipelineDomain, cpuDomain, candidateIndices);
+
+  viennahrle::Domain<float, 2> preservedDomain;
+  preservedDomain.deepCopy(levelSet->getGrid(), cpuDomain);
+  std::vector<std::uint32_t> preservedIds = {7U};
+  const auto beforeIds = preservedIds;
+  VC_TEST_ASSERT(!vkLevelSet::rebuildHrleRebuildFp32DeviceToCpu<2>(
+      session, classificationProgram, actionFlagsProgram, compactProgram,
+      compactionPrimitives, candidates, 2U, 1.0F,
+      std::span<const viennahrle::Index<2>>(candidateIndices.data(), 1U),
+      levelSet->getDomain().getNumberOfPoints(), levelSet->getGrid(),
+      preservedDomain, preservedIds, error));
+  VC_TEST_ASSERT(preservedIds == beforeIds);
+  assertDomainExact(preservedDomain, cpuDomain, candidateIndices);
+  VC_TEST_ASSERT(!error.empty());
+
+  VC_TEST_ASSERT(!vkLevelSet::rebuildHrleRebuildFp32DeviceToCpu<2>(
+      session, classificationProgram, actionFlagsProgram, compactProgram,
+      compactionPrimitives, candidates, 3U, 1.0F, candidateIndices,
+      levelSet->getDomain().getNumberOfPoints(), levelSet->getGrid(),
+      preservedDomain, preservedIds, error));
+  VC_TEST_ASSERT(preservedIds == beforeIds);
+  assertDomainExact(preservedDomain, cpuDomain, candidateIndices);
+  VC_TEST_ASSERT(!error.empty());
+
+  viennahrle::Domain<float, 2> emptyDomain;
+  std::vector<std::uint32_t> emptyIds = {9U};
+  VC_TEST_ASSERT(vkLevelSet::rebuildHrleRebuildFp32DeviceToCpu<2>(
+      session, classificationProgram, actionFlagsProgram, compactProgram,
+      compactionPrimitives, {}, 2U, 1.0F, {}, 0U, levelSet->getGrid(),
+      emptyDomain, emptyIds, error));
+  VC_TEST_ASSERT(emptyIds.empty());
   CompactResult vulkanResult;
   VC_TEST_ASSERT(vkLevelSet::compactHrleRebuildDecisionsFp32(
       compactionPrimitives, vulkanDecisions, vulkanResult, error));

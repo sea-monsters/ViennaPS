@@ -1304,7 +1304,42 @@ and allocation alignment.
 | Session and limits | session generation, primitive binding, workgroup, descriptor, push-constant, buffer-range, and capacity checks fail before dispatch |
 | No-SDK behavior | focused CPU HRLE classification, compaction, and sparse reconstruction pass 3/3 |
 | Working-set policy | existing primitive-suite and safe-working-set deployment gates remain sufficient; no schema or fixed local path is added |
-| Residual boundary | feed the validated stream to CPU sparse reconstruction, then wire the full transaction into the ViennaLS executor and deployment probe |
+| Residual boundary | CPU sparse reconstruction is composed below; segmented production integration and deployment probing remain pending |
+
+## P4C4-HRLE-transaction: Vulkan selection to CPU sparse field
+
+- Status: accepted locally
+- Date: 2026-08-02
+- Scope: expose one transactional API from resident Vulkan classification and
+  compaction through canonical CPU ViennaHRLE reconstruction
+
+`rebuildHrleRebuildFp32DeviceToCpu<D>` now composes device classification,
+action flags, exclusive scan/count, stable scatter, terminal materialization,
+and the existing CPU sparse reconstructor. Device intermediates are local to
+the call and remain valid until materialization completes. The API rejects an
+uninitialized session, mismatched runtime/template dimensions, mismatched
+candidate/index counts, and any session-generation change between stages.
+Caller domain and source-ID outputs are published only after the complete
+transaction succeeds.
+
+The exact oracle builds the same small 2D sphere through the CPU-only and
+Vulkan-to-CPU transactions. It compares every candidate index through sparse
+iterators, including defined state, stored value bits, defined-value bits, and
+the complete source-point-ID vector. The existing N=183/K=68 classification
+and compaction oracle remains exact. Candidate-count and dimension failures
+preserve the preloaded domain and ID sentinels, and N=0 completes without a
+device dispatch.
+
+| Gate | Result |
+|---|---|
+| Complete structure oracle | CPU-only and Vulkan-to-CPU sparse domains match bit-for-bit on all 183 candidate indices; source-ID vectors are identical |
+| Compaction oracle | K=68 stable defined records remain exact |
+| Transaction faults | candidate/index and runtime/template dimension mismatches preserve domain and ID sentinels |
+| Empty stream | N=0 succeeds through the complete API and publishes an empty source-ID vector |
+| Session lifetime | generation is checked after each device stage and immediately before publish |
+| No-SDK behavior | focused CPU HRLE classification, compaction, and sparse reconstruction pass 3/3 |
+| Production boundary | the current reconstructor creates one segment and a flat source-ID map; segmented domains, point-data translation, and executor commit are not yet production-safe |
+| Path policy | no SDK, dependency, source checkout, shader-file, or build-cache path is tracked |
 
 ## P4D-deployment-probe audit: persisted automatic selection gap
 
@@ -1351,13 +1386,17 @@ shader payloads must leave Vulkan disabled without writing a false pass.
 
 ## Next slice
 
-Feed the resident compaction materializer into the P4C2 CPU insertion oracle
-and compare the reconstructed sparse structure with the CPU-only transaction.
-Then expose one classification-to-reconstruction orchestration API and wire it
-into the ViennaLS executor and deployment-time primitive suite. Direct
-negative/non-finite time injection also remains a defensive-branch coverage
-gap. The optional VTK-enabled install/export conflict should be isolated from
-the compute backend before packaging validation.
+Add a dedicated optional HRLE rebuild executor seam to the patched ViennaLS
+`Advect::rebuildLS()` path. The callback must produce a segmented replacement
+domain and segment-aware source-ID map; `Advect` retains ownership of point-data
+translation and commits domain plus point data only after full validation.
+Auto failures fall back to the unchanged CPU rebuild, while strict Manual
+Vulkan failures surface an error and preserve the snapshot. After the 2D/3D
+segmented and point-data gates pass, include this exact transaction in the
+deployment-time primitive suite. Direct negative/non-finite time injection
+also remains a defensive-branch coverage gap. The optional VTK-enabled
+install/export conflict should be isolated from the compute backend before
+packaging validation.
 
 After those production-seam gates, the Level Set work advances to HRLE
 sparse rebuild integration, followed by particle/ray and surface/oxidation

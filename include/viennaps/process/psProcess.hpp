@@ -48,6 +48,8 @@ private:
 public:
   using LevelSetUpdateExecutor =
       typename ProcessContext<NumericType, D>::LevelSetUpdateExecutor;
+  using LevelSetRebuildExecutor =
+      typename ProcessContext<NumericType, D>::LevelSetRebuildExecutor;
   using LevelSetUpdateFailurePolicy = viennaps::LevelSetUpdateFailurePolicy;
 
   Process() { initializeStrategies(); }
@@ -105,8 +107,16 @@ public:
     context_.levelSetUpdateExecutor = std::move(executor);
   }
 
+  void setLevelSetRebuildExecutor(LevelSetRebuildExecutor executor) {
+    context_.levelSetRebuildExecutor = std::move(executor);
+  }
+
   [[nodiscard]] LevelSetUpdateExecutor getLevelSetUpdateExecutor() const {
     return context_.levelSetUpdateExecutor;
+  }
+
+  [[nodiscard]] LevelSetRebuildExecutor getLevelSetRebuildExecutor() const {
+    return context_.levelSetRebuildExecutor;
   }
 
   void setLevelSetUpdateFailurePolicy(LevelSetUpdateFailurePolicy policy) {
@@ -119,6 +129,8 @@ public:
   }
 
   void clearLevelSetUpdateExecutor() { context_.levelSetUpdateExecutor = {}; }
+
+  void clearLevelSetRebuildExecutor() { context_.levelSetRebuildExecutor = {}; }
 
   [[nodiscard]] ProcessResult getLastProcessResult() const {
     return lastProcessResult_;

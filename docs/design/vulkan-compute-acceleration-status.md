@@ -1341,6 +1341,42 @@ device dispatch.
 | Production boundary | the current reconstructor creates one segment and a flat source-ID map; segmented domains, point-data translation, and executor commit are not yet production-safe |
 | Path policy | no SDK, dependency, source checkout, shader-file, or build-cache path is tracked |
 
+## P4C5-A-HRLE-rebuild-seam: transactional ViennaLS executor contract
+
+- Status: accepted locally
+- Date: 2026-08-02
+- Scope: add an optional rebuild executor at the real ViennaLS sparse-domain
+  replacement boundary without routing production Vulkan work yet
+
+The patched ViennaLS `Advect::rebuildLS()` now exposes an independent rebuild
+executor after the scheme-specific cutoff and final width are known. Its input
+describes the old HRLE domain and point-data policy; a handled output supplies
+a complete replacement ViennaLS domain plus one source-point-ID vector per
+HRLE segment. Validation rejects missing domains, grid/boundary mismatches,
+invalid segment maps, and source IDs outside the old defined-point range before
+the caller-visible domain can change.
+
+ViennaLS retains transaction ownership. It builds and finalizes the replacement
+locally, translates point data locally when requested, snapshots the current
+domain before commit, and restores that snapshot if commit throws. A callback
+fallback, error, exception, or malformed handled output follows the unchanged
+CPU rebuild under `FALLBACK`; under `FAIL` it stops the integration stage and
+leaves process time, step count, HRLE state, and point data uncommitted. Forward
+Euler, RK2, and RK3 now gate subsequent stages on this rebuild error state.
+ViennaPS carries the executor through `ProcessContext`, `Process`, and
+`AdvectionHandler`, with explicit set/get/clear APIs.
+
+| Gate | Result |
+|---|---|
+| Real call path | the executor is invoked from `Advect::rebuildLS()`, not the earlier value-update seam |
+| CPU fallback | explicit fallback, callback error, exception, and malformed handled output reproduce the CPU result under `FALLBACK` |
+| Strict rollback | the same failure classes return failure with exact pre-step level-set values, zero process time, and zero accepted steps |
+| API propagation | `Process` set/get/clear and `ProcessContext`/`AdvectionHandler` forwarding are compiled and exercised |
+| Integration gates | Forward Euler, RK2, and RK3 stop after rebuild failure |
+| Focused validation | the no-SDK routing group passes 15/15; the ViennaLS patch applies cleanly to its pinned source tree |
+| Residual boundary | a valid `HANDLED` replacement, scalar/vector point-data translation including `updatePointData=false`, multi-segment/3D input, and RK2/RK3 rebuild failure are not yet runtime-tested |
+| Production boundary | no segment-aware Vulkan adapter or deployment-suite connection is installed by this slice |
+
 ## P4D-deployment-probe audit: persisted automatic selection gap
 
 - Status: audited; implementation pending
@@ -1406,17 +1442,17 @@ version 2.
 
 ## Next slice
 
-Add a dedicated optional HRLE rebuild executor seam to the patched ViennaLS
-`Advect::rebuildLS()` path. The callback must produce a segmented replacement
-domain and segment-aware source-ID map; `Advect` retains ownership of point-data
-translation and commits domain plus point data only after full validation.
-Auto failures fall back to the unchanged CPU rebuild, while strict Manual
-Vulkan failures surface an error and preserve the snapshot. After the 2D/3D
-segmented and point-data gates pass, include this exact transaction in the
-deployment-time primitive suite. Direct negative/non-finite time injection
-also remains a defensive-branch coverage gap. The optional VTK-enabled
-install/export conflict should be isolated from the compute backend before
-packaging validation.
+First complete the rebuild-seam acceptance matrix with valid `HANDLED`
+replacement domains, multiple HRLE segments, scalar and vector point data, and
+`updatePointData=false` in both 2D and 3D. Then add the segment-aware Vulkan
+adapter that invokes the resident P4C4 transaction once per segment, publishes
+the complete replacement only after every segment succeeds, and maps Auto
+failures to CPU fallback while strict Manual Vulkan errors preserve the
+snapshot. After these gates pass, include the exact transaction in the
+deployment-time primitive suite. Direct negative/non-finite time injection also
+remains a defensive-branch coverage gap. The optional VTK-enabled install/export
+conflict should be isolated from the compute backend before packaging
+validation.
 
 After those production-seam gates, the Level Set work advances to HRLE
 sparse rebuild integration, followed by particle/ray and surface/oxidation

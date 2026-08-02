@@ -24,6 +24,8 @@ enum class LevelSetUpdateFailurePolicy { FALLBACK, FAIL };
 VIENNAPS_TEMPLATE_ND(NumericType, D) struct ProcessContext {
   using LevelSetUpdateExecutor =
       typename viennals::Advect<NumericType, D>::LevelSetUpdateExecutor;
+  using LevelSetRebuildExecutor =
+      typename viennals::Advect<NumericType, D>::LevelSetRebuildExecutor;
 
   // Core components
   SmartPointer<Domain<NumericType, D>> domain;
@@ -41,6 +43,7 @@ VIENNAPS_TEMPLATE_ND(NumericType, D) struct ProcessContext {
   AtomicLayerProcessParameters atomicLayerParams;
   SurfaceDiffusionParameters surfaceDiffusionParams;
   LevelSetUpdateExecutor levelSetUpdateExecutor;
+  LevelSetRebuildExecutor levelSetRebuildExecutor;
   LevelSetUpdateFailurePolicy levelSetUpdateFailurePolicy =
       LevelSetUpdateFailurePolicy::FALLBACK;
   std::string intermediateOutputPath = "";

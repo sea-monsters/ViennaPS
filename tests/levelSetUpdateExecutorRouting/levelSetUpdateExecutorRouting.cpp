@@ -18,6 +18,7 @@ using Advect = viennals::Advect<NumericType, kDimension>;
 using FailurePolicy = viennaps::LevelSetUpdateFailurePolicy;
 
 enum class ExecutorMode { NONE, FALLBACK, ERROR, THROW, INVALID };
+enum class RebuildMode { NONE, FALLBACK, ERROR, THROW, INVALID };
 
 class ConstantVelocityField final
     : public viennaps::VelocityField<NumericType, kDimension> {
@@ -126,10 +127,61 @@ void checkProcessApi() {
       };
   process.setLevelSetUpdateExecutor(std::move(executor));
   process.clearLevelSetUpdateExecutor();
+  typename viennaps::Process<NumericType, kDimension>::LevelSetRebuildExecutor
+      rebuildExecutor = [](const Advect::LevelSetRebuildContext &,
+                           Advect::LevelSetRebuildOutput &, std::string &) {
+        return Advect::LevelSetRebuildStatus::FALLBACK;
+      };
+  process.setLevelSetRebuildExecutor(rebuildExecutor);
+  VC_TEST_ASSERT(process.getLevelSetRebuildExecutor() != nullptr);
+  process.clearLevelSetRebuildExecutor();
   process.setLevelSetUpdateFailurePolicy(FailurePolicy::FAIL);
   VC_TEST_ASSERT(process.getLevelSetUpdateFailurePolicy() ==
                  FailurePolicy::FAIL);
   process.clearLevelSetUpdateExecutor();
+}
+
+[[nodiscard]] RunResult runRebuild(const RebuildMode mode,
+                                   const FailurePolicy policy) {
+  auto domain = makeDomain();
+  auto model = viennacore::SmartPointer<AnalyticModel>::New();
+  viennaps::ProcessContext<NumericType, kDimension> context;
+  context.domain = domain;
+  context.model = model;
+  context.processDuration = 0.05;
+  context.advectionParams.spatialScheme =
+      viennals::SpatialSchemeEnum::ENGQUIST_OSHER_1ST_ORDER;
+  context.advectionParams.timeStepRatio = 0.4999;
+  context.advectionParams.dissipationAlpha = 0.0;
+  context.advectionParams.checkDissipation = false;
+  context.translationField = viennacore::
+      SmartPointer<viennaps::TranslationField<NumericType, kDimension>>::New(
+          model->getVelocityField(), domain->getMaterialMap(), 0);
+  context.levelSetUpdateFailurePolicy = policy;
+  unsigned calls = 0;
+  if (mode != RebuildMode::NONE) {
+    context.levelSetRebuildExecutor =
+        [mode, &calls](const Advect::LevelSetRebuildContext &,
+                       Advect::LevelSetRebuildOutput &, std::string &) {
+          ++calls;
+          if (mode == RebuildMode::ERROR)
+            return Advect::LevelSetRebuildStatus::ERROR;
+          if (mode == RebuildMode::THROW)
+            throw std::runtime_error("rebuild executor failure");
+          if (mode == RebuildMode::INVALID)
+            return Advect::LevelSetRebuildStatus::HANDLED;
+          return Advect::LevelSetRebuildStatus::FALLBACK;
+        };
+  }
+  viennaps::AdvectionHandler<NumericType, kDimension> handler;
+  VC_TEST_ASSERT(handler.initialize(context) ==
+                 viennaps::ProcessResult::SUCCESS);
+  const auto before = snapshot(domain);
+  handler.prepareAdvection(context);
+  model->getVelocityField()->prepare(domain, nullptr, 0.0F);
+  const auto result = handler.performAdvection(context);
+  return {before, snapshot(domain),    calls,
+          result, context.processTime, handler.getTotalAdvectionSteps()};
 }
 
 void checkProcessStrictFailure() {
@@ -210,7 +262,40 @@ int main(const int argc, const char *const argv[]) {
     checkStrictFailure(ExecutorMode::INVALID);
   else if (scenario == "process-strict")
     checkProcessStrictFailure();
-  else
+  else if (scenario == "rebuild-fallback") {
+    const auto cpu = runRebuild(RebuildMode::NONE, FailurePolicy::FALLBACK);
+    const auto fallback =
+        runRebuild(RebuildMode::FALLBACK, FailurePolicy::FALLBACK);
+    VC_TEST_ASSERT(cpu.result == viennaps::ProcessResult::SUCCESS);
+    VC_TEST_ASSERT(fallback.result == viennaps::ProcessResult::SUCCESS);
+    VC_TEST_ASSERT(cpu.afterValues == fallback.afterValues);
+    VC_TEST_ASSERT(fallback.executorCalls > 0U);
+  } else if (scenario == "rebuild-fallback-error" ||
+             scenario == "rebuild-fallback-throw" ||
+             scenario == "rebuild-fallback-invalid") {
+    const auto cpu = runRebuild(RebuildMode::NONE, FailurePolicy::FALLBACK);
+    const auto mode = scenario == "rebuild-fallback-error" ? RebuildMode::ERROR
+                      : scenario == "rebuild-fallback-throw"
+                          ? RebuildMode::THROW
+                          : RebuildMode::INVALID;
+    const auto result = runRebuild(mode, FailurePolicy::FALLBACK);
+    VC_TEST_ASSERT(result.result == viennaps::ProcessResult::SUCCESS);
+    VC_TEST_ASSERT(result.afterValues == cpu.afterValues);
+    VC_TEST_ASSERT(result.executorCalls > 0U);
+  } else if (scenario == "rebuild-strict-error" ||
+             scenario == "rebuild-strict-throw" ||
+             scenario == "rebuild-strict-invalid") {
+    const auto mode = scenario == "rebuild-strict-error" ? RebuildMode::ERROR
+                      : scenario == "rebuild-strict-throw"
+                          ? RebuildMode::THROW
+                          : RebuildMode::INVALID;
+    const auto result = runRebuild(mode, FailurePolicy::FAIL);
+    VC_TEST_ASSERT(result.result == viennaps::ProcessResult::FAILURE);
+    VC_TEST_ASSERT(result.beforeValues == result.afterValues);
+    VC_TEST_ASSERT(result.processTime == 0.0);
+    VC_TEST_ASSERT(result.advectionSteps == 0U);
+    VC_TEST_ASSERT(result.executorCalls > 0U);
+  } else
     return 2;
   return 0;
 }

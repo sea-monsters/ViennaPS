@@ -58,6 +58,8 @@ public:
         context.advectionParams.adaptiveTimeStepping,
         context.advectionParams.adaptiveTimeStepSubdivisions);
     advectionKernel_.setLevelSetUpdateExecutor(context.levelSetUpdateExecutor);
+    advectionKernel_.setLevelSetRebuildExecutor(
+        context.levelSetRebuildExecutor);
     using AdvectFailurePolicy =
         typename viennals::Advect<NumericType, D>::LevelSetUpdateFailurePolicy;
     advectionKernel_.setLevelSetUpdateFailurePolicy(
@@ -123,6 +125,15 @@ public:
       return ProcessResult::FAILURE;
     }
 
+    if (advectionKernel_.hasLevelSetRebuildError()) {
+      viennacore::Logger::getInstance()
+          .addError("Level Set rebuild executor failed: " +
+                        advectionKernel_.getLevelSetRebuildError(),
+                    false)
+          .print();
+      return ProcessResult::FAILURE;
+    }
+
     if (advectionKernel_.hasAdvectionTimeError()) {
       viennacore::Logger::getInstance()
           .addError("Advection time integration failed: " +
@@ -167,8 +178,7 @@ public:
           .print();
       return ProcessResult::FAILURE;
     }
-    if (context.timeStep == 0.0 ||
-        !(nextProcessTime > context.processTime)) {
+    if (context.timeStep == 0.0 || !(nextProcessTime > context.processTime)) {
       VIENNACORE_LOG_WARNING(
           "Process terminated early: Advection made no time progress.");
       return ProcessResult::EARLY_TERMINATION;

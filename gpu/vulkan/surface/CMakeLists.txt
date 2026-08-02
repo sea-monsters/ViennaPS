@@ -138,6 +138,21 @@ else()
                          PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
+add_library(viennaps_vulkan_surface_diffusion surface_diffusion_executor.cpp)
+target_link_libraries(viennaps_vulkan_surface_diffusion
+                      PUBLIC viennaps_vulkan_graph_diffusion Vulkan::Vulkan)
+target_include_directories(viennaps_vulkan_surface_diffusion
+                           PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
+                                  "${CMAKE_CURRENT_LIST_DIR}/../../../include/viennaps")
+target_compile_features(viennaps_vulkan_surface_diffusion PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps_vulkan_surface_diffusion PRIVATE /W4 /WX
+                         /EHsc)
+else()
+  target_compile_options(viennaps_vulkan_surface_diffusion
+                         PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
 add_library(viennaps_vulkan_coverage_delta_metric
             coverage_delta_metric.cpp coverage_delta_executor.cpp)
 add_dependencies(viennaps_vulkan_coverage_delta_metric
@@ -173,6 +188,26 @@ if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
    VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE)
   add_test(NAME viennaps-vulkan-graph-diffusion-smoke
            COMMAND viennaps-vulkan-graph-diffusion-smoke)
+endif()
+
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH
+               "${VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV}")
+add_executable(viennaps-vulkan-surface-diffusion-executor-smoke
+               surface_diffusion_executor_smoke.cpp)
+add_dependencies(viennaps-vulkan-surface-diffusion-executor-smoke
+                 viennaps-vulkan-graph-diffusion-spv)
+target_compile_features(viennaps-vulkan-surface-diffusion-executor-smoke
+                         PRIVATE cxx_std_20)
+target_compile_definitions(
+  viennaps-vulkan-surface-diffusion-executor-smoke PRIVATE
+  "VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH=\"${VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-surface-diffusion-executor-smoke
+                      PRIVATE viennaps_vulkan_surface_diffusion Vulkan::Vulkan)
+
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
+   VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE)
+  add_test(NAME viennaps-vulkan-surface-diffusion-executor-smoke
+           COMMAND viennaps-vulkan-surface-diffusion-executor-smoke)
 endif()
 
 string(REPLACE "\\" "/" VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV_PATH

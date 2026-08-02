@@ -10,6 +10,12 @@ namespace viennaps {
 
 enum class ProcessResult;
 
+/// Backend-independent outcome for the optional surface diffusion callback.
+///
+/// The public Process facade maps these two outcomes to ProcessResult while
+/// retaining the legacy ProcessResult callback type for existing callers.
+enum class SurfaceDiffusionExecutionStatus { SUCCESS, FAILURE };
+
 /// A synchronous, type-erased surface-diffusion dispatch request.
 ///
 /// Every span is valid only for the duration of the executor call. An executor
@@ -31,5 +37,10 @@ template <typename NumericType> struct SurfaceDiffusionWork {
 template <typename NumericType>
 using SurfaceDiffusionExecutor = std::function<
     ProcessResult(SurfaceDiffusionWork<NumericType> &, std::string &)>;
+
+template <typename NumericType>
+using SurfaceDiffusionStatusExecutor = std::function<
+    SurfaceDiffusionExecutionStatus(SurfaceDiffusionWork<NumericType> &,
+                                    std::string &)>;
 
 } // namespace viennaps

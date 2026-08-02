@@ -2636,3 +2636,28 @@ Vulkan bridge and CPU differential gate.
 | Direct compilation | An MSVC C++20 header-only contract compile passed; `git diff --check` passed. |
 | Root CPU acceptance | Root CMake registers the focused test. With the documented temporary patched ViennaLS override, the Debug CTest passes after the actual Flux/Process headers compile. |
 | Scope boundary | This adds only the Process-level ABI seam and CSR conversion; no Vulkan dispatch, shader, controller, profile selection, B2A-to-COV coupling, or CPU algorithm replacement is enabled. |
+
+### P5-B2B: Vulkan surface-diffusion status bridge
+
+- Status: accepted locally as an explicit FP32 Vulkan bridge; no automatic
+  Process installation or backend selection is enabled
+- Date: 2026-08-03
+
+P5-B2B adds a backend-independent `SUCCESS`/`FAILURE` status callback while
+retaining the legacy `ProcessResult` executor alias. `Process` adapts the new
+status callback through the existing `ProcessContext` callback, preserving the
+Flux strategy's transaction and error semantics. The standalone Vulkan bridge
+is FP32-only, caller-owned, mutex-protected, and lifetime-safe. It validates
+zero or nonzero fields, strict monotonic CSR with bounded columns, finite
+normal-or-zero values, non-aliasing spans, and checked Vulkan sizes. It runs
+`SurfaceGraphDiffusionFp32` into private scratch buffers, compares every result
+to the existing volatile CPU row-order solver by raw IEEE-754 bits, and only
+then commits output and completion metadata. Failures, exceptions, reset, and
+uninitialized callbacks leave caller output and metadata unchanged.
+
+| Gate | Result |
+|---|---|
+| Contract coverage | Smoke includes N=0/1/257, mixed CSR rows, output sentinels, malformed CSR, aliasing, NaN/subnormal inputs, reset, and callback lifetime. |
+| Hardware acceptance | Fresh MSVC 19.44.35223 + `VULKAN_SDK` build on the local Intel Arc; focused CTest `viennaps-vulkan-surface-diffusion-executor-smoke` passed 1/1 in 0.21 s. |
+| Root Process mapping | Patched-ViennaLS root Debug CTest `surfaceDiffusionExecutor` passed 1/1 in 0.46 s, including SUCCESS/FAILURE status adaptation through the legacy ProcessContext callback. |
+| Scope boundary | Only the status alias/adapter, bridge, surface CMake wiring, smoke, and this record are in scope; no Flux strategy, shader, primitive, dependency, or backend-policy changes. |

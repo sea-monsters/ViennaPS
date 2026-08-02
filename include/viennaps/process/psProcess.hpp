@@ -52,6 +52,8 @@ public:
       typename ProcessContext<NumericType, D>::LevelSetRebuildExecutor;
   using SurfaceDiffusionExecutor =
       typename ProcessContext<NumericType, D>::SurfaceDiffusionExecutor;
+  using SurfaceDiffusionStatusExecutor =
+      viennaps::SurfaceDiffusionStatusExecutor<NumericType>;
   using LevelSetUpdateFailurePolicy = viennaps::LevelSetUpdateFailurePolicy;
 
   Process() { initializeStrategies(); }
@@ -140,6 +142,26 @@ public:
 
   void setSurfaceDiffusionExecutor(SurfaceDiffusionExecutor executor) {
     context_.surfaceDiffusionExecutor = std::move(executor);
+  }
+
+  /// Installs a backend-independent callback for surface diffusion. The
+  /// status is deliberately adapted through the existing ProcessResult
+  /// callback stored in ProcessContext so the strategy's commit and error
+  /// handling remain unchanged for legacy callers.
+  void setSurfaceDiffusionStatusExecutor(
+      SurfaceDiffusionStatusExecutor executor) {
+    if (!executor) {
+      context_.surfaceDiffusionExecutor = {};
+      return;
+    }
+    context_.surfaceDiffusionExecutor =
+        [executor = std::move(executor)](
+            SurfaceDiffusionWork<NumericType> &work, std::string &error) {
+          const auto status = executor(work, error);
+          return status == SurfaceDiffusionExecutionStatus::SUCCESS
+                     ? ProcessResult::SUCCESS
+                     : ProcessResult::FAILURE;
+        };
   }
 
   [[nodiscard]] SurfaceDiffusionExecutor

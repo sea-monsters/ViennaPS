@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -67,6 +68,39 @@ bool runFacadeSmoke() {
   VC_TEST_ASSERT(output[0] == NumericType(3.5));
   VC_TEST_ASSERT(output[1] == NumericType(3.5));
   VC_TEST_ASSERT(current == output);
+
+  if constexpr (std::is_same_v<NumericType, float>) {
+    unsigned statusCalls = 0U;
+    typename Process::SurfaceDiffusionStatusExecutor statusExecutor =
+        [&statusCalls](viennaps::SurfaceDiffusionWork<float> &statusWork,
+                       std::string &) {
+          ++statusCalls;
+          statusWork.output[0] = statusWork.field[0] + 1.0F;
+          statusWork.output[1] = statusWork.field[1] + 1.0F;
+          statusWork.writtenCount = statusWork.output.size();
+          statusWork.complete = true;
+          return viennaps::SurfaceDiffusionExecutionStatus::SUCCESS;
+        };
+    process.setSurfaceDiffusionStatusExecutor(statusExecutor);
+    std::vector<float> statusOutput(2U, 0.0F);
+    viennaps::SurfaceDiffusionWork<float> statusWork{
+        rowOffsets, columnIndices, weights, field, statusOutput, 0.5F, 0U,
+        false};
+    VC_TEST_ASSERT(process.getSurfaceDiffusionExecutor()(statusWork, error) ==
+                   viennaps::ProcessResult::SUCCESS);
+    VC_TEST_ASSERT(statusCalls == 1U);
+    VC_TEST_ASSERT(statusOutput[0] == 4.0F && statusOutput[1] == 5.0F);
+
+    statusExecutor =
+        [](viennaps::SurfaceDiffusionWork<float> &, std::string &) {
+          return viennaps::SurfaceDiffusionExecutionStatus::FAILURE;
+        };
+    process.setSurfaceDiffusionStatusExecutor(statusExecutor);
+    VC_TEST_ASSERT(process.getSurfaceDiffusionExecutor()(statusWork, error) ==
+                   viennaps::ProcessResult::FAILURE);
+    process.setSurfaceDiffusionStatusExecutor({});
+    VC_TEST_ASSERT(!process.getSurfaceDiffusionExecutor());
+  }
 
   const auto previous = current;
   std::vector<NumericType> partialOutput(2U, NumericType(0));

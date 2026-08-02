@@ -7,6 +7,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "../runtime/compute_session.hpp"
@@ -36,6 +37,17 @@ public:
   [[nodiscard]] bool isInitialized() const;
   [[nodiscard]] bool build(std::span<const Triangle> triangles,
                            std::string &error);
+  // Records a fixed-topology bounds refit into a caller-owned command buffer.
+  // The packed dynamic vertices are copied into the traversal vertex buffer;
+  // this method does not begin/end/submit/wait or read back.
+  [[nodiscard]] bool
+  recordRefit(VkCommandBuffer commandBuffer,
+              runtime::DeviceBuffer &dynamicVertices,
+              std::span<const Triangle> hostMirror, std::string &error);
+  // Read-only validation hook for the accepted refit smoke; it does not alter
+  // the published traversal state.
+  [[nodiscard]] bool snapshotNodes(std::vector<TriangleBvhNode> &output,
+                                   std::string &error) const;
   [[nodiscard]] bool intersect(std::span<const Ray> rays,
                                std::span<TriangleHit> output,
                                std::string &error);
@@ -60,14 +72,23 @@ private:
   runtime::ComputeSession ownedSession_{};
   runtime::ComputeSession *session_ = nullptr;
   runtime::ShaderModule shaderModule_{};
+  runtime::ShaderModule refitShaderModule_{};
   runtime::DescriptorSetLayout descriptorSetLayout_{};
   runtime::PipelineLayout pipelineLayout_{};
+  runtime::DescriptorSetLayout refitDescriptorSetLayout_{};
+  runtime::PipelineLayout refitPipelineLayout_{};
   runtime::ComputePipeline pipeline_{};
+  runtime::ComputePipeline refitPipeline_{};
   runtime::DescriptorPool descriptorPool_{};
+  runtime::DescriptorPool refitDescriptorPool_{};
   runtime::Fence fence_{};
   VkDescriptorSet descriptorSet_ = VK_NULL_HANDLE;
+  VkDescriptorSet refitDescriptorSet_ = VK_NULL_HANDLE;
   VkCommandBuffer commandBuffer_ = VK_NULL_HANDLE;
   runtime::DeviceBuffer nodes_{}, triangles_{}, indices_{};
+  runtime::DeviceBuffer refitNodeIds_{};
+  std::vector<std::uint32_t> refitNodeIdsHost_{};
+  std::vector<std::pair<std::uint32_t, std::uint32_t>> refitRanges_{};
   std::size_t triangleCount_ = 0U;
   bool built_ = false;
 };

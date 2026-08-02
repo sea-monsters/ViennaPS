@@ -2216,6 +2216,27 @@ the conservative rebuild-on-every-call API.
 | Build and test | A fresh standalone Ninja build using MSVC `19.44.35223` and the local Intel Arc Vulkan adapter builds `viennaps-vulkan-triangle-bvh-hit-smoke`; focused CTest passes 1/1. |
 | Scope boundary | This is CPU-built BVH plus compute traversal and optional device-ray-flux selection. It does not perform GPU BVH construction/refit, reflection or multi-bounce transport, particle/material physics, Process integration, or use Vulkan RT extensions. |
 
+### P5-R5: fixed-topology device BVH refit
+
+- Status: accepted locally as a fixed-topology correctness primitive; no
+  production route is enabled
+- Date: 2026-08-03
+
+`recordRefit` records a caller-owned dynamic-vertex copy followed by leaf and
+bottom-up internal-node AABB refit. It neither begins/ends/submits/waits nor
+reads back; explicit compute/transfer barriers make repeated refits and a
+following traversal ordered. The topology and node-ID ranges stay private to
+the primitive. Host validation is strict normal-or-zero FP32, exact triangle
+count, capacity, device, and session generation.
+
+| Gate | Result |
+|---|---|
+| Build and hardware smoke | MSVC 19.44 built the new shader, library, and focused smoke; local Intel Arc Vulkan CTest passed 1/1 and `spirv-val` accepted the refit shader. |
+| Fail-closed smoke contract | The smoke covers null command, host-mirror count mismatch, NaN, subnormal, undersized, foreign-session, and stale-generation dynamic buffers; each rejection checks raw node preservation and an unchanged hit sentinel. |
+| Refit oracle | Two consecutive refits (moved geometry then restored geometry) compare CPU/GPU raw hit fields and manually computed root raw bounds; the moved fixture changes the equal-distance hit owner from 9 to 10. A full CPU rebuild is not a refit oracle because repartitioning can change the fixed topology. |
+| Alias boundary | The public API cannot alias the primitive's private BVH buffers; the implementation retains a defensive handle-alias check, but no test hook exposes those private buffers. |
+| Scope boundary | This is fixed-topology refit only. It does not add GPU BVH construction, topology mutation, Process routing, surface diffusion, Vulkan RT extensions, or automatic backend promotion. |
+
 ## Next slice
 
 The segmented rebuild adapter is installed by the level-set controller, the

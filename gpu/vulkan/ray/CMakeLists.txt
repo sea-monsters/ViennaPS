@@ -664,6 +664,10 @@ set(VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SHADER
     "${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle_bvh_hit.comp")
 set(VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV
     "${CMAKE_CURRENT_BINARY_DIR}/triangle_bvh_hit.comp.spv")
+set(VIENNAPS_VULKAN_TRIANGLE_BVH_REFIT_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle_bvh_refit.comp")
+set(VIENNAPS_VULKAN_TRIANGLE_BVH_REFIT_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/triangle_bvh_refit.comp.spv")
 if("${VIENNAPS_VULKAN_RAY_SHADER_COMPILER}" MATCHES ".*glslangValidator.*")
   add_custom_command(OUTPUT ${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV}
     COMMAND ${VIENNAPS_VULKAN_RAY_SHADER_COMPILER} -V
@@ -681,9 +685,27 @@ else()
 endif()
 add_custom_target(viennaps-vulkan-triangle-bvh-hit-spv
                   DEPENDS ${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV})
+if("${VIENNAPS_VULKAN_RAY_SHADER_COMPILER}" MATCHES ".*glslangValidator.*")
+  add_custom_command(OUTPUT ${VIENNAPS_VULKAN_TRIANGLE_BVH_REFIT_SPV}
+    COMMAND ${VIENNAPS_VULKAN_RAY_SHADER_COMPILER} -V
+            ${VIENNAPS_VULKAN_TRIANGLE_BVH_REFIT_SHADER} -o
+            ${VIENNAPS_VULKAN_TRIANGLE_BVH_REFIT_SPV}
+    DEPENDS ${VIENNAPS_VULKAN_TRIANGLE_BVH_REFIT_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+else()
+  add_custom_command(OUTPUT ${VIENNAPS_VULKAN_TRIANGLE_BVH_REFIT_SPV}
+    COMMAND ${VIENNAPS_VULKAN_RAY_SHADER_COMPILER} -o
+            ${VIENNAPS_VULKAN_TRIANGLE_BVH_REFIT_SPV}
+            ${VIENNAPS_VULKAN_TRIANGLE_BVH_REFIT_SHADER}
+    DEPENDS ${VIENNAPS_VULKAN_TRIANGLE_BVH_REFIT_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+endif()
+add_custom_target(viennaps-vulkan-triangle-bvh-refit-spv
+                  DEPENDS ${VIENNAPS_VULKAN_TRIANGLE_BVH_REFIT_SPV})
 add_library(viennaps_vulkan_triangle_bvh_hit triangle_bvh_hit.cpp)
 add_dependencies(viennaps_vulkan_triangle_bvh_hit
                  viennaps-vulkan-triangle-bvh-hit-spv
+                 viennaps-vulkan-triangle-bvh-refit-spv
                  viennaps-vulkan-triangle-hit-spv)
 target_link_libraries(viennaps_vulkan_triangle_bvh_hit PUBLIC
                       viennaps_vulkan_compute_runtime
@@ -699,12 +721,16 @@ else()
 endif()
 string(REPLACE "\\" "/" VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH
                "${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV}")
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_TRIANGLE_BVH_REFIT_SPV_PATH
+               "${VIENNAPS_VULKAN_TRIANGLE_BVH_REFIT_SPV}")
 add_executable(viennaps-vulkan-triangle-bvh-hit-smoke triangle_bvh_hit_smoke.cpp)
 add_dependencies(viennaps-vulkan-triangle-bvh-hit-smoke
-                 viennaps-vulkan-triangle-bvh-hit-spv)
+                 viennaps-vulkan-triangle-bvh-hit-spv
+                 viennaps-vulkan-triangle-bvh-refit-spv)
 target_compile_features(viennaps-vulkan-triangle-bvh-hit-smoke PRIVATE cxx_std_20)
 target_compile_definitions(viennaps-vulkan-triangle-bvh-hit-smoke PRIVATE
-  "VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH}\"")
+  "VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH}\""
+  "VIENNAPS_VULKAN_TRIANGLE_BVH_REFIT_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_BVH_REFIT_SPV_PATH}\"")
 target_link_libraries(viennaps-vulkan-triangle-bvh-hit-smoke PRIVATE
                       viennaps_vulkan_triangle_bvh_hit Vulkan::Vulkan)
 if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)

@@ -1,0 +1,70 @@
+// Copyright 2026 ViennaPS
+// SPDX-License-Identifier: MIT
+#version 450
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer DynamicVertices {
+  vec4 vertex[];
+};
+struct Node { vec3 bmin; uint leftFirst; vec3 bmax; uint count; };
+layout(set = 0, binding = 1, std430) buffer Nodes { Node node[]; };
+layout(set = 0, binding = 2, std430) readonly buffer Indices { uint index[]; };
+layout(set = 0, binding = 3, std430) readonly buffer NodeIds { uint nodeId[]; };
+
+layout(push_constant) uniform C {
+  uint mode;
+  uint offset;
+  uint count;
+  uint triangleCount;
+} c;
+
+float nextDown(float value) {
+  uint bits = floatBitsToUint(value);
+  if (bits == 0u) return uintBitsToFloat(0x80000001u);
+  if ((bits & 0x80000000u) != 0u) return uintBitsToFloat(bits + 1u);
+  return uintBitsToFloat(bits - 1u);
+}
+
+float nextUp(float value) {
+  uint bits = floatBitsToUint(value);
+  if (bits == 0x80000000u) return uintBitsToFloat(1u);
+  if ((bits & 0x80000000u) != 0u) return uintBitsToFloat(bits - 1u);
+  return uintBitsToFloat(bits + 1u);
+}
+
+void main() {
+  uint lane = gl_GlobalInvocationID.x;
+  if (lane >= c.count) return;
+  Node current = node[nodeId[c.offset + lane]];
+  vec3 lo;
+  vec3 hi;
+  if (c.mode == 0u) {
+    lo = vec3(uintBitsToFloat(0x7f7fffffu));
+    hi = vec3(uintBitsToFloat(0xff7fffffu));
+    for (uint j = 0u; j < current.count; ++j) {
+      uint triangle = index[current.leftFirst + j];
+      uint base = triangle * 3u;
+      for (uint k = 0u; k < 3u; ++k) {
+        vec3 point = vertex[base + k].xyz;
+        lo = min(lo, point);
+        hi = max(hi, point);
+      }
+    }
+  } else {
+    Node left = node[current.leftFirst];
+    Node right = node[current.leftFirst + 1u];
+    lo = min(left.bmin, right.bmin);
+    hi = max(left.bmax, right.bmax);
+  }
+  // Leaves expand raw vertex bounds once. Internal levels union already
+  // conservative children without accumulating an extra ULP per depth.
+  if (c.mode == 0u) {
+    current.bmin = vec3(nextDown(lo.x), nextDown(lo.y), nextDown(lo.z));
+    current.bmax = vec3(nextUp(hi.x), nextUp(hi.y), nextUp(hi.z));
+  } else {
+    current.bmin = lo;
+    current.bmax = hi;
+  }
+  node[nodeId[c.offset + lane]] = current;
+}

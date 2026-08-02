@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <numeric>
 
@@ -111,6 +112,18 @@ bool TriangleBvhHitPrimitive::setup(const std::string_view path,
     reset();
     return false;
   }
+  std::string refitPath(path);
+  const auto hitName = refitPath.find("triangle_bvh_hit");
+  if (hitName != std::string::npos)
+    refitPath.replace(hitName, std::string("triangle_bvh_hit").size(),
+                      "triangle_bvh_refit");
+  runtime::SpirvProgram refitProgram{};
+  if (hitName != std::string::npos &&
+      (!runtime::readSpirv(refitPath, refitProgram, error) ||
+       !refitShaderModule_.create(session_->device(), refitProgram, error))) {
+    reset();
+    return false;
+  }
   std::array<VkDescriptorSetLayoutBinding, 6U> bs{};
   for (std::uint32_t i = 0; i < bs.size(); ++i)
     bs[i] = {i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1U,
@@ -132,6 +145,28 @@ bool TriangleBvhHitPrimitive::setup(const std::string_view path,
     reset();
     return false;
   }
+  if (!refitProgram.words.empty()) {
+    std::array<VkDescriptorSetLayoutBinding, 4U> refitBindings{};
+    for (std::uint32_t i = 0; i < refitBindings.size(); ++i)
+      refitBindings[i] = {i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1U,
+                          VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    if (!refitDescriptorSetLayout_.create(session_->device(), refitBindings,
+                                          error) ||
+        !refitPipelineLayout_.create(
+            session_->device(), refitDescriptorSetLayout_.get(),
+            std::span<const VkPushConstantRange>(&push, 1), error) ||
+        !refitDescriptorPool_.create(session_->device(), 1U, 4U,
+                                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                     error) ||
+        !refitDescriptorPool_.allocate(refitDescriptorSetLayout_.get(),
+                                       refitDescriptorSet_, error) ||
+        !refitPipeline_.create(session_->device(), refitShaderModule_,
+                               refitPipelineLayout_,
+                               runtime::ComputePipelineOptions{}, error)) {
+      reset();
+      return false;
+    }
+  }
   return true;
 }
 bool TriangleBvhHitPrimitive::initialize(std::string_view p, std::string &e) {
@@ -147,13 +182,22 @@ void TriangleBvhHitPrimitive::reset() {
   nodes_.reset();
   triangles_.reset();
   indices_.reset();
+  refitNodeIds_.reset();
+  refitNodeIdsHost_.clear();
+  refitRanges_.clear();
   fence_.destroy();
   pipeline_.reset();
+  refitPipeline_.reset();
   descriptorPool_.reset();
+  refitDescriptorPool_.reset();
   pipelineLayout_.reset();
+  refitPipelineLayout_.reset();
   descriptorSetLayout_.reset();
+  refitDescriptorSetLayout_.reset();
   shaderModule_.reset();
+  refitShaderModule_.reset();
   descriptorSet_ = VK_NULL_HANDLE;
+  refitDescriptorSet_ = VK_NULL_HANDLE;
   commandBuffer_ = VK_NULL_HANDLE;
   triangleCount_ = 0U;
   built_ = false;
@@ -191,6 +235,9 @@ bool TriangleBvhHitPrimitive::build(std::span<const Triangle> ts,
   nodes_.reset();
   triangles_.reset();
   indices_.reset();
+  refitNodeIds_.reset();
+  refitNodeIdsHost_.clear();
+  refitRanges_.clear();
   triangleCount_ = 0U;
   built_ = false;
   BuildState s{ts, {}, {}};
@@ -199,6 +246,40 @@ bool TriangleBvhHitPrimitive::build(std::span<const Triangle> ts,
   s.nodes.push_back({});
   if (!ts.empty())
     makeNode(s, 0U, 0U, ts.size());
+  if (!ts.empty()) {
+    std::vector<std::vector<std::uint32_t>> levels;
+    std::function<void(std::uint32_t, std::uint32_t)> collect =
+        [&](const std::uint32_t node, const std::uint32_t depth) {
+          if (s.nodes[node].count != 0U)
+            return;
+          if (levels.size() <= depth)
+            levels.resize(depth + 1U);
+          levels[depth].push_back(node);
+          collect(s.nodes[node].leftFirst, depth + 1U);
+          collect(s.nodes[node].leftFirst + 1U, depth + 1U);
+        };
+    std::vector<std::uint32_t> leaves;
+    std::function<void(std::uint32_t)> collectLeaves =
+        [&](const std::uint32_t node) {
+          if (s.nodes[node].count != 0U) {
+            leaves.push_back(node);
+            return;
+          }
+          collectLeaves(s.nodes[node].leftFirst);
+          collectLeaves(s.nodes[node].leftFirst + 1U);
+        };
+    collect(0U, 0U);
+    collectLeaves(0U);
+    refitNodeIdsHost_ = leaves;
+    refitRanges_.push_back({0U, static_cast<std::uint32_t>(leaves.size())});
+    for (auto level = levels.rbegin(); level != levels.rend(); ++level) {
+      const auto offset = static_cast<std::uint32_t>(refitNodeIdsHost_.size());
+      refitNodeIdsHost_.insert(refitNodeIdsHost_.end(), level->begin(),
+                               level->end());
+      refitRanges_.push_back(
+          {offset, static_cast<std::uint32_t>(level->size())});
+    }
+  }
   std::vector<std::array<float, 4>> packed;
   packed.reserve(ts.size() * 3U);
   for (const auto &t : ts) {
@@ -211,7 +292,10 @@ bool TriangleBvhHitPrimitive::build(std::span<const Triangle> ts,
                    triangles_, e) ||
       !createBytes(std::max<std::size_t>(1U, s.order.size()) *
                        sizeof(std::uint32_t),
-                   indices_, e))
+                   indices_, e) ||
+      !createBytes(std::max<std::size_t>(1U, refitNodeIdsHost_.size()) *
+                       sizeof(std::uint32_t),
+                   refitNodeIds_, e))
     return false;
   if (!s.nodes.empty() &&
       !nodes_.upload(*session_, s.nodes.data(),
@@ -225,9 +309,178 @@ bool TriangleBvhHitPrimitive::build(std::span<const Triangle> ts,
       !indices_.upload(*session_, s.order.data(),
                        s.order.size() * sizeof(std::uint32_t), 0U, e))
     return false;
+  if (!refitNodeIdsHost_.empty() &&
+      !refitNodeIds_.upload(*session_, refitNodeIdsHost_.data(),
+                            refitNodeIdsHost_.size() * sizeof(std::uint32_t),
+                            0U, e))
+    return false;
   triangleCount_ = ts.size();
   built_ = true;
   return true;
+}
+
+bool TriangleBvhHitPrimitive::recordRefit(
+    const VkCommandBuffer commandBuffer, runtime::DeviceBuffer &dynamicVertices,
+    const std::span<const Triangle> hostMirror, std::string &e) {
+  e.clear();
+  if (!ready(e) || !built_ || refitPipeline_.get() == VK_NULL_HANDLE ||
+      refitDescriptorSet_ == VK_NULL_HANDLE)
+    return fail(e, "triangle BVH refit is not initialized");
+  if (commandBuffer == VK_NULL_HANDLE || hostMirror.size() != triangleCount_)
+    return fail(e, "triangle BVH refit command or topology count is invalid");
+  constexpr std::size_t packedVertexBytes = 3U * sizeof(float) * 4U;
+  if (triangleCount_ >
+      std::numeric_limits<std::size_t>::max() / packedVertexBytes)
+    return fail(e, "triangle BVH refit vertex size overflows size_t");
+  const std::size_t vertexBytes = triangleCount_ * packedVertexBytes;
+  if (!dynamicVertices.isValid() || dynamicVertices.ownerDevice() !=
+                                      session_->device().get() ||
+      dynamicVertices.ownerSessionGeneration() != session_->generation() ||
+      dynamicVertices.size() < (vertexBytes == 0U ? 1U : vertexBytes) ||
+      dynamicVertices.handle() == triangles_.handle() ||
+      dynamicVertices.handle() == nodes_.handle() ||
+      dynamicVertices.handle() == indices_.handle() ||
+      dynamicVertices.handle() == refitNodeIds_.handle())
+    return fail(e, "triangle BVH refit vertex buffer is stale or invalid");
+  const std::array<runtime::DeviceBuffer *, 4U> internalBuffers = {
+      &nodes_, &triangles_, &indices_, &refitNodeIds_};
+  for (const auto *buffer : internalBuffers)
+    if (!buffer->isValid() ||
+        buffer->ownerDevice() != session_->device().get() ||
+        buffer->ownerSessionGeneration() != session_->generation())
+      return fail(e, "triangle BVH refit geometry buffers are stale");
+  for (const auto &triangle : hostMirror)
+    for (const auto point : {triangle.a, triangle.b, triangle.c})
+      for (const float value : point)
+        if (!finiteFp(value))
+          return fail(e, "triangle BVH refit vertex is outside FP32 domain");
+  if (triangleCount_ == 0U)
+    return true;
+
+  const VkBufferMemoryBarrier trianglesBeforeCopy{
+      VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+      nullptr,
+      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+      VK_ACCESS_TRANSFER_WRITE_BIT,
+      VK_QUEUE_FAMILY_IGNORED,
+      VK_QUEUE_FAMILY_IGNORED,
+      triangles_.handle(),
+      0U,
+      VK_WHOLE_SIZE};
+  vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT, 0U, 0U, nullptr, 1U,
+                       &trianglesBeforeCopy, 0U, nullptr);
+  const VkBufferCopy copy{0U, 0U, static_cast<VkDeviceSize>(vertexBytes)};
+  vkCmdCopyBuffer(commandBuffer, dynamicVertices.handle(), triangles_.handle(),
+                  1U, &copy);
+  std::array<VkBufferMemoryBarrier, 4U> pre{};
+  pre[0] = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            nullptr,
+            VK_ACCESS_TRANSFER_WRITE_BIT,
+            VK_ACCESS_SHADER_READ_BIT,
+            VK_QUEUE_FAMILY_IGNORED,
+            VK_QUEUE_FAMILY_IGNORED,
+            triangles_.handle(),
+            0U,
+            VK_WHOLE_SIZE};
+  pre[1] = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            nullptr,
+            VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+            VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+            VK_QUEUE_FAMILY_IGNORED,
+            VK_QUEUE_FAMILY_IGNORED,
+            dynamicVertices.handle(),
+            0U,
+            VK_WHOLE_SIZE};
+  pre[2] = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            nullptr,
+            VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+            VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+            VK_QUEUE_FAMILY_IGNORED,
+            VK_QUEUE_FAMILY_IGNORED,
+            nodes_.handle(),
+            0U,
+            VK_WHOLE_SIZE};
+  pre[3] = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+            nullptr,
+            VK_ACCESS_TRANSFER_WRITE_BIT,
+            VK_ACCESS_SHADER_READ_BIT,
+            VK_QUEUE_FAMILY_IGNORED,
+            VK_QUEUE_FAMILY_IGNORED,
+            refitNodeIds_.handle(),
+            0U,
+            VK_WHOLE_SIZE};
+  vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT |
+                                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 0U, nullptr,
+                       static_cast<std::uint32_t>(pre.size()), pre.data(), 0U,
+                       nullptr);
+
+  const std::array<VkBuffer, 4U> handles = {
+      triangles_.handle(), nodes_.handle(), indices_.handle(),
+      refitNodeIds_.handle()};
+  std::array<VkDescriptorBufferInfo, 4U> infos{};
+  std::array<VkWriteDescriptorSet, 4U> writes{};
+  for (std::uint32_t i = 0U; i < writes.size(); ++i) {
+    infos[i] = {handles[i], 0U, VK_WHOLE_SIZE};
+    writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                 nullptr,
+                 refitDescriptorSet_,
+                 i,
+                 0U,
+                 1U,
+                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                 nullptr,
+                 &infos[i],
+                 nullptr};
+  }
+  vkUpdateDescriptorSets(session_->device().get(),
+                         static_cast<std::uint32_t>(writes.size()),
+                         writes.data(), 0U, nullptr);
+  vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                    refitPipeline_.get());
+  vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          refitPipelineLayout_.get(), 0U, 1U,
+                          &refitDescriptorSet_, 0U, nullptr);
+  for (std::size_t rangeIndex = 0U; rangeIndex < refitRanges_.size();
+       ++rangeIndex) {
+    const auto [offset, count] = refitRanges_[rangeIndex];
+    if (count == 0U)
+      continue;
+    const std::array<std::uint32_t, 4U> pc = {
+        rangeIndex == 0U ? 0U : 1U, offset, count,
+        static_cast<std::uint32_t>(triangleCount_)};
+    vkCmdPushConstants(commandBuffer, refitPipelineLayout_.get(),
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0U, sizeof(pc), pc.data());
+    vkCmdDispatch(commandBuffer, (count + 63U) / 64U, 1U, 1U);
+    const VkBufferMemoryBarrier nodesBarrier{
+        VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+        nullptr,
+        VK_ACCESS_SHADER_WRITE_BIT,
+        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+        VK_QUEUE_FAMILY_IGNORED,
+        VK_QUEUE_FAMILY_IGNORED,
+        nodes_.handle(),
+        0U,
+        VK_WHOLE_SIZE};
+    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 0U,
+                         nullptr, 1U, &nodesBarrier, 0U, nullptr);
+  }
+  return true;
+}
+
+bool TriangleBvhHitPrimitive::snapshotNodes(
+    std::vector<TriangleBvhNode> &output, std::string &e) const {
+  e.clear();
+  if (!ready(e) || !built_)
+    return fail(e, "triangle BVH geometry is not built");
+  const std::size_t count = nodes_.size() / sizeof(TriangleBvhNode);
+  output.resize(count);
+  if (count == 0U)
+    return true;
+  return nodes_.download(*session_, output.data(),
+                         count * sizeof(TriangleBvhNode), 0U, e);
 }
 
 bool TriangleBvhHitPrimitive::intersect(std::span<const Ray> rays,
@@ -399,14 +652,16 @@ bool TriangleBvhHitPrimitive::recordDispatch(
   for (std::size_t i = 0; i < pre.size(); ++i)
     pre[i] = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
               nullptr,
-              VK_ACCESS_TRANSFER_WRITE_BIT,
+              VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
               VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
               VK_QUEUE_FAMILY_IGNORED,
               VK_QUEUE_FAMILY_IGNORED,
               handles[i],
               0U,
               VK_WHOLE_SIZE};
-  vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+  vkCmdPipelineBarrier(commandBuffer,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT |
+                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 0U, nullptr,
                        static_cast<std::uint32_t>(pre.size()), pre.data(), 0U,
                        nullptr);

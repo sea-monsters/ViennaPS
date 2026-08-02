@@ -1576,16 +1576,46 @@ the deployment probe reports `primitiveSuite=pass`, `fp32Suite=pass`, and
 `levelSetSuiteReason="level-set update and HRLE rebuild CPU differential
 passed"`; the generated schema-2 profile round-trips and validates.
 
+### P5-B1: exact FP32 NeutralTransport surface velocity kernel
+
+- Status: accepted locally; process/controller integration pending
+- Date: 2026-08-02
+
+`NeutralTransportSurfaceModelFp32` establishes the first Vulkan surface-model
+contract for the etch-front branch of
+`impl::NeutralTransportSurfaceModel::calculateVelocities`. It accepts
+coverage, material IDs, and velocity as three independent FP32 SoA buffers and
+retains the CPU model's parameter order. The kernel uses an explicit uint32
+mantissa long division with guard/sticky nearest-even rounding for finite normal
+FP32 values. This avoids a reproducible one-ULP difference in the device's
+hardware division without requiring `shaderInt64`.
+
+The host validates every parameter, coverage value, and intermediate multiply
+or divide stays zero or normal finite FP32. Subnormal, NaN, infinity, and
+overflow/underflow paths reject before dispatch and preserve the caller's
+velocity sentinel; they remain CPU work until a separately proven contract is
+available.
+
+| Gate | Result |
+|---|---|
+| CPU differential | 1,299/1,299 NeutralTransport velocity outputs are bit-exact on Intel Arc; max ULP is 0 |
+| Floating-point boundaries | signs, positive/negative zero, minimum/maximum normal values, and varied parameter tuples are bit-exact |
+| Fail-closed input | subnormal coverage, NaN parameters, invalid lengths, aliases, and out-of-range lengths return errors without overwriting output |
+| CTest | a fresh `VIENNAPS_BUILD_TESTS=ON` configuration discovers and passes the surface smoke |
+| Scope boundary | only the fixed etch-front velocity formula is accelerated; coverage evolution, graph diffusion, ray transport, and process/controller routing remain CPU |
+| Path policy | Vulkan SDK and SPIR-V locations are generated or supplied through the local environment; no machine-specific path is tracked |
+
 ## Next slice
 
 The segmented rebuild adapter is installed by the level-set controller, the
 deployment probe executes the small FP32 update plus HRLE transaction before
 persisting the primitive gate, and D=3 Forward Euler has a real differential.
 RK2/RK3 remain deliberately CPU-only until a multi-stage device state machine
-is proven. Direct negative/non-finite time injection and the optional
-VTK-enabled install/export conflict remain validation gaps. The next deployment
-slice should broaden the oracle matrix and add the remaining primitive, ray,
-and surface/oxidation suites without weakening the current fail-closed gate.
+is proven. The first surface velocity formula is now exact but intentionally
+unwired to process selection. Direct negative/non-finite time injection and
+the optional VTK-enabled install/export conflict remain validation gaps. The
+next implementation slices are surface coverage/CSR graph diffusion, then
+deterministic ray reduction, without weakening the current fail-closed gate.
 
 After those production-seam gates, the Level Set work advances to HRLE
 sparse rebuild integration, followed by particle/ray and surface/oxidation

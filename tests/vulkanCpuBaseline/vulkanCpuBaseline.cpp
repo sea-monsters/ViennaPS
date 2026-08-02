@@ -132,7 +132,6 @@ std::uint64_t computeFingerprint(const StructureSummary<NumericType> &summary) {
   return digest;
 }
 
-template <class NumericType>
 std::string formatFingerprint(const std::uint64_t fingerprint) {
   std::ostringstream oss;
   oss << "0x" << std::hex << std::setw(16) << std::setfill('0') << fingerprint;
@@ -256,4 +255,7 @@ template <class NumericType> void RunTest() {
 
 } // namespace viennacore
 
-int main() { VC_RUN_2D_TESTS }
+int main() {
+  viennacore::RunTest<double>();
+  viennacore::RunTest<float>();
+}

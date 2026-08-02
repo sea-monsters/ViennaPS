@@ -2105,6 +2105,31 @@ compute-submission count.
 | Regression group | standalone `gpu/vulkan` build under MSVC succeeds and five focused CTests pass: triangle-hit device, ray-record compaction, recursive radix sort, surface reduction, and the full device ray-flux pipeline |
 | Scope boundary | no device-visible non-finite/overflow intermediate status, strict-FP32 deployment probe, exact dynamic output admission, BVH, particle transport, Process routing, or automatic backend eligibility is claimed |
 
+### P5-JF: strict-FP32 reduction status and fail-closed terminal commit
+
+- Status: accepted locally as a numerical-integrity slice; it closes the
+  device-visible intermediate-sum rejection gap in the P5-JE aggregate, but is
+  not a production ray-tracing or Process route
+- Date: 2026-08-03
+
+P5-JF adds a one-word, device-local sticky status buffer to surface reduction.
+The reduction shader validates the accumulator seed, every addend, and every
+ordered `precise` FP32 sum using raw IEEE-754 bits: only a normal value or an
+exact signed/unsigned zero is admissible. NaN, infinity, and subnormal values
+set the status atomically and terminate that segment. The aggregate clears the
+status in its sole recorded command buffer, reads it before any terminal result
+buffer, and returns failure without changing caller output spans or count when
+the flag is nonzero. The non-recording primitive follows the same contract.
+
+| Gate | Result |
+|---|---|
+| CPU rejection oracle | Two `FLT_MAX` records for one surface overflow their ordered FP32 sum. `RaySurfaceReducer::reduceCpu` rejects the input and leaves prefilled output ids, weights, and count unchanged. |
+| Device reduction | The same two-record fixture sets the device status. `DeviceRaySurfaceReducer::reduce()` returns failure and its caller-owned device output buffers retain their sentinels. |
+| Aggregate transaction | `DeviceRayFluxPipeline::runCpu()` and `runGpu()` both reject the same-surface overflow fixture; the GPU path checks status before count/id/weight readback, so its output sentinels and count remain unchanged. |
+| Existing normal path | The existing five-ray/three-triangle CPU differential and device ray-flux smoke still pass, preserving the accepted bitwise normal-path result. |
+| Validation boundary | The two affected standalone CTests pass on the local Vulkan device. A complete standalone build remains blocked by the pre-existing `/W4 /WX` C4530 exception-handling warning in `gather_histogram_primitives.cpp`; this slice does not claim that unrelated full-suite gate. |
+| Scope boundary | This adds numerical failure propagation only. It does not add a BVH, reflection/multi-bounce transport, CUDA callable-equivalent surface physics, Process routing, dynamic-output admission, or automatic backend promotion. |
+
 ## Next slice
 
 The segmented rebuild adapter is installed by the level-set controller, the
@@ -2118,11 +2143,14 @@ P5-JD first proves physical device-resident composition of P5-I, P5-JA,
 P5-JB2B, and P5-JC while retaining the sixteen stable P5-JB2B LSD passes,
 their full `RayRecord` bit contract, and device-local count storage. P5-JE
 then records those stages with explicit barriers into one compute submission.
-The next path must add a device-visible status and fail-closed policy for
-non-finite or out-of-domain intermediate FP32 sums before claiming full
-`reduceCpu` rejection equivalence. P5-K2 now populates P5-K1's evidence with
-an isolated watchdog probe; its dedicated raw-word shader and process boundary
-cannot reuse the HostVisible radix helpers.
+P5-JF completes the next numerical-integrity condition with a device-visible
+status and a fail-closed terminal commit for non-finite or out-of-domain
+intermediate FP32 sums, matching the relevant `reduceCpu` rejection boundary.
+The remaining ray work is physical transport and integration: BVH traversal,
+boundary/reflection/multi-bounce behavior, surface-model coupling, and Process
+routing. P5-K2 now populates P5-K1's evidence with an isolated watchdog probe;
+its dedicated raw-word shader and process boundary cannot reuse the HostVisible
+radix helpers.
 CPU differential checking remains an explicit validation gate, not a
 production per-call guard. Coverage reaction is a capability-gated FP64
 candidate, without weakening the current fail-closed gate.

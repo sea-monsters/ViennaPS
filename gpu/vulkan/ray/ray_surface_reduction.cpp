@@ -61,7 +61,7 @@ bool DeviceRaySurfaceReducer::setup(std::string_view segmentSpirv,
       return false;
     }
   }
-  std::array<VkDescriptorSetLayoutBinding, 6U> bindings{};
+  std::array<VkDescriptorSetLayoutBinding, 7U> bindings{};
   for (std::uint32_t i = 0U; i < bindings.size(); ++i)
     bindings[i] = {i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1U,
                    VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
@@ -209,20 +209,25 @@ bool DeviceRaySurfaceReducer::reduce(const runtime::DeviceBuffer &inputRecords,
       if (callerHandles[i] == callerHandles[j])
         return fail(error, "ray surface-reduction buffers must not alias");
 
-  runtime::DeviceBuffer flags{}, offsets{}, count{};
+  runtime::DeviceBuffer flags{}, offsets{}, count{}, status{};
   if (!flags.create(*session_, static_cast<VkDeviceSize>(indexBytes), error) ||
       !offsets.create(*session_, static_cast<VkDeviceSize>(indexBytes),
                       error) ||
-      !count.create(*session_, sizeof(std::uint32_t), error))
+      !count.create(*session_, sizeof(std::uint32_t), error) ||
+      !status.create(*session_, sizeof(std::uint32_t), error))
     return false;
-  const std::array<VkDescriptorBufferInfo, 6U> infos{
+  const std::uint32_t statusZero = 0U;
+  if (!status.upload(*session_, &statusZero, sizeof(statusZero), 0U, error))
+    return false;
+  const std::array<VkDescriptorBufferInfo, 7U> infos{
       {{inputRecords.handle(), 0U, static_cast<VkDeviceSize>(recordBytes)},
        {inputCount.handle(), 0U, sizeof(std::uint32_t)},
        {flags.handle(), 0U, static_cast<VkDeviceSize>(indexBytes)},
        {offsets.handle(), 0U, static_cast<VkDeviceSize>(indexBytes)},
        {outputSurfaceId.handle(), 0U, static_cast<VkDeviceSize>(indexBytes)},
-       {outputWeight.handle(), 0U, static_cast<VkDeviceSize>(weightBytes)}}};
-  std::array<VkWriteDescriptorSet, 6U> writes{};
+       {outputWeight.handle(), 0U, static_cast<VkDeviceSize>(weightBytes)},
+       {status.handle(), 0U, sizeof(std::uint32_t)}}};
+  std::array<VkWriteDescriptorSet, 7U> writes{};
   for (std::uint32_t i = 0U; i < writes.size(); ++i)
     writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                  nullptr,
@@ -315,9 +320,16 @@ bool DeviceRaySurfaceReducer::reduce(const runtime::DeviceBuffer &inputRecords,
       !fence_.wait(10'000'000'000ULL, error))
     return false;
   fence_.reset();
+  std::uint32_t statusValue = 0U;
+  if (!status.download(*session_, &statusValue, sizeof(statusValue), 0U,
+                       error))
+    return false;
+  if (statusValue != 0U)
+    return fail(error, "ray surface reduction left the strict FP32 domain");
   output.flags = std::move(flags);
   output.offsets = std::move(offsets);
   output.count = std::move(count);
+  output.status = std::move(status);
   output.inputCapacity = capacity;
   output.sessionGeneration = session_->generation();
   return true;
@@ -361,32 +373,34 @@ bool DeviceRaySurfaceReducer::recordReduce(
   if (!sameSession(inputRecords) || !sameSession(inputCount) ||
       !sameSession(outputSurfaceId) || !sameSession(outputWeight) ||
       !sameSession(output.flags) || !sameSession(output.offsets) ||
-      !sameSession(output.count) ||
+      !sameSession(output.count) || !sameSession(output.status) ||
       inputRecords.size() < static_cast<VkDeviceSize>(recordBytes) ||
       inputCount.size() < sizeof(std::uint32_t) ||
       output.flags.size() < static_cast<VkDeviceSize>(indexBytes) ||
       output.offsets.size() < static_cast<VkDeviceSize>(indexBytes) ||
       output.count.size() < sizeof(std::uint32_t) ||
+      output.status.size() < sizeof(std::uint32_t) ||
       outputSurfaceId.size() < static_cast<VkDeviceSize>(indexBytes) ||
       outputWeight.size() < static_cast<VkDeviceSize>(weightBytes))
     return fail(
         error, "ray surface-reduction buffer is invalid, stale, or undersized");
-  const std::array<VkBuffer, 7U> handles{
+  const std::array<VkBuffer, 8U> handles{
       inputRecords.handle(),   inputCount.handle(),      output.flags.handle(),
       output.offsets.handle(), outputSurfaceId.handle(), outputWeight.handle(),
-      output.count.handle()};
+      output.count.handle(),    output.status.handle()};
   for (std::size_t i = 0U; i < handles.size(); ++i)
     for (std::size_t j = i + 1U; j < handles.size(); ++j)
       if (handles[i] == handles[j])
         return fail(error, "ray surface-reduction buffers must not alias");
-  const std::array<VkDescriptorBufferInfo, 6U> infos{
+  const std::array<VkDescriptorBufferInfo, 7U> infos{
       {{handles[0], 0U, static_cast<VkDeviceSize>(recordBytes)},
        {handles[1], 0U, sizeof(std::uint32_t)},
        {handles[2], 0U, static_cast<VkDeviceSize>(indexBytes)},
        {handles[3], 0U, static_cast<VkDeviceSize>(indexBytes)},
        {handles[4], 0U, static_cast<VkDeviceSize>(indexBytes)},
-       {handles[5], 0U, static_cast<VkDeviceSize>(weightBytes)}}};
-  std::array<VkWriteDescriptorSet, 6U> writes{};
+       {handles[5], 0U, static_cast<VkDeviceSize>(weightBytes)},
+       {handles[7], 0U, sizeof(std::uint32_t)}}};
+  std::array<VkWriteDescriptorSet, 7U> writes{};
   for (std::uint32_t i = 0U; i < writes.size(); ++i)
     writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                  nullptr,

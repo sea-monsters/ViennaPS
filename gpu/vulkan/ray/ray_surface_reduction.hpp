@@ -23,6 +23,9 @@ struct DeviceRaySurfaceReductionOutput {
   runtime::DeviceBuffer flags{};
   runtime::DeviceBuffer offsets{};
   runtime::DeviceBuffer count{};
+  // Device-local sticky failure bit: bit 0 means strict FP32 reduction left
+  // the normal-or-exact-zero domain.
+  runtime::DeviceBuffer status{};
   std::uint32_t inputCapacity{0U};
   std::uint64_t sessionGeneration{0U};
 };

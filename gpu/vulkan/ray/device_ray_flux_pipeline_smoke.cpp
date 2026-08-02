@@ -100,6 +100,24 @@ int main() {
     assert(gpuSurface[i] == kSurfaceSentinel &&
            gpuWeight[i] == kWeightSentinel);
 
+  const std::vector<float> overflowWeights{
+      std::numeric_limits<float>::max(), -0.0F, 0.5F,
+      std::numeric_limits<float>::max(), 2.0F};
+  std::vector<std::uint32_t> overflowCpuSurface(rays.size(), kSurfaceSentinel);
+  std::vector<float> overflowCpuWeight(rays.size(), kWeightSentinel);
+  RayFluxResult overflowCpu{overflowCpuSurface, overflowCpuWeight, 73U};
+  assert(!pipeline.runCpu(rays, triangles, overflowWeights, overflowCpu, error));
+  assert(overflowCpu.count == 73U &&
+         overflowCpuSurface[0] == kSurfaceSentinel &&
+         overflowCpuWeight[0] == kWeightSentinel);
+  std::vector<std::uint32_t> overflowGpuSurface(rays.size(), kSurfaceSentinel);
+  std::vector<float> overflowGpuWeight(rays.size(), kWeightSentinel);
+  RayFluxResult overflowGpu{overflowGpuSurface, overflowGpuWeight, 73U};
+  assert(!pipeline.runGpu(rays, triangles, overflowWeights, overflowGpu, error));
+  assert(overflowGpu.count == 73U &&
+         overflowGpuSurface[0] == kSurfaceSentinel &&
+         overflowGpuWeight[0] == kWeightSentinel);
+
   const auto priorSurface = gpuSurface;
   const auto priorWeight = gpuWeight;
   const auto priorCount = gpu.count;

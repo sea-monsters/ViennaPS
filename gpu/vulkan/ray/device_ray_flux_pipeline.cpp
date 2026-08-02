@@ -214,6 +214,7 @@ bool DeviceRayFluxPipeline::runGpu(std::span<const Ray> rays,
       !reduced.offsets.create(*session_, static_cast<VkDeviceSize>(idBytes),
                               error) ||
       !reduced.count.create(*session_, sizeof(std::uint32_t), error) ||
+      !reduced.status.create(*session_, sizeof(std::uint32_t), error) ||
       !outputSurface.create(*session_, static_cast<VkDeviceSize>(idBytes),
                             error) ||
       !outputWeight.create(*session_, static_cast<VkDeviceSize>(weightBytes),
@@ -230,6 +231,8 @@ bool DeviceRayFluxPipeline::runGpu(std::span<const Ray> rays,
   begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
   if (vkBeginCommandBuffer(commandBuffer_, &begin) != VK_SUCCESS)
     return fail(error, "failed to begin device ray-flux command buffer");
+  vkCmdFillBuffer(commandBuffer_, reduced.status.handle(), 0U,
+                  sizeof(std::uint32_t), 0U);
   scanScratch_.reset();
   const auto recordFailure = [&]() {
     vkEndCommandBuffer(commandBuffer_);
@@ -259,6 +262,13 @@ bool DeviceRayFluxPipeline::runGpu(std::span<const Ray> rays,
   if (!fence_.wait(std::numeric_limits<std::uint64_t>::max(), error))
     return false;
   fence_.reset();
+
+  std::uint32_t reductionStatus = 0U;
+  if (!reduced.status.download(*session_, &reductionStatus,
+                               sizeof(reductionStatus), 0U, error))
+    return false;
+  if (reductionStatus != 0U)
+    return fail(error, "device ray-flux reduction left the strict FP32 domain");
 
   std::uint32_t resultCount = 0U;
   if (!reduced.count.download(*session_, &resultCount, sizeof(resultCount), 0U,

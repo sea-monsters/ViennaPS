@@ -20,10 +20,28 @@ layout(std430, binding = 4) writeonly buffer OutputSurfaceIds {
 layout(std430, binding = 5) writeonly buffer OutputWeights {
   float outputWeights[];
 };
+layout(std430, binding = 6) coherent buffer StrictStatus {
+  uint value;
+} strictStatus;
 layout(push_constant) uniform Params {
   uint capacity;
 } params;
 layout(local_size_x = 64) in;
+
+bool strictFp32(float value) {
+  uint bits = floatBitsToUint(value);
+  uint exponent = bits & 0x7f800000u;
+  uint mantissa = bits & 0x007fffffu;
+  return (exponent == 0u && mantissa == 0u) ||
+         (exponent != 0u && exponent != 0x7f800000u);
+}
+
+bool checked(float value) {
+  if (strictFp32(value))
+    return true;
+  atomicOr(strictStatus.value, 1u);
+  return false;
+}
 
 void main() {
   uint start = gl_GlobalInvocationID.x;
@@ -31,9 +49,16 @@ void main() {
     return;
   uint surface = records[start].y;
   precise float sum = uintBitsToFloat(records[start].z);
+  if (!checked(sum))
+    return;
   for (uint index = start + 1u;
        index < inputCount && records[index].y == surface; ++index) {
-    precise float next = sum + uintBitsToFloat(records[index].z);
+    precise float addend = uintBitsToFloat(records[index].z);
+    if (!checked(addend))
+      return;
+    precise float next = sum + addend;
+    if (!checked(next))
+      return;
     sum = next;
   }
   uint segment = offsets[start];

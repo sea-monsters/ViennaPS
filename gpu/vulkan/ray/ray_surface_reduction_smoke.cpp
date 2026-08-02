@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <span>
 #include <vector>
 
@@ -131,6 +132,67 @@ int main() {
   if (flags != expectedFlags || offsets != expectedOffsets)
     return 1;
   if (std::bit_cast<std::uint32_t>(expectedWeight[2]) != 0x80000000U)
+    return 1;
+
+  // Strict-FP32 regression: accumulating two finite FLT_MAX records on the
+  // same surface overflows to +Inf. The reducer must expose that device-side
+  // failure and leave the caller's output sentinels untouched.
+  const std::array<RayRecord, 2U> overflowRecords{{
+      {0U, 9U, std::bit_cast<std::uint32_t>(std::numeric_limits<float>::max()),
+       0U},
+      {1U, 9U, std::bit_cast<std::uint32_t>(std::numeric_limits<float>::max()),
+       0U},
+  }};
+  const std::vector<std::uint32_t> overflowRayIds{0U, 1U};
+  const std::vector<std::uint32_t> overflowSurfaceIds{9U, 9U};
+  const std::vector<float> overflowWeights{
+      std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
+  std::array<std::uint32_t, 2U> overflowCpuSurface{0xcafebabeU,
+                                                   0xcafebabeU};
+  std::array<float, 2U> overflowCpuWeight{
+      std::bit_cast<float>(0x13579bdfU), std::bit_cast<float>(0x13579bdfU)};
+  RayReduction overflowCpu{overflowCpuSurface, overflowCpuWeight, 71U};
+  if (reduceCpu({overflowRayIds, overflowSurfaceIds, overflowWeights, {}},
+                10U, overflowCpu, error))
+    return 1;
+  if (overflowCpu.count != 71U ||
+      overflowCpuSurface[0] != 0xcafebabeU ||
+      std::bit_cast<std::uint32_t>(overflowCpuWeight[0]) != 0x13579bdfU)
+    return 1;
+  constexpr std::uint32_t overflowCount = 2U;
+  DeviceBuffer overflowInput, overflowCountBuffer, overflowSurface,
+      overflowWeight;
+  if (!overflowInput.create(session, sizeof(overflowRecords), error) ||
+      !overflowCountBuffer.create(session, sizeof(overflowCount), error) ||
+      !overflowSurface.create(session, 2U * sizeof(std::uint32_t), error) ||
+      !overflowWeight.create(session, 2U * sizeof(float), error) ||
+      !overflowInput.upload(session, overflowRecords.data(),
+                            sizeof(overflowRecords), 0U, error) ||
+      !overflowCountBuffer.upload(session, &overflowCount, sizeof(overflowCount),
+                                  0U, error))
+    return 1;
+  constexpr std::array<std::uint32_t, 2U> overflowSurfaceSentinel{
+      0xcafebabeU, 0xcafebabeU};
+  constexpr std::array<std::uint32_t, 2U> overflowWeightSentinel{
+      0x13579bdfU, 0x13579bdfU};
+  if (!overflowSurface.upload(session, overflowSurfaceSentinel.data(),
+                              sizeof(overflowSurfaceSentinel), 0U, error) ||
+      !overflowWeight.upload(session, overflowWeightSentinel.data(),
+                             sizeof(overflowWeightSentinel), 0U, error))
+    return 1;
+  DeviceRaySurfaceReductionOutput overflowReduction;
+  if (reducer.reduce(overflowInput, overflowCountBuffer, overflowCount,
+                     overflowSurface, overflowWeight, overflowCount,
+                     overflowReduction, error))
+    return 1;
+  std::array<std::uint32_t, 2U> overflowSurfaceAfter{};
+  std::array<std::uint32_t, 2U> overflowWeightAfter{};
+  if (!overflowSurface.download(session, overflowSurfaceAfter.data(),
+                                sizeof(overflowSurfaceAfter), 0U, error) ||
+      !overflowWeight.download(session, overflowWeightAfter.data(),
+                               sizeof(overflowWeightAfter), 0U, error) ||
+      overflowSurfaceAfter != overflowSurfaceSentinel ||
+      overflowWeightAfter != overflowWeightSentinel)
     return 1;
 
   std::string rejected;

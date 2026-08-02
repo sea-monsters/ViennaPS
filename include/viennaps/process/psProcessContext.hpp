@@ -3,6 +3,7 @@
 #include "../psDomain.hpp"
 #include "psProcessModel.hpp"
 #include "psProcessParams.hpp"
+#include "psCoverageDeltaExecutor.hpp"
 #include "psSurfaceDiffusionExecutor.hpp"
 #include "psTranslationField.hpp"
 
@@ -29,6 +30,8 @@ VIENNAPS_TEMPLATE_ND(NumericType, D) struct ProcessContext {
       typename viennals::Advect<NumericType, D>::LevelSetRebuildExecutor;
   using SurfaceDiffusionExecutor =
       viennaps::SurfaceDiffusionExecutor<NumericType>;
+  using CoverageDeltaExecutor =
+      viennaps::CoverageDeltaExecutor<NumericType>;
 
   // Core components
   SmartPointer<Domain<NumericType, D>> domain;
@@ -48,6 +51,7 @@ VIENNAPS_TEMPLATE_ND(NumericType, D) struct ProcessContext {
   LevelSetUpdateExecutor levelSetUpdateExecutor;
   LevelSetRebuildExecutor levelSetRebuildExecutor;
   SurfaceDiffusionExecutor surfaceDiffusionExecutor;
+  CoverageDeltaExecutor coverageDeltaExecutor;
   LevelSetUpdateFailurePolicy levelSetUpdateFailurePolicy =
       LevelSetUpdateFailurePolicy::FALLBACK;
   std::string intermediateOutputPath = "";

@@ -122,6 +122,10 @@ private:
   }
 
   ProcessResult setupProcess(ProcessContext<NumericType, D> &context) {
+    // Rebind on every setup, including an empty callback, so a reused
+    // strategy cannot retain an executor from an earlier Process run.
+    coverageManager_.setCoverageDeltaExecutor(context.coverageDeltaExecutor);
+
     // Initialize disk mesh generator
     context.diskMesh = viennals::Mesh<NumericType>::New();
     meshGenerator_.clearLevelSets();

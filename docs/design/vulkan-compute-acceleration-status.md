@@ -2613,6 +2613,27 @@ callback fail closed.
 | Root manager integration | Not run for COV2: the actual bridge installation into CoverageManager remains a residual gate for the next deployment-profile phase. The CPU-only CoverageManager seam has already passed its separate root Debug acceptance. |
 | Scope boundary | Only the COV2 bridge files, surface CMake wiring, and this status entry changed; no public Vulkan header, shader/primitive, Process/ProcessContext, policy, or CPM logic changed. |
 
+### P5-COV3: Process-to-CoverageManager executor binding
+
+- Status: implemented as an explicit Process callback binding; no automatic
+  deployment profile or backend selection is enabled
+- Date: 2026-08-03
+
+`ProcessContext` now carries the existing type-erased
+`CoverageDeltaExecutor<NumericType>`, and `Process` provides set/get/clear
+methods for both float and double. Every `FluxProcessStrategy::setupProcess`
+call rebinds the current context callback into its `CoverageManager`, including
+an empty callback, so reusing a strategy cannot retain an executor from a
+previous run. The manager's existing CPU metric, partial-write rejection, and
+exception fallback remain authoritative.
+
+| Gate | Result |
+|---|---|
+| API contract | Process and Context expose only the generic coverage executor; no Vulkan/CUDA or deployment types were added. |
+| Normal setup reachability | The focused test uses a CPU `NeutralTransport` model and the public `FluxProcessStrategy::calculateFlux` setup path with the Process callback copied into Context, then clears and reruns the same strategy to verify no stale callback remains. |
+| Root CPU acceptance | Independent Ninja root build with a temporary patched ViennaLS source/cache override: focused `coverageDeltaExecutor` CTest passed 1/1 in 0.11 s. The Visual Studio generator remains host-blocked by duplicate `PATH`/`Path` environment keys (`MSB6001`), but this did not affect the Ninja acceptance. |
+| Scope boundary | Only ProcessContext, Process, Flux strategy, the existing coverage executor test, and this status entry changed; Vulkan/CUDA, CPM, deployment policy, surface diffusion, and Level Set code remain untouched. |
+
 ### P5-B2A: Surface-diffusion executor seam
 
 - Status: accepted locally as an explicit Process executor seam; no Vulkan

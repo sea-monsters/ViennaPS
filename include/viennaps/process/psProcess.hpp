@@ -52,6 +52,8 @@ public:
       typename ProcessContext<NumericType, D>::LevelSetRebuildExecutor;
   using SurfaceDiffusionExecutor =
       typename ProcessContext<NumericType, D>::SurfaceDiffusionExecutor;
+  using CoverageDeltaExecutor =
+      typename ProcessContext<NumericType, D>::CoverageDeltaExecutor;
   using SurfaceDiffusionStatusExecutor =
       viennaps::SurfaceDiffusionStatusExecutor<NumericType>;
   using LevelSetUpdateFailurePolicy = viennaps::LevelSetUpdateFailurePolicy;
@@ -172,6 +174,16 @@ public:
   void clearSurfaceDiffusionExecutor() {
     context_.surfaceDiffusionExecutor = {};
   }
+
+  void setCoverageDeltaExecutor(CoverageDeltaExecutor executor) {
+    context_.coverageDeltaExecutor = std::move(executor);
+  }
+
+  [[nodiscard]] CoverageDeltaExecutor getCoverageDeltaExecutor() const {
+    return context_.coverageDeltaExecutor;
+  }
+
+  void clearCoverageDeltaExecutor() { context_.coverageDeltaExecutor = {}; }
 
   [[nodiscard]] ProcessResult getLastProcessResult() const {
     return lastProcessResult_;

@@ -1694,6 +1694,11 @@ publish a result.
 | Build and test | the local ray-only Intel Arc smoke prints `triangle hit Vulkan dispatch PASS`; the focused CTest passes 1/1 |
 | Scope boundary | this is a bounded O(rays times triangles) primitive only; no BVH, ray generation/reflection, particle sampling, surface-flux routing, or process selection is accelerated |
 
+Post-acceptance correction: the host-side result guard now compares a hit's
+`t` against packed `tMin` (`origin.w`), rather than `origin.x`. The smoke adds
+a translated triangle/ray where `origin.x > t`, proving the valid GPU result
+is retained and remains bit-exact against the CPU oracle.
+
 ### P5-E feasibility gate: neutral-transport coverage reaction remains CPU
 
 - Status: FP32 Vulkan implementation declined; a separate FP64 capability-gated

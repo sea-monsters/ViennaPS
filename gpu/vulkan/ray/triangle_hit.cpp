@@ -495,9 +495,10 @@ bool TriangleHitPrimitive::intersect(
       continue;
     }
     if (hit.triangleIndex >= triangleCount || !strictFp32(hit.t) ||
-        !strictFp32(hit.u) || !strictFp32(hit.v) || hit.t < origins[4U * i] ||
-        hit.t > directions[4U * i + 3U] || hit.u < 0.0F || hit.u > 1.0F ||
-        hit.v < 0.0F || hit.v > 1.0F || hit.u + hit.v > 1.0F) {
+        !strictFp32(hit.u) || !strictFp32(hit.v) ||
+        hit.t < origins[4U * i + 3U] || hit.t > directions[4U * i + 3U] ||
+        hit.u < 0.0F || hit.u > 1.0F || hit.v < 0.0F || hit.v > 1.0F ||
+        hit.u + hit.v > 1.0F) {
       return invalid(error, "shader produced an invalid triangle hit");
     }
   }

@@ -167,6 +167,51 @@ int main() {
   assert(gpuHits[1].t == tailSentinel.t &&
          gpuHits[1].triangleIndex == tailSentinel.triangleIndex &&
          gpuHits[2].t == tailSentinel.t);
+
+  // The packed origin's fourth component is tMin, not its x coordinate.
+  const std::vector<Ray> translatedRays{
+      {{{2.25F, 2.25F, 1.0F}}, {{0.0F, 0.0F, -1.0F}}, 0.0F, 10.0F}};
+  const std::vector<Triangle> translatedTriangles{
+      {{{2.0F, 2.0F, 0.0F}}, {{3.0F, 2.0F, 0.0F}}, {{2.0F, 3.0F, 0.0F}}}};
+  const std::array<std::array<float, 4>, 1U> translatedOrigins{{
+      {2.25F, 2.25F, 1.0F, 0.0F},
+  }};
+  const std::array<std::array<float, 4>, 1U> translatedDirections{{
+      {0.0F, 0.0F, -1.0F, 10.0F},
+  }};
+  const std::array<std::array<float, 4>, 3U> translatedVertices{{
+      {2.0F, 2.0F, 0.0F, 0.0F},
+      {3.0F, 2.0F, 0.0F, 0.0F},
+      {2.0F, 3.0F, 0.0F, 0.0F},
+  }};
+  assert(originBuffer.write(translatedOrigins.data(), sizeof(translatedOrigins),
+                            0U, error));
+  assert(directionBuffer.write(translatedDirections.data(),
+                               sizeof(translatedDirections), 0U, error));
+  assert(triangleBuffer.write(translatedVertices.data(),
+                              sizeof(translatedVertices), 0U, error));
+  assert(primitive.intersect(originBuffer, directionBuffer, triangleBuffer,
+                             translatedRays.size(), translatedTriangles.size(),
+                             hitBuffer, 3U, error));
+  std::vector<TriangleHit> translatedCpu(1U, TriangleHit::miss());
+  assert(viennaps::vulkan::ray::intersectCpu(
+      translatedRays, translatedTriangles, translatedCpu, error));
+  assert(hitBuffer.read(gpuHits.data(), gpuHits.size() * sizeof(TriangleHit),
+                        0U, error));
+  assert(gpuHits[0].triangleIndex == translatedCpu[0].triangleIndex &&
+         exact(gpuHits[0].t, translatedCpu[0].t) &&
+         exact(gpuHits[0].u, translatedCpu[0].u) &&
+         exact(gpuHits[0].v, translatedCpu[0].v));
+  assert(originBuffer.write(packedOrigins.data(),
+                            packedOrigins.size() * sizeof(packedOrigins[0]), 0U,
+                            error));
+  assert(directionBuffer.write(
+      packedDirections.data(),
+      packedDirections.size() * sizeof(packedDirections[0]), 0U, error));
+  assert(triangleBuffer.write(
+      packedTriangles.data(),
+      packedTriangles.size() * sizeof(packedTriangles[0]), 0U, error));
+
   viennaps::vulkan::runtime::HostVisibleBuffer missOriginBuffer;
   viennaps::vulkan::runtime::HostVisibleBuffer missDirectionBuffer;
   assert(primitive.createRayBuffer(misses.size(), missOriginBuffer,

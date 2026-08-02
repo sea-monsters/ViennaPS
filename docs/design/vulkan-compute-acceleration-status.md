@@ -1230,15 +1230,48 @@ append K as the N+1 tail offset, and compare them exactly with the CPU oracle.
 | Residual boundary | action-flags shader, 16-byte stable scatter, device classification output, and final readback remain pending |
 | Path policy | no SDK, dependency, source checkout, or build-cache path is tracked |
 
+## P4C3-device-classification: resident HRLE decisions
+
+- Status: accepted locally
+- Date: 2026-08-02
+- Scope: retain HRLE rebuild decisions and shader status in device-local
+  buffers for the following compaction stages
+
+The Vulkan classifier now has a move-only device-result API carrying the
+decision and status buffers, candidate count, and owning compute-session
+generation. Centers and neighbors are uploaded through generation-aware
+`DeviceBuffer` staging, while classification output remains on the selected
+device after a synchronously completed dispatch. The existing host API is a
+compatibility wrapper that materializes the device result only when requested.
+
+The device path validates the 32-bit candidate count, fixed shader workgroup
+size, dispatch and storage-buffer limits, descriptor and push-constant
+capacity, and all host-side input invariants before publishing a result. Empty
+input returns an empty result without allocation or dispatch. Materialization
+rejects foreign or stale sessions and undersized buffers, checks shader status,
+action range, and finite values, and preserves the caller's output on failure.
+
+| Gate | Result |
+|---|---|
+| Exact geometry oracle | the 2D sphere produces 183 candidates and 68 defined decisions, bit-exact with CPU |
+| Device residency | decisions and status remain device-local until explicit materialization |
+| Session isolation | a different compute-session generation is rejected and preserves the output sentinel |
+| Empty stream | N=0 performs no allocation or dispatch and returns invalid empty buffers |
+| Compatibility | the legacy host classifier is implemented through device classification plus materialization |
+| No-SDK behavior | the three CPU HRLE classification, compaction, and reconstruction contracts pass |
+| Residual boundary | device action flags, scan/count, stable scatter, and final compaction materialization are not yet integrated |
+| Path policy | no SDK, dependency, source checkout, or build-cache path is tracked |
+
 ## Next slice
 
-Remove the classification-to-compaction host round trip with device-resident
-intermediate buffers, then feed the validated final readback into the P4C2 CPU
-insertion oracle. Wire the complete path into the ViennaLS executor and
-deployment-time primitive suite only after those gates pass. Direct
-negative/non-finite time injection also remains a defensive-branch coverage
-gap. The optional VTK-enabled install/export conflict should be isolated from
-the compute backend before packaging validation.
+Connect the resident decisions to the action-flags shader, exclusive scan and
+selected count, then perform the stable 16-byte scatter and one terminal
+materialization. Feed that validated result into the P4C2 CPU insertion oracle.
+Wire the complete path into the ViennaLS executor and deployment-time primitive
+suite only after those gates pass. Direct negative/non-finite time injection
+also remains a defensive-branch coverage gap. The optional VTK-enabled
+install/export conflict should be isolated from the compute backend before
+packaging validation.
 
 After those production-seam gates, the Level Set work advances to HRLE
 sparse rebuild integration, followed by particle/ray and surface/oxidation

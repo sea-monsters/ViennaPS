@@ -10,6 +10,7 @@
 #include <limits>
 #include <span>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace {
@@ -20,11 +21,6 @@ namespace runtime = viennaps::vulkan::runtime;
 constexpr std::uint32_t kLocalSize = 256U;
 constexpr std::uint32_t kBindingCount = 4U;
 constexpr std::size_t kNeighborSlots = 6U;
-constexpr VkBufferUsageFlags kBufferUsage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                            VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                                            VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-constexpr VkMemoryPropertyFlags kMemoryProperties =
-    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
 
 struct alignas(16) GpuCenter {
   float value;
@@ -91,23 +87,6 @@ static_assert(sizeof(PushConstants) == 16U);
   return true;
 }
 
-template <class T>
-[[nodiscard]] bool createAndWrite(runtime::VulkanDevice &device,
-                                  runtime::HostVisibleBuffer &buffer,
-                                  const std::span<const T> values,
-                                  std::string &error) {
-  const std::size_t allocatedCount = std::max<std::size_t>(values.size(), 1U);
-  if (allocatedCount > std::numeric_limits<std::size_t>::max() / sizeof(T))
-    return fail(error, "buffer", "allocation size overflow");
-  const VkDeviceSize bytes = allocatedCount * sizeof(T);
-  if (!buffer.create(device, bytes, kBufferUsage, kMemoryProperties, error) ||
-      !buffer.map(error)) {
-    return false;
-  }
-  return values.empty() ||
-         buffer.write(values.data(), values.size_bytes(), 0U, error);
-}
-
 [[nodiscard]] VkDescriptorSetLayoutBinding
 makeBinding(const std::uint32_t binding) {
   VkDescriptorSetLayoutBinding result{};
@@ -133,13 +112,12 @@ makeBinding(const std::uint32_t binding) {
 
 namespace viennaps::vulkan::levelset {
 
-bool classifyHrleRebuildFp32(
+bool classifyHrleRebuildFp32Device(
     runtime::ComputeSession &session, const runtime::SpirvProgram &program,
     const std::span<const viennaps::levelset::HrleRebuildCandidateFp32>
         candidates,
     const std::uint32_t dimensions, const float cutoff,
-    std::vector<viennaps::levelset::HrleRebuildDecisionFp32> &output,
-    std::string &error) {
+    HrleRebuildClassificationDeviceFp32 &output, std::string &error) {
   error.clear();
   if (!validateInput(candidates, dimensions, cutoff, error))
     return false;
@@ -148,19 +126,37 @@ bool classifyHrleRebuildFp32(
   if (program.words.empty())
     return fail(error, "shader", "SPIR-V program is empty");
   if (candidates.empty()) {
-    output.clear();
+    HrleRebuildClassificationDeviceFp32 empty{};
+    empty.sessionGeneration = session.generation();
+    output = std::move(empty);
     return true;
   }
+  if (candidates.size() > std::numeric_limits<std::uint32_t>::max())
+    return fail(error, "dispatch", "candidate count exceeds uint32");
 
   const std::uint64_t groupCount =
       (static_cast<std::uint64_t>(candidates.size()) + kLocalSize - 1U) /
       kLocalSize;
   const auto &limits = session.selection().properties.limits;
+  if (limits.maxComputeWorkGroupInvocations < kLocalSize ||
+      limits.maxComputeWorkGroupSize[0] < kLocalSize) {
+    return fail(error, "dispatch",
+                "device does not support the shader workgroup size");
+  }
   if (groupCount > limits.maxComputeWorkGroupCount[0])
     return fail(error, "dispatch", "workgroup count exceeds device limit");
   if (candidates.size() >
       std::numeric_limits<std::size_t>::max() / kNeighborSlots) {
     return fail(error, "dispatch", "neighbor count overflows size_t");
+  }
+  if (candidates.size() >
+          std::numeric_limits<std::size_t>::max() / sizeof(GpuCenter) ||
+      candidates.size() * kNeighborSlots >
+          std::numeric_limits<std::size_t>::max() / sizeof(GpuNeighbor) ||
+      candidates.size() >
+          std::numeric_limits<std::size_t>::max() / sizeof(GpuDecision)) {
+    return fail(error, "dispatch",
+                "classification buffer size overflows size_t");
   }
 
   std::vector<GpuCenter> centers(candidates.size());
@@ -176,13 +172,12 @@ bool classifyHrleRebuildFp32(
           candidate.neighborPointIds[neighbor], 0U};
     }
   }
-  std::vector<GpuDecision> decisions(candidates.size());
   const std::uint32_t initialStatus = 0U;
 
   const std::array<std::uint64_t, kBindingCount> bindingBytes = {
       centers.size() * sizeof(GpuCenter),
       neighbors.size() * sizeof(GpuNeighbor),
-      decisions.size() * sizeof(GpuDecision), sizeof(initialStatus)};
+      candidates.size() * sizeof(GpuDecision), sizeof(initialStatus)};
   for (const auto bytes : bindingBytes) {
     if (bytes > limits.maxStorageBufferRange)
       return fail(error, "dispatch", "storage buffer exceeds device limit");
@@ -193,20 +188,30 @@ bool classifyHrleRebuildFp32(
                 "device descriptor or push-constant limits are insufficient");
   }
 
-  auto &device = session.device();
-  std::array<runtime::HostVisibleBuffer, kBindingCount> buffers{};
-  if (!createAndWrite(device, buffers[0], std::span<const GpuCenter>(centers),
-                      error) ||
-      !createAndWrite(device, buffers[1],
-                      std::span<const GpuNeighbor>(neighbors), error) ||
-      !createAndWrite(device, buffers[2],
-                      std::span<const GpuDecision>(decisions), error) ||
-      !createAndWrite(device, buffers[3],
-                      std::span<const std::uint32_t>(&initialStatus, 1U),
-                      error)) {
+  std::array<runtime::DeviceBuffer, kBindingCount> buffers{};
+  const auto createAndUpload = [&](auto &buffer, const auto &values) {
+    using Value = typename std::decay_t<decltype(values)>::value_type;
+    if (values.size() > std::numeric_limits<std::size_t>::max() / sizeof(Value))
+      return fail(error, "buffer", "allocation size overflow");
+    const VkDeviceSize bytes =
+        static_cast<VkDeviceSize>(std::max<std::size_t>(1U, values.size()) *
+                                  sizeof(Value));
+    if (!buffer.create(session, bytes, error))
+      return false;
+    return values.empty() ||
+           buffer.upload(
+               session, values.data(),
+               static_cast<VkDeviceSize>(values.size() * sizeof(Value)), 0U,
+               error);
+  };
+  if (!createAndUpload(buffers[0], centers) ||
+      !createAndUpload(buffers[1], neighbors) ||
+      !buffers[2].create(session, bindingBytes[2], error) ||
+      !createAndUpload(buffers[3],
+                       std::array<std::uint32_t, 1U>{initialStatus}))
     return false;
-  }
 
+  auto &device = session.device();
   runtime::ShaderModule shader{};
   if (!shader.create(device, program, error))
     return false;
@@ -239,7 +244,7 @@ bool classifyHrleRebuildFp32(
   std::array<VkWriteDescriptorSet, kBindingCount> descriptorWrites{};
   for (std::uint32_t binding = 0U; binding < kBindingCount; ++binding) {
     bufferInfos[binding] = {buffers[binding].handle(), 0U,
-                            bindingBytes[binding]};
+                            std::max<VkDeviceSize>(1U, bindingBytes[binding])};
     descriptorWrites[binding].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     descriptorWrites[binding].dstSet = descriptorSet;
     descriptorWrites[binding].dstBinding = binding;
@@ -275,16 +280,16 @@ bool classifyHrleRebuildFp32(
   for (std::uint32_t binding = 0U; binding < kBindingCount; ++binding) {
     auto &barrier = preBarriers[binding];
     barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-    barrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+    barrier.srcAccessMask = binding == 2U ? 0U : VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.dstAccessMask =
         VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.buffer = buffers[binding].handle();
     barrier.offset = 0U;
-    barrier.size = bindingBytes[binding];
+    barrier.size = std::max<VkDeviceSize>(1U, bindingBytes[binding]);
   }
-  vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_HOST_BIT,
+  vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 0U, nullptr,
                        kBindingCount, preBarriers.data(), 0U, nullptr);
   vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -306,15 +311,16 @@ bool classifyHrleRebuildFp32(
     auto &barrier = postBarriers[index];
     barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
     barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT |
+                            VK_ACCESS_SHADER_WRITE_BIT;
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.buffer = buffers[binding].handle();
     barrier.offset = 0U;
-    barrier.size = bindingBytes[binding];
+    barrier.size = std::max<VkDeviceSize>(1U, bindingBytes[binding]);
   }
   vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                       VK_PIPELINE_STAGE_HOST_BIT, 0U, 0U, nullptr,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 0U, nullptr,
                        static_cast<std::uint32_t>(postBarriers.size()),
                        postBarriers.data(), 0U, nullptr);
   if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
@@ -336,37 +342,88 @@ bool classifyHrleRebuildFp32(
     freeCommandBuffer();
     return fail(error, "dispatch", "vkQueueSubmit failed");
   }
-  if (!fence.wait(10'000'000'000ULL, error)) {
-    vkQueueWaitIdle(device.computeQueue());
+  if (!fence.wait(std::numeric_limits<std::uint64_t>::max(), error)) {
     freeCommandBuffer();
     return false;
   }
   freeCommandBuffer();
+  HrleRebuildClassificationDeviceFp32 candidateOutput{};
+  candidateOutput.decisions = std::move(buffers[2]);
+  candidateOutput.status = std::move(buffers[3]);
+  candidateOutput.candidateCount =
+      static_cast<std::uint32_t>(candidates.size());
+  candidateOutput.sessionGeneration = session.generation();
+  output = std::move(candidateOutput);
+  return true;
+}
+
+bool materializeHrleRebuildFp32Device(
+    runtime::ComputeSession &session,
+    const HrleRebuildClassificationDeviceFp32 &deviceOutput,
+    std::vector<viennaps::levelset::HrleRebuildDecisionFp32> &output,
+    std::string &error) {
+  error.clear();
+  if (!session.isValid())
+    return fail(error, "session", "compute session is not initialized");
+  if (deviceOutput.sessionGeneration != session.generation()) {
+    return fail(error, "session",
+                "device result belongs to a different session generation");
+  }
+  if (deviceOutput.candidateCount == 0U) {
+    output.clear();
+    return true;
+  }
+  const std::size_t count = deviceOutput.candidateCount;
+  if (!deviceOutput.decisions.isValid() || !deviceOutput.status.isValid() ||
+      deviceOutput.decisions.ownerDevice() != session.deviceHandle() ||
+      deviceOutput.status.ownerDevice() != session.deviceHandle() ||
+      deviceOutput.decisions.ownerSessionGeneration() != session.generation() ||
+      deviceOutput.status.ownerSessionGeneration() != session.generation())
+    return fail(error, "validation",
+                "device result buffers are invalid or stale");
+  if (count > std::numeric_limits<std::size_t>::max() / sizeof(GpuDecision) ||
+      deviceOutput.decisions.size() < count * sizeof(GpuDecision) ||
+      deviceOutput.status.size() < sizeof(std::uint32_t))
+    return fail(error, "validation", "device result buffers are undersized");
 
   std::uint32_t status = 0U;
-  if (!buffers[3].read(&status, sizeof(status), 0U, error))
+  if (!deviceOutput.status.download(session, &status, sizeof(status), 0U,
+                                    error))
     return false;
   if (status != 0U)
     return fail(error, "shader", statusMessage(status));
-  if (!buffers[2].read(decisions.data(), decisions.size() * sizeof(GpuDecision),
-                       0U, error)) {
+  std::vector<GpuDecision> decisions(count);
+  if (!deviceOutput.decisions.download(session, decisions.data(),
+                                       decisions.size() * sizeof(GpuDecision),
+                                       0U, error))
     return false;
-  }
-
   std::vector<viennaps::levelset::HrleRebuildDecisionFp32> candidateOutput;
-  candidateOutput.reserve(decisions.size());
+  candidateOutput.reserve(count);
   for (const auto &decision : decisions) {
     if (decision.action > static_cast<std::uint32_t>(
                               viennaps::levelset::HrleRebuildAction::DEFINED) ||
-        !std::isfinite(decision.value)) {
+        !std::isfinite(decision.value))
       return fail(error, "output", "shader returned an invalid decision");
-    }
     candidateOutput.push_back(
         {decision.value, decision.sourcePointId,
          static_cast<viennaps::levelset::HrleRebuildAction>(decision.action)});
   }
   output = std::move(candidateOutput);
   return true;
+}
+
+bool classifyHrleRebuildFp32(
+    runtime::ComputeSession &session, const runtime::SpirvProgram &program,
+    const std::span<const viennaps::levelset::HrleRebuildCandidateFp32>
+        candidates,
+    const std::uint32_t dimensions, const float cutoff,
+    std::vector<viennaps::levelset::HrleRebuildDecisionFp32> &output,
+    std::string &error) {
+  HrleRebuildClassificationDeviceFp32 deviceOutput{};
+  if (!classifyHrleRebuildFp32Device(session, program, candidates, dimensions,
+                                     cutoff, deviceOutput, error))
+    return false;
+  return materializeHrleRebuildFp32Device(session, deviceOutput, output, error);
 }
 
 } // namespace viennaps::vulkan::levelset

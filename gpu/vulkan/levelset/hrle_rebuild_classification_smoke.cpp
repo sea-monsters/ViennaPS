@@ -137,6 +137,30 @@ int main() try {
   for (std::size_t index = 0U; index < cpu.size(); ++index)
     VC_TEST_ASSERT(equalBits(vulkan[index], cpu[index]));
 
+  vkLevelSet::HrleRebuildClassificationDeviceFp32 deviceOutput;
+  VC_TEST_ASSERT(vkLevelSet::classifyHrleRebuildFp32Device(
+      session, program, candidates, 2U, 1.0F, deviceOutput, error));
+  VC_TEST_ASSERT(error.empty());
+  VC_TEST_ASSERT(deviceOutput.candidateCount == candidates.size());
+  VC_TEST_ASSERT(deviceOutput.sessionGeneration == session.generation());
+  VC_TEST_ASSERT(deviceOutput.decisions.isValid());
+  VC_TEST_ASSERT(deviceOutput.status.isValid());
+  std::vector<Decision> materialized;
+  VC_TEST_ASSERT(vkLevelSet::materializeHrleRebuildFp32Device(
+      session, deviceOutput, materialized, error));
+  VC_TEST_ASSERT(error.empty());
+  VC_TEST_ASSERT(materialized.size() == cpu.size());
+  for (std::size_t index = 0U; index < cpu.size(); ++index)
+    VC_TEST_ASSERT(equalBits(materialized[index], cpu[index]));
+
+  runtime::ComputeSession otherSession;
+  VC_TEST_ASSERT(otherSession.initialize(error));
+  auto preservedMaterialized = materialized;
+  VC_TEST_ASSERT(!vkLevelSet::materializeHrleRebuildFp32Device(
+      otherSession, deviceOutput, preservedMaterialized, error));
+  VC_TEST_ASSERT(preservedMaterialized == materialized);
+  otherSession.reset();
+
   const auto definedCount = static_cast<std::size_t>(
       std::count_if(cpu.begin(), cpu.end(), [](const Decision &decision) {
         return decision.action == classification::HrleRebuildAction::DEFINED;
@@ -148,6 +172,13 @@ int main() try {
   VC_TEST_ASSERT(vkLevelSet::classifyHrleRebuildFp32(session, program, {}, 2U,
                                                      1.0F, emptyOutput, error));
   VC_TEST_ASSERT(emptyOutput.empty());
+
+  vkLevelSet::HrleRebuildClassificationDeviceFp32 emptyDeviceOutput;
+  VC_TEST_ASSERT(vkLevelSet::classifyHrleRebuildFp32Device(
+      session, program, {}, 2U, 1.0F, emptyDeviceOutput, error));
+  VC_TEST_ASSERT(emptyDeviceOutput.candidateCount == 0U);
+  VC_TEST_ASSERT(!emptyDeviceOutput.decisions.isValid());
+  VC_TEST_ASSERT(!emptyDeviceOutput.status.isValid());
 
   Decision sentinelDecision{};
   sentinelDecision.value = 17.0F;

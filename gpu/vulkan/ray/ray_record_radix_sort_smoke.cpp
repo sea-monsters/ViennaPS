@@ -9,7 +9,9 @@
 #include <bit>
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 #include <iostream>
+#include <limits>
 #include <span>
 #include <vector>
 
@@ -41,7 +43,46 @@ using namespace viennaps::vulkan::ray;
 using viennaps::vulkan::runtime::ComputeSession;
 using viennaps::vulkan::runtime::DeviceBuffer;
 
+namespace {
+bool verifyRecursiveHierarchyPlan() {
+  struct HierarchyCase {
+    std::uint32_t groups;
+    std::initializer_list<std::uint32_t> expectedLevels;
+  };
+  const std::initializer_list<HierarchyCase> cases{
+      {1U, {1U}},
+      {64U, {1U}},
+      {257U, {2U}},
+      {65'536U, {256U}},
+      {65'537U, {257U, 2U}},
+      {1'000'000U, {3'907U, 16U}},
+      {static_cast<std::uint32_t>(
+           (std::numeric_limits<std::uint32_t>::max() + 63ULL) / 64ULL),
+       {262'144U, 1'024U, 4U}},
+  };
+  const auto ceil256 = [](std::uint32_t value) {
+    return value / 256U + static_cast<std::uint32_t>(value % 256U != 0U);
+  };
+  for (const auto &test : cases) {
+    std::vector<std::uint32_t> actual;
+    for (auto level = ceil256(test.groups);; level = ceil256(level)) {
+      actual.push_back(level);
+      if (level <= 256U)
+        break;
+    }
+    if (actual.size() != test.expectedLevels.size() ||
+        !std::equal(actual.begin(), actual.end(), test.expectedLevels.begin()))
+      return false;
+  }
+  return true;
+}
+} // namespace
+
 int main() {
+  if (!verifyRecursiveHierarchyPlan()) {
+    std::cerr << "recursive radix hierarchy plan mismatch\n";
+    return 1;
+  }
   std::string error;
   ComputeSession session;
   DeviceTriangleHitPrimitive hit;
@@ -218,18 +259,28 @@ int main() {
       return 1;
     }
   std::string rejected;
-  constexpr std::size_t hierarchyOverflowCapacity = 4'194'305U;
   if (sorter.sort(sorted, permutationCountBuffer, permutation.size(), sorted,
                   sentinel.size(), rejected) ||
       sorter.sort(permutationRecords, permutationCountBuffer,
                   permutation.size(), sorted, permutation.size() - 1U,
                   rejected) ||
-      sorter.sort(permutationRecords, permutationCountBuffer,
-                  hierarchyOverflowCapacity, sorted, hierarchyOverflowCapacity,
-                  rejected) ||
       !sorter.sort(permutationRecords, permutationCountBuffer, 0U, sorted, 0U,
                    rejected))
     return 1;
+  constexpr std::size_t maxInputGroups =
+      (std::numeric_limits<std::uint32_t>::max() + 63ULL) / 64ULL;
+  const auto deviceGroupLimit =
+      session.device()
+          .selection()
+          .properties.limits.maxComputeWorkGroupCount[0];
+  if (deviceGroupLimit < maxInputGroups) {
+    const auto rejectedGroups = static_cast<std::size_t>(deviceGroupLimit) + 1U;
+    const auto rejectedCapacity = (rejectedGroups - 1U) * 64U + 1U;
+    if (sorter.sort(permutationRecords, permutationCountBuffer,
+                    rejectedCapacity, sorted, rejectedCapacity, rejected) ||
+        rejected != "ray-record radix dispatch exceeds device workgroup limit")
+      return 1;
+  }
   ComputeSession foreign;
   DeviceBuffer foreignRecords;
   if (!foreign.initialize(error) ||

@@ -5,9 +5,13 @@
 #include <array>
 #include <limits>
 #include <span>
+#include <vector>
 
 namespace viennaps::vulkan::ray {
 namespace {
+constexpr std::uint32_t kPrefixWorkgroupSize = 256U;
+constexpr std::uint32_t kRadixDigitCount = 16U;
+
 bool fail(std::string &error, const char *message) {
   error = message;
   return false;
@@ -17,6 +21,10 @@ bool bytesFor(std::size_t count, std::size_t size, std::size_t &bytes) {
     return false;
   bytes = count * size;
   return true;
+}
+std::size_t ceilDivide(std::size_t dividend, std::size_t divisor) {
+  return dividend / divisor +
+         static_cast<std::size_t>(dividend % divisor != 0U);
 }
 } // namespace
 
@@ -120,6 +128,9 @@ void DeviceRayRecordRadixSort::reset() {
   descriptorSets_.fill(VK_NULL_HANDLE);
   scratchCapacity_ = 0U;
   scratchGroups_ = 0U;
+  scratchRecordBytes_ = 0U;
+  histogramBytes_ = 0U;
+  hierarchyBytes_ = 0U;
   session_ = nullptr;
   if (ownsSession)
     ownedSession_.reset();
@@ -162,12 +173,33 @@ bool DeviceRayRecordRadixSort::ensureScratch(std::size_t capacity,
   blockSums_.reset();
   blockOffsets_.reset();
   std::size_t recordBytes{}, histBytes{}, blockBytes{};
-  const std::size_t tiles = (static_cast<std::size_t>(groups) + 255U) / 256U;
+  const std::size_t tiles =
+      ceilDivide(static_cast<std::size_t>(groups), kPrefixWorkgroupSize);
+  std::size_t hierarchyEntries = 0U;
+  for (std::size_t level = tiles;;
+       level = ceilDivide(level, kPrefixWorkgroupSize)) {
+    if (hierarchyEntries > std::numeric_limits<std::size_t>::max() - level)
+      return fail(error, "ray-record radix hierarchy size overflows");
+    hierarchyEntries += level;
+    if (level <= kPrefixWorkgroupSize)
+      break;
+  }
   if (!bytesFor(capacity, sizeof(RayRecord), recordBytes) ||
-      !bytesFor(static_cast<std::size_t>(groups) * 16U, sizeof(std::uint32_t),
-                histBytes) ||
-      !bytesFor(tiles * 16U, sizeof(std::uint32_t), blockBytes))
+      !bytesFor(static_cast<std::size_t>(groups),
+                kRadixDigitCount * sizeof(std::uint32_t), histBytes) ||
+      !bytesFor(hierarchyEntries, kRadixDigitCount * sizeof(std::uint32_t),
+                blockBytes))
     return fail(error, "ray-record radix scratch size overflows");
+  const auto storageLimit =
+      session_->device().selection().properties.limits.maxStorageBufferRange;
+  const auto digitBaseBytes =
+      static_cast<VkDeviceSize>(kRadixDigitCount * sizeof(std::uint32_t));
+  if (static_cast<VkDeviceSize>(recordBytes) > storageLimit ||
+      static_cast<VkDeviceSize>(histBytes) > storageLimit ||
+      static_cast<VkDeviceSize>(blockBytes) > storageLimit ||
+      digitBaseBytes > storageLimit)
+    return fail(error,
+                "ray-record radix scratch exceeds device storage-buffer range");
   if (!scratchA_.create(*session_, static_cast<VkDeviceSize>(recordBytes),
                         error) ||
       !scratchB_.create(*session_, static_cast<VkDeviceSize>(recordBytes),
@@ -184,6 +216,9 @@ bool DeviceRayRecordRadixSort::ensureScratch(std::size_t capacity,
     return false;
   scratchCapacity_ = capacity;
   scratchGroups_ = groups;
+  scratchRecordBytes_ = static_cast<VkDeviceSize>(recordBytes);
+  histogramBytes_ = static_cast<VkDeviceSize>(histBytes);
+  hierarchyBytes_ = static_cast<VkDeviceSize>(blockBytes);
   return true;
 }
 
@@ -205,18 +240,22 @@ bool DeviceRayRecordRadixSort::sort(const runtime::DeviceBuffer &inputRecords,
   if (!bytesFor(inputCapacity, sizeof(RayRecord), inputBytes) ||
       !bytesFor(outputCapacity, sizeof(RayRecord), outputBytes))
     return fail(error, "ray-record radix buffer size overflows");
-  const auto groupsSize = (inputCapacity + 63U) / 64U;
+  const auto groupsSize = ceilDivide(inputCapacity, 64U);
   if (groupsSize > std::numeric_limits<std::uint32_t>::max())
     return fail(error, "ray-record radix dispatch dimensions overflow");
   const auto groups = static_cast<std::uint32_t>(groupsSize);
-  if (groups > session_->device()
-                   .selection()
-                   .properties.limits.maxComputeWorkGroupCount[0])
+  const auto &limits = session_->device().selection().properties.limits;
+  if (limits.maxComputeWorkGroupInvocations < kPrefixWorkgroupSize ||
+      limits.maxComputeWorkGroupSize[0] < kPrefixWorkgroupSize ||
+      limits.maxComputeWorkGroupCount[1] < kRadixDigitCount ||
+      limits.maxComputeSharedMemorySize <
+          kPrefixWorkgroupSize * sizeof(std::uint32_t))
+    return fail(error, "ray-record radix prefix is unsupported by this device");
+  if (groups > limits.maxComputeWorkGroupCount[0])
     return fail(error,
                 "ray-record radix dispatch exceeds device workgroup limit");
-  const std::uint32_t tiles = (groups + 255U) / 256U;
-  if (tiles > 256U)
-    return fail(error, "ray-record radix prefix hierarchy exceeds 256 tiles");
+  const auto tiles = static_cast<std::uint32_t>(
+      ceilDivide(static_cast<std::size_t>(groups), kPrefixWorkgroupSize));
   if (!inputRecords.isValid() || !inputCount.isValid() ||
       !outputRecords.isValid() ||
       inputRecords.ownerDevice() != session_->deviceHandle() ||
@@ -236,6 +275,25 @@ bool DeviceRayRecordRadixSort::sort(const runtime::DeviceBuffer &inputRecords,
     return fail(error, "ray-record radix buffers must not alias");
   if (!ensureScratch(inputCapacity, groups, error))
     return false;
+  std::vector<std::uint32_t> levelLengths;
+  std::vector<std::uint32_t> levelBases;
+  std::size_t levelBaseWords = 0U;
+  // Each level stores 16 digit sums per entry.  The next level begins
+  // immediately after the current level in both hierarchy buffers.
+  for (std::size_t level = tiles;;
+       level = ceilDivide(level, kPrefixWorkgroupSize)) {
+    if (level > std::numeric_limits<std::uint32_t>::max() ||
+        levelBaseWords > std::numeric_limits<std::uint32_t>::max())
+      return fail(error, "ray-record radix hierarchy offsets overflow");
+    levelLengths.push_back(static_cast<std::uint32_t>(level));
+    levelBases.push_back(static_cast<std::uint32_t>(levelBaseWords));
+    if (level > std::numeric_limits<std::size_t>::max() / 16U ||
+        levelBaseWords > std::numeric_limits<std::size_t>::max() - level * 16U)
+      return fail(error, "ray-record radix hierarchy offsets overflow");
+    levelBaseWords += level * 16U;
+    if (level <= kPrefixWorkgroupSize)
+      break;
+  }
   const std::array<VkBuffer, 16U> sources{
       inputRecords.handle(), scratchA_.handle(), scratchB_.handle(),
       scratchA_.handle(),    scratchB_.handle(), scratchA_.handle(),
@@ -250,14 +308,14 @@ bool DeviceRayRecordRadixSort::sort(const runtime::DeviceBuffer &inputRecords,
                                                    : scratchB_.handle());
   for (std::size_t pass = 0U; pass < 16U; ++pass) {
     const std::array<VkDescriptorBufferInfo, 8U> infos{
-        {{sources[pass], 0U, VK_WHOLE_SIZE},
-         {targets[pass], 0U, VK_WHOLE_SIZE},
+        {{sources[pass], 0U, scratchRecordBytes_},
+         {targets[pass], 0U, scratchRecordBytes_},
          {inputCount.handle(), 0U, sizeof(std::uint32_t)},
-         {histogram_.handle(), 0U, VK_WHOLE_SIZE},
-         {offsets_.handle(), 0U, VK_WHOLE_SIZE},
-         {blockSums_.handle(), 0U, VK_WHOLE_SIZE},
-         {blockOffsets_.handle(), 0U, VK_WHOLE_SIZE},
-         {digitBases_.handle(), 0U, VK_WHOLE_SIZE}}};
+         {histogram_.handle(), 0U, histogramBytes_},
+         {offsets_.handle(), 0U, histogramBytes_},
+         {blockSums_.handle(), 0U, hierarchyBytes_},
+         {blockOffsets_.handle(), 0U, hierarchyBytes_},
+         {digitBases_.handle(), 0U, kRadixDigitCount * sizeof(std::uint32_t)}}};
     std::array<VkWriteDescriptorSet, 8U> writes{};
     for (std::uint32_t i = 0U; i < writes.size(); ++i)
       writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -315,21 +373,44 @@ bool DeviceRayRecordRadixSort::sort(const runtime::DeviceBuffer &inputRecords,
     vkCmdBindPipeline(commandBuffer_, VK_PIPELINE_BIND_POINT_COMPUTE,
                       pipelines_[1].get());
     params[4] = 0U;
+    params[5] = tiles;
     vkCmdPushConstants(commandBuffer_, pipelineLayout_.get(),
                        VK_SHADER_STAGE_COMPUTE_BIT, 0U, 24U, params.data());
     vkCmdDispatch(commandBuffer_, tiles, 16U, 1U);
     vkCmdPipelineBarrier(commandBuffer_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 1U, &barrier,
                          0U, nullptr, 0U, nullptr);
-    vkCmdBindPipeline(commandBuffer_, VK_PIPELINE_BIND_POINT_COMPUTE,
-                      pipelines_[1].get());
-    params[4] = 1U;
-    vkCmdPushConstants(commandBuffer_, pipelineLayout_.get(),
-                       VK_SHADER_STAGE_COMPUTE_BIT, 0U, 24U, params.data());
-    vkCmdDispatch(commandBuffer_, 1U, 16U, 1U);
-    vkCmdPipelineBarrier(commandBuffer_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 1U, &barrier,
-                         0U, nullptr, 0U, nullptr);
+    for (std::size_t level = 0U; level < levelLengths.size(); ++level) {
+      params[2] = levelBases[level];
+      params[4] = 1U;
+      params[5] = levelLengths[level];
+      const auto dispatch = static_cast<std::uint32_t>(
+          ceilDivide(levelLengths[level], kPrefixWorkgroupSize));
+      vkCmdPushConstants(commandBuffer_, pipelineLayout_.get(),
+                         VK_SHADER_STAGE_COMPUTE_BIT, 0U, 24U, params.data());
+      vkCmdDispatch(commandBuffer_, dispatch, 16U, 1U);
+      vkCmdPipelineBarrier(commandBuffer_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 1U,
+                           &barrier, 0U, nullptr, 0U, nullptr);
+      if (levelLengths[level] <= 256U)
+        break;
+    }
+    // Parent prefixes are propagated back down before the level-0 prefixes
+    // are combined with each digit's global base for stable scatter.
+    for (std::size_t level = levelLengths.size() - 1U; level-- > 0U;) {
+      params[2] = levelBases[level];
+      params[3] = levelBases[level + 1U];
+      params[4] = 2U;
+      params[5] = levelLengths[level];
+      const auto dispatch = static_cast<std::uint32_t>(
+          ceilDivide(levelLengths[level], kPrefixWorkgroupSize));
+      vkCmdPushConstants(commandBuffer_, pipelineLayout_.get(),
+                         VK_SHADER_STAGE_COMPUTE_BIT, 0U, 24U, params.data());
+      vkCmdDispatch(commandBuffer_, dispatch, 16U, 1U);
+      vkCmdPipelineBarrier(commandBuffer_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                           VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 1U,
+                           &barrier, 0U, nullptr, 0U, nullptr);
+    }
     params[4] = 3U;
     vkCmdPushConstants(commandBuffer_, pipelineLayout_.get(),
                        VK_SHADER_STAGE_COMPUTE_BIT, 0U, 24U, params.data());
@@ -337,15 +418,22 @@ bool DeviceRayRecordRadixSort::sort(const runtime::DeviceBuffer &inputRecords,
     vkCmdPipelineBarrier(commandBuffer_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 1U, &barrier,
                          0U, nullptr, 0U, nullptr);
-    params[4] = 2U;
+    params[2] = levelBases.front();
+    params[4] = 4U;
+    params[5] = tiles;
     vkCmdPushConstants(commandBuffer_, pipelineLayout_.get(),
                        VK_SHADER_STAGE_COMPUTE_BIT, 0U, 24U, params.data());
-    vkCmdDispatch(commandBuffer_, tiles, 16U, 1U);
+    vkCmdDispatch(
+        commandBuffer_,
+        static_cast<std::uint32_t>(ceilDivide(groups, kPrefixWorkgroupSize)),
+        kRadixDigitCount, 1U);
     vkCmdPipelineBarrier(commandBuffer_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 1U, &barrier,
                          0U, nullptr, 0U, nullptr);
     vkCmdBindPipeline(commandBuffer_, VK_PIPELINE_BIND_POINT_COMPUTE,
                       pipelines_[2].get());
+    params[2] = shift;
+    params[3] = key;
     params[4] = 0U;
     vkCmdPushConstants(commandBuffer_, pipelineLayout_.get(),
                        VK_SHADER_STAGE_COMPUTE_BIT, 0U, 24U, params.data());

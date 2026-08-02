@@ -14,9 +14,10 @@
 
 namespace viennaps::vulkan::ray {
 
-// Device-resident stable 4-bit LSD radix sorter. The two-level prefix stage
-// rejects inputs that exceed its device workgroup/tile bound. The sort consumes
-// the device count word and never downloads records or counts to the host.
+// Device-resident stable 4-bit LSD radix sorter. Prefix sums use a recursively
+// tiled hierarchy whose levels remain in device-local scratch buffers. The
+// sort consumes the device count word and never downloads records or counts to
+// the host.
 class DeviceRayRecordRadixSort {
 public:
   DeviceRayRecordRadixSort() = default;
@@ -75,6 +76,9 @@ private:
   VkCommandBuffer commandBuffer_{VK_NULL_HANDLE};
   std::size_t scratchCapacity_{0U};
   std::uint32_t scratchGroups_{0U};
+  VkDeviceSize scratchRecordBytes_{0U};
+  VkDeviceSize histogramBytes_{0U};
+  VkDeviceSize hierarchyBytes_{0U};
 };
 
 using DeviceRayRecordRadixSorter = DeviceRayRecordRadixSort;

@@ -2489,3 +2489,34 @@ remain environment/cache supplied.
 | Validation | temporary CMake configure and target-graph checks are run outside the repository; no full build or CUDA path is required |
 | Residual gate | a dependency-complete root configure/CTest run remains a long-running follow-up; this slice does not fetch CPM/VTK dependencies |
 | Scope boundary | only CMake option/probe propagation, smoke test registration, and this status record changed |
+
+### P5-N2: explicit neutral-transport velocity bridge
+
+- Status: accepted locally as an explicit FP32 bridge; no automatic
+  Process/backend selection is enabled
+- Date: 2026-08-03
+
+`VulkanNeutralTransportVelocityExecutor` is a caller-owned, non-copyable FP32
+bridge. `makeExecutor()` returns a callback that owns shared bridge state, so a
+model may retain the callback without outliving the creator object. The state
+owns the existing neutral-transport Vulkan primitive and reusable host-visible
+coverage, material-id, and velocity buffers. Buffers are released before the
+primitive's `ComputeSession` is reset; buffer growth explicitly recreates a
+smaller allocation.
+
+The bridge rejects non-FP32-compatible lengths, byte overflow, negative or
+non-integral legacy material IDs, non-finite/subnormal inputs, invalid strict
+FP32 parameters, and dispatch/resource failures before mutating the generic
+work output. It computes the existing CPU FP32 formula, dispatches the Vulkan
+primitive, reads back a private candidate, and compares every result by raw
+IEEE-754 bits. Only an all-element match commits `output`, `writtenCount`, and
+`complete`; all other paths return false for the N1 CPU fallback.
+
+| Gate | Result |
+|---|---|
+| CPU seam | N1's existing CPU-only executor contract remains the only automatic model seam; no Process/Context/backend selection was changed |
+| Vulkan smoke | new standalone explicit-install smoke covers legacy CPU raw-bit equality, zero-density, strict-input rejection, reusable buffer growth, reset, lifetime, and output sentinels |
+| CMake | bridge is part of `viennaps_vulkan_surface`; its smoke uses only the generic executor seam and is registered by the focused surface switch without a top-level `ViennaPS`/CPM dependency |
+| Model integration | the root-level actual N1 model plus bridge composition remains a CPM-dependent residual integration gate; it is not required to accept the standalone primitive bridge |
+| Hardware acceptance | fresh standalone MSVC 19.44.35223 build succeeded; local Intel Arc focused CTest passed 1/1 |
+| Scope boundary | only bridge files, surface CMake/smoke wiring, and this status entry changed; existing primitives/shader, Process/Flux/Context, B2A, CPM, and backend policy remain untouched |

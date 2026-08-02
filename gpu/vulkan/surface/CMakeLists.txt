@@ -106,13 +106,15 @@ endif()
 add_custom_target(viennaps-vulkan-neutral-transport-surface-spv
   DEPENDS ${VIENNAPS_VULKAN_SURFACE_SPV})
 
-add_library(viennaps_vulkan_surface neutral_transport_surface.cpp)
+add_library(viennaps_vulkan_surface neutral_transport_surface.cpp
+            neutral_transport_velocity_executor.cpp)
 add_dependencies(viennaps_vulkan_surface
                  viennaps-vulkan-neutral-transport-surface-spv)
 target_link_libraries(viennaps_vulkan_surface
                       PUBLIC viennaps_vulkan_compute_runtime Vulkan::Vulkan)
 target_include_directories(viennaps_vulkan_surface
-                           PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+                           PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
+                                  "${CMAKE_CURRENT_LIST_DIR}/../../../include/viennaps")
 target_compile_features(viennaps_vulkan_surface PRIVATE cxx_std_20)
 if(MSVC)
   target_compile_options(viennaps_vulkan_surface PRIVATE /W4 /WX)
@@ -207,4 +209,22 @@ if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
    VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE)
   add_test(NAME viennaps-vulkan-neutral-transport-surface-smoke
            COMMAND viennaps-vulkan-neutral-transport-surface-smoke)
+endif()
+
+add_executable(viennaps-vulkan-neutral-transport-velocity-executor-smoke
+               neutral_transport_velocity_executor_smoke.cpp)
+add_dependencies(viennaps-vulkan-neutral-transport-velocity-executor-smoke
+                 viennaps-vulkan-neutral-transport-surface-spv)
+target_compile_features(viennaps-vulkan-neutral-transport-velocity-executor-smoke
+                         PRIVATE cxx_std_20)
+target_compile_definitions(
+  viennaps-vulkan-neutral-transport-velocity-executor-smoke PRIVATE
+  "VIENNAPS_VULKAN_NEUTRAL_TRANSPORT_SPV_PATH=\"${VIENNAPS_VULKAN_NEUTRAL_TRANSPORT_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-neutral-transport-velocity-executor-smoke
+                      PRIVATE viennaps_vulkan_surface Vulkan::Vulkan)
+
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
+   VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE)
+  add_test(NAME viennaps-vulkan-neutral-transport-velocity-executor-smoke
+           COMMAND viennaps-vulkan-neutral-transport-velocity-executor-smoke)
 endif()

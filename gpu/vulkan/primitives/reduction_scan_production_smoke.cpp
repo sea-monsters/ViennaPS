@@ -10,6 +10,7 @@
 #include <iostream>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 #ifndef VIENNAPS_VULKAN_REDUCTION_SCAN_SPV_PATH
@@ -374,6 +375,113 @@ scanOracle(const std::vector<std::int32_t> &input,
   return true;
 }
 
+[[nodiscard]] bool runGenerationRecoveryCases(
+    runtime::ComputeSession &session, ReductionScanPrimitives &primitives,
+    std::string &error) {
+  runtime::DeviceBuffer staleInput{};
+  runtime::DeviceBuffer staleOutput{};
+  if (!staleInput.create(session, 257u * sizeof(std::int32_t), error) ||
+      !staleOutput.create(session, 257u * sizeof(std::int32_t), error)) {
+    return false;
+  }
+
+  const auto boundGeneration = primitives.boundSessionGeneration();
+  runtime::ComputeSession movedSession = std::move(session);
+  if (movedSession.generation() != boundGeneration || session.isValid()) {
+    error = "compute session move did not preserve generation ownership";
+    return false;
+  }
+  error.clear();
+  runtime::HostVisibleBuffer staleHost{};
+  if (primitives.createIntBuffer(1u, staleHost, error) ||
+      error.find("stale compute session generation") == std::string::npos) {
+    error = "stale reduction/scan primitive accepted a host operation";
+    return false;
+  }
+  error.clear();
+  if (primitives.exclusiveScanInt(staleInput, 1u, staleOutput, 1u,
+                                  error) ||
+      error.find("stale compute session generation") == std::string::npos) {
+    error = "stale reduction/scan primitive accepted a device operation";
+    return false;
+  }
+  error.clear();
+  if (primitives.initialize(movedSession,
+                            VIENNAPS_VULKAN_REDUCTION_SCAN_SPV_PATH, error) ||
+      error.find("bound compute session is stale") == std::string::npos) {
+    error = "stale reduction/scan primitive accepted reinitialization";
+    return false;
+  }
+  error.clear();
+
+  // A primitive must be torn down while its original Vulkan device is still
+  // alive; session reset/reinitialization is not concurrent with primitive
+  // resource destruction.
+  staleInput.reset();
+  staleOutput.reset();
+  primitives.reset();
+  if (!primitives.initialize(movedSession,
+                             VIENNAPS_VULKAN_REDUCTION_SCAN_SPV_PATH,
+                             error)) {
+    return false;
+  }
+
+  constexpr std::array<std::size_t, 2u> lengths = {1u, 257u};
+  for (const auto length : lengths) {
+    runtime::DeviceBuffer input{};
+    runtime::DeviceBuffer output{};
+    runtime::DeviceBuffer flags{};
+    runtime::DeviceBuffer offsets{};
+    runtime::DeviceBuffer count{};
+    if (!input.create(movedSession, length * sizeof(std::int32_t), error) ||
+        !output.create(movedSession, length * sizeof(std::int32_t), error) ||
+        !flags.create(movedSession, length * sizeof(std::int32_t), error) ||
+        !offsets.create(movedSession, length * sizeof(std::int32_t), error) ||
+        !count.create(movedSession, sizeof(std::int32_t), error)) {
+      return false;
+    }
+    std::vector<std::int32_t> values(length);
+    std::vector<std::int32_t> expected(length);
+    std::vector<std::int32_t> flagValues(length);
+    for (std::size_t index = 0u; index < length; ++index) {
+      values[index] = static_cast<std::int32_t>(index % 7u) - 3;
+      expected[index] = scanOracle(values, length, 0)[index];
+      flagValues[index] = index % 3u == 0u ? 1 : 0;
+    }
+    if (!input.upload(movedSession, values.data(),
+                      values.size() * sizeof(values[0]), 0u, error) ||
+        !flags.upload(movedSession, flagValues.data(),
+                      flagValues.size() * sizeof(flagValues[0]), 0u, error) ||
+        !primitives.exclusiveScanInt(input, length, output, length, error) ||
+        !output.download(movedSession, expected.data(),
+                         expected.size() * sizeof(expected[0]), 0u, error)) {
+      return false;
+    }
+    for (std::size_t index = 0u; index < length; ++index) {
+      if (expected[index] != scanOracle(values, length, 0)[index]) {
+        error = "recovered device scan mismatch at length " +
+                std::to_string(length);
+        return false;
+      }
+    }
+    if (!primitives.exclusiveScanInt(flags, length, offsets, length, error) ||
+        !primitives.writeCompactionCount(flags, offsets, length, count,
+                                         error)) {
+      return false;
+    }
+    std::int32_t actualCount = -1;
+    if (!count.download(movedSession, &actualCount, sizeof(actualCount), 0u,
+                        error) ||
+        actualCount != static_cast<std::int32_t>((length + 2u) / 3u)) {
+      error = "recovered device compaction count mismatch at length " +
+              std::to_string(length);
+      return false;
+    }
+  }
+  primitives.reset();
+  return true;
+}
+
 } // namespace
 
 int main() {
@@ -388,7 +496,8 @@ int main() {
       !runScanWrapCase(primitives, error) ||
       !runInPlaceCases(primitives, error) ||
       !runValidationCases(primitives, error) ||
-      !runDeviceScanCases(session, primitives, error)) {
+      !runDeviceScanCases(session, primitives, error) ||
+      !runGenerationRecoveryCases(session, primitives, error)) {
     std::cerr << error << '\n';
     return 1;
   }

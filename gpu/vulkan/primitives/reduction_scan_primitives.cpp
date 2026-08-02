@@ -67,6 +67,7 @@ ReductionScanPrimitives::ReductionScanPrimitives(
       dummyInt_(std::move(other.dummyInt_)),
       ownedSession_(std::move(other.ownedSession_)),
       activeSession_(std::exchange(other.activeSession_, nullptr)),
+      sessionGeneration_(std::exchange(other.sessionGeneration_, 0u)),
       descriptorSet_(std::exchange(other.descriptorSet_, VK_NULL_HANDLE)),
       commandBuffer_(std::exchange(other.commandBuffer_, VK_NULL_HANDLE)) {}
 
@@ -92,6 +93,7 @@ ReductionScanPrimitives::operator=(ReductionScanPrimitives &&other) noexcept {
   dummyInt_ = std::move(other.dummyInt_);
   ownedSession_ = std::move(other.ownedSession_);
   activeSession_ = std::exchange(other.activeSession_, nullptr);
+  sessionGeneration_ = std::exchange(other.sessionGeneration_, 0u);
   descriptorSet_ = std::exchange(other.descriptorSet_, VK_NULL_HANDLE);
   commandBuffer_ = std::exchange(other.commandBuffer_, VK_NULL_HANDLE);
   return *this;
@@ -122,6 +124,14 @@ bool ReductionScanPrimitives::initialize(runtime::ComputeSession &session,
                                          const std::string_view spirvPath,
                                          std::string &error) {
   error.clear();
+  if (activeSession_ != nullptr && sessionGeneration_ != 0u &&
+      (!activeSession_->isValid() ||
+       activeSession_->generation() != sessionGeneration_)) {
+    return setError(
+        error, "initialization",
+        "bound compute session is stale; reset the primitives before "
+        "resetting or reinitializing the session");
+  }
   if (isInitialized()) {
     if (activeSession_ == &session) {
       return true;
@@ -142,6 +152,7 @@ bool ReductionScanPrimitives::initialize(runtime::ComputeSession &session,
   reset();
   ownedSession_.reset();
   activeSession_ = &session;
+  sessionGeneration_ = session.generation();
   const auto fail = [this, &error]() {
     const std::string detail = error;
     reset();
@@ -228,13 +239,16 @@ void ReductionScanPrimitives::reset() {
   descriptorSetLayout_.reset();
   shaderModule_.reset();
   activeSession_ = nullptr;
+  sessionGeneration_ = 0u;
   ownedSession_.reset();
   descriptorSet_ = VK_NULL_HANDLE;
   commandBuffer_ = VK_NULL_HANDLE;
 }
 
 bool ReductionScanPrimitives::isInitialized() const {
-  return activeSession_ != nullptr && activeSession_->isValid() &&
+  return activeSession_ != nullptr && sessionGeneration_ != 0u &&
+         activeSession_->isValid() &&
+         activeSession_->generation() == sessionGeneration_ &&
          shaderModule_.get() != VK_NULL_HANDLE &&
          descriptorSetLayout_.get() != VK_NULL_HANDLE &&
          pipelineLayout_.get() != VK_NULL_HANDLE &&
@@ -251,7 +265,18 @@ bool ReductionScanPrimitives::isInitialized() const {
          activeSession_->commandContext().pool() != VK_NULL_HANDLE;
 }
 
+std::uint64_t ReductionScanPrimitives::boundSessionGeneration() const {
+  return sessionGeneration_;
+}
+
 bool ReductionScanPrimitives::isReady(std::string &error) const {
+  if (activeSession_ != nullptr && sessionGeneration_ != 0u &&
+      (!activeSession_->isValid() ||
+       activeSession_->generation() != sessionGeneration_)) {
+    return setError(error, "execution",
+                    "reduction/scan primitives belong to a stale compute "
+                    "session generation; reinitialize the primitives");
+  }
   if (!isInitialized()) {
     return setError(error, "execution",
                     "reduction/scan primitives are not initialized");
@@ -1234,7 +1259,12 @@ bool ReductionScanPrimitives::stableCompactUInt32(
 
 const runtime::VulkanDevice &ReductionScanPrimitives::device() const {
   static const runtime::VulkanDevice defaultDevice{};
-  return activeSession_ != nullptr ? activeSession_->device() : defaultDevice;
+  if (activeSession_ != nullptr && sessionGeneration_ != 0u &&
+      activeSession_->isValid() &&
+      activeSession_->generation() == sessionGeneration_) {
+    return activeSession_->device();
+  }
+  return defaultDevice;
 }
 
 } // namespace viennaps::vulkan::primitives

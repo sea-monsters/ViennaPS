@@ -51,8 +51,13 @@ public:
   [[nodiscard]] bool initialize(std::string_view spirvPath, std::string &error);
   [[nodiscard]] bool initialize(runtime::ComputeSession &session,
                                 std::string_view spirvPath, std::string &error);
+  // The bound session object must outlive the primitives. Reset the primitives
+  // before resetting, reinitializing, or destroying that session. Moving the
+  // session makes the primitives stale; reset them while the moved-to session
+  // still owns the Vulkan device before reuse.
   void reset();
   [[nodiscard]] bool isInitialized() const;
+  [[nodiscard]] std::uint64_t boundSessionGeneration() const;
 
   [[nodiscard]] bool createFloatBuffer(std::size_t elementCount,
                                        runtime::HostVisibleBuffer &buffer,
@@ -232,6 +237,7 @@ private:
   runtime::HostVisibleBuffer dummyInt_{};
   std::unique_ptr<runtime::ComputeSession> ownedSession_{};
   runtime::ComputeSession *activeSession_{nullptr};
+  std::uint64_t sessionGeneration_{0};
   VkDescriptorSet descriptorSet_{VK_NULL_HANDLE};
   VkCommandBuffer commandBuffer_{VK_NULL_HANDLE};
 };

@@ -1217,12 +1217,20 @@ dependencies and waits for fence completion before recycling the shared
 command buffer. Final materialization will download the N offsets and count K,
 append K as the N+1 tail offset, and compare them exactly with the CPU oracle.
 
+The primitive suite also records the generation of its bound compute session.
+Initialization, readiness checks, device access, moves, and reset now reject or
+clear stale generations before any dispatch. A moved-from session is detected
+fail-closed, and the primitives can be rebound after an explicit reset while
+the moved-to session still owns the Vulkan device. The bound session object
+must outlive the primitives: callers reset the primitives before resetting,
+reinitializing, or destroying the session.
+
 | Gate | Result |
 |---|---|
 | Scan boundaries | N = 0, 1, 255, 256, 257, and 513 pass |
 | Exact oracle | every device exclusive offset equals the CPU prefix sum |
 | Count oracle | mixed flags produce the exact CPU selected count on device |
-| Session isolation | foreign-generation buffers fail before dispatch and preserve the output sentinel |
+| Session isolation | foreign-generation buffers and stale primitive generations fail before dispatch |
 | Validation | length and alias errors fail closed; N=0 does not dispatch the count shader |
 | Compatibility | legacy host reduction/scan production checks still pass |
 | Combined Vulkan gate | runtime quartet plus reduction/scan production smoke pass 5/5 |

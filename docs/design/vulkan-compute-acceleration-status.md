@@ -1097,15 +1097,62 @@ lifetime refactor.
 | Residency boundary | intermediate classification and mask streams still cross host memory |
 | Path policy | SDK and dependency discovery remain environment/cache supplied; no resolved local path is tracked |
 
+## P4C2-HRLE-sparse-reconstruction: transactional CPU insertion oracle
+
+- Status: accepted locally
+- Date: 2026-08-02
+- Scope: validate the complete classified/compacted stream and reconstruct a
+  canonical sparse HRLE domain before production Vulkan routing
+
+The reconstruction contract accepts the stable candidate-index stream, all
+defined and undefined actions, the compacted defined payloads, and the old
+Level Set defined-point count. It validates exact vector sizes, binary masks,
+exclusive offsets, stable compacted candidate IDs, finite defined values,
+strict lexicographic candidate order, grid membership, and old point IDs before
+modifying either output.
+
+Defined `sourcePointId` values are ViennaHRLE defined-point IDs, not candidate
+stream indices. The function therefore returns a stable new-defined-point to
+old-defined-point mapping for ViennaLS point-data translation. This corrects an
+initial rejected interface that incorrectly required one old value per sparse
+candidate; a real rebuild commonly has many more sparse-star candidates than
+defined points. Undefined entries are inserted with the exact positive or
+negative HRLE sentinel, while defined FP32 values retain their bit pattern.
+
+Validation and local HRLE construction happen before the caller's domain and
+source map are committed. Mixed, all-defined, all-undefined, empty, and simple
+three-dimensional inputs pass. Invalid sizes, actions, source IDs, offsets,
+non-binary masks, non-finite defined values, unordered indices, and out-of-grid
+indices fail without changing an already populated output.
+
+This is the CPU canonical insertion oracle, not the final production rebuild.
+It currently builds a single-segment HRLE domain and does not translate point
+data itself; the returned source map supplies that next seam. Strict recovery
+from allocation failure or an exception inside ViennaHRLE `finalize` or
+`deepCopy` is not proven. Deployment memory gating and a production
+segmentation/point-data comparison remain mandatory before automatic Vulkan
+routing is enabled.
+
+| Gate | Result |
+|---|---|
+| Complete action stream | mixed defined and both undefined signs reconstruct exactly |
+| Point-data seam | stable new-point to old-point IDs are returned and range checked |
+| Dimensional coverage | focused 2D branches and a simple 3D reconstruction pass |
+| Malformed input | sizes, action, mask, offset, finite value, order, grid, and source ID are rejected |
+| Validation transaction | domain and source map remain unchanged on every tested false return |
+| No-SDK behavior | CPU target builds and all three HRLE contract tests pass without Vulkan |
+| Residual boundary | allocation/HRLE exceptions, segmentation, and point-data translation remain pending |
+| Path policy | no SDK, dependency, source checkout, or build-cache path is tracked |
+
 ## Next slice
 
-Accept and integrate transactional sparse HRLE reconstruction, then remove the
-classification-to-compaction host round trip with device-resident intermediate
-buffers. Wire the complete path into the ViennaLS executor and deployment-time
-primitive suite only after those gates pass. Direct negative/non-finite time
-injection also remains a defensive-branch coverage gap. The optional
-VTK-enabled install/export conflict should be isolated from the compute backend
-before packaging validation.
+Remove the classification-to-compaction host round trip with device-resident
+intermediate buffers, then feed the validated final readback into the P4C2 CPU
+insertion oracle. Wire the complete path into the ViennaLS executor and
+deployment-time primitive suite only after those gates pass. Direct
+negative/non-finite time injection also remains a defensive-branch coverage
+gap. The optional VTK-enabled install/export conflict should be isolated from
+the compute backend before packaging validation.
 
 After those production-seam gates, the Level Set work advances to HRLE
 sparse rebuild integration, followed by particle/ray and surface/oxidation

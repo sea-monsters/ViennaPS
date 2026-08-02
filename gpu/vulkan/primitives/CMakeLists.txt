@@ -458,7 +458,8 @@ target_compile_definitions(viennaps-vulkan-compaction-production-smoke
 target_link_libraries(viennaps-vulkan-compaction-production-smoke
   PRIVATE viennaps_vulkan_reduction_scan_primitives Vulkan::Vulkan)
 
-if(BUILD_TESTING)
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
+   VIENNAPS_BUILD_VULKAN_PRIMITIVES_SMOKE)
   add_test(NAME viennaps-vulkan-primitives-smoke
            COMMAND viennaps-vulkan-primitives-smoke)
   add_test(NAME viennaps-vulkan-primitives-production-smoke

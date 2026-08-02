@@ -97,7 +97,7 @@ target_compile_definitions(viennaps-vulkan-ray-reducer-smoke PRIVATE
   "VIENNAPS_VULKAN_RAY_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_SPV_PATH}\"")
 target_link_libraries(viennaps-vulkan-ray-reducer-smoke PRIVATE
                       viennaps_vulkan_ray_reducer Vulkan::Vulkan)
-if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
   add_test(NAME viennaps-vulkan-ray-reducer-smoke
            COMMAND viennaps-vulkan-ray-reducer-smoke)
 endif()
@@ -129,7 +129,7 @@ target_compile_definitions(viennaps-vulkan-triangle-hit-smoke PRIVATE
   "VIENNAPS_VULKAN_TRIANGLE_HIT_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_HIT_SPV_PATH}\"")
 target_link_libraries(viennaps-vulkan-triangle-hit-smoke PRIVATE
                       viennaps_vulkan_triangle_hit)
-if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
   add_test(NAME viennaps-vulkan-triangle-hit-smoke
            COMMAND viennaps-vulkan-triangle-hit-smoke)
 endif()
@@ -184,7 +184,7 @@ target_compile_definitions(viennaps-vulkan-ray-hit-batch-smoke PRIVATE
 target_link_libraries(viennaps-vulkan-ray-hit-batch-smoke PRIVATE
                       viennaps_vulkan_ray_hit_batch
                       viennaps_vulkan_triangle_hit Vulkan::Vulkan)
-if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
   add_test(NAME viennaps-vulkan-ray-hit-batch-smoke
            COMMAND viennaps-vulkan-ray-hit-batch-smoke)
 endif()
@@ -227,7 +227,7 @@ target_compile_definitions(viennaps-vulkan-ray-flux-pipeline-smoke PRIVATE
   "VIENNAPS_VULKAN_RAY_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_FLUX_REDUCER_SPV_PATH}\"")
 target_link_libraries(viennaps-vulkan-ray-flux-pipeline-smoke PRIVATE
                       viennaps_vulkan_ray_flux_pipeline Vulkan::Vulkan)
-if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
   add_test(NAME viennaps-vulkan-ray-flux-pipeline-smoke
            COMMAND viennaps-vulkan-ray-flux-pipeline-smoke)
 endif()
@@ -283,7 +283,7 @@ target_compile_definitions(viennaps-vulkan-ray-flux-fused-smoke PRIVATE
   "VIENNAPS_VULKAN_RAY_FLUX_FUSED_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_FLUX_FUSED_SPV_PATH}\"")
 target_link_libraries(viennaps-vulkan-ray-flux-fused-smoke PRIVATE
                       viennaps_vulkan_ray_flux_fused Vulkan::Vulkan)
-if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
   add_test(NAME viennaps-vulkan-ray-flux-fused-smoke
            COMMAND viennaps-vulkan-ray-flux-fused-smoke)
 endif()
@@ -335,7 +335,7 @@ target_compile_definitions(viennaps-vulkan-triangle-hit-device-smoke PRIVATE
   "VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH}\"")
 target_link_libraries(viennaps-vulkan-triangle-hit-device-smoke PRIVATE
                       viennaps_vulkan_triangle_hit_device Vulkan::Vulkan)
-if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
   add_test(NAME viennaps-vulkan-triangle-hit-device-smoke
            COMMAND viennaps-vulkan-triangle-hit-device-smoke)
 endif()
@@ -409,7 +409,7 @@ target_link_libraries(viennaps-vulkan-ray-record-compaction-smoke PRIVATE
                       viennaps_vulkan_ray_record_compaction
                       viennaps_vulkan_triangle_hit_device
                       viennaps_vulkan_ray_hit_batch Vulkan::Vulkan)
-if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
   add_test(NAME viennaps-vulkan-ray-record-compaction-smoke
            COMMAND viennaps-vulkan-ray-record-compaction-smoke)
 endif()
@@ -483,7 +483,7 @@ target_link_libraries(viennaps-vulkan-ray-record-sort-smoke PRIVATE
                       viennaps_vulkan_ray_record_compaction
                       viennaps_vulkan_triangle_hit_device
                       viennaps_vulkan_ray_hit_batch Vulkan::Vulkan)
-if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
   add_test(NAME viennaps-vulkan-ray-record-sort-smoke
            COMMAND viennaps-vulkan-ray-record-sort-smoke)
 endif()
@@ -585,7 +585,7 @@ target_link_libraries(viennaps-vulkan-ray-record-radix-sort-smoke PRIVATE
                       viennaps_vulkan_ray_record_compaction
                       viennaps_vulkan_triangle_hit_device
                       viennaps_vulkan_ray_hit_batch Vulkan::Vulkan)
-if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
   add_test(NAME viennaps-vulkan-ray-record-radix-sort-smoke
            COMMAND viennaps-vulkan-ray-record-radix-sort-smoke)
 endif()
@@ -654,7 +654,7 @@ target_compile_definitions(viennaps-vulkan-ray-surface-reduction-smoke PRIVATE
 target_link_libraries(viennaps-vulkan-ray-surface-reduction-smoke PRIVATE
                       viennaps_vulkan_ray_surface_reduction
                       viennaps_vulkan_ray_reducer Vulkan::Vulkan)
-if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
 add_test(NAME viennaps-vulkan-ray-surface-reduction-smoke
            COMMAND viennaps-vulkan-ray-surface-reduction-smoke)
 endif()
@@ -707,7 +707,7 @@ target_compile_definitions(viennaps-vulkan-triangle-bvh-hit-smoke PRIVATE
   "VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH}\"")
 target_link_libraries(viennaps-vulkan-triangle-bvh-hit-smoke PRIVATE
                       viennaps_vulkan_triangle_bvh_hit Vulkan::Vulkan)
-if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
   add_test(NAME viennaps-vulkan-triangle-bvh-hit-smoke
            COMMAND viennaps-vulkan-triangle-bvh-hit-smoke)
 endif()
@@ -766,7 +766,7 @@ target_compile_definitions(viennaps-vulkan-device-ray-flux-pipeline-smoke PRIVAT
   "VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV_PATH}\"")
 target_link_libraries(viennaps-vulkan-device-ray-flux-pipeline-smoke PRIVATE
                       viennaps_vulkan_device_ray_flux_pipeline Vulkan::Vulkan)
-if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
   add_test(NAME viennaps-vulkan-device-ray-flux-pipeline-smoke
            COMMAND viennaps-vulkan-device-ray-flux-pipeline-smoke)
 endif()

@@ -38,6 +38,8 @@ option(VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE
        "Build the Vulkan Level Set update differential smoke test" OFF)
 option(VIENNAPS_BUILD_VULKAN_RAY_SMOKE
        "Build the Vulkan deterministic ray reduction smoke test" OFF)
+option(VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE
+       "Build the Vulkan surface-model differential smoke test" OFF)
 
 option(VIENNAPS_BUILD_EXAMPLES "Build examples" OFF)
 option(VIENNAPS_BUILD_TESTS "Build tests" OFF)

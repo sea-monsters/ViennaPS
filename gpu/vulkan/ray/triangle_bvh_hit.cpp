@@ -347,6 +347,99 @@ bool TriangleBvhHitPrimitive::intersect(std::span<const Ray> rays,
   std::copy(staged.begin(), staged.end(), out.begin());
   return true;
 }
+bool TriangleBvhHitPrimitive::recordDispatch(
+    const VkCommandBuffer commandBuffer, runtime::DeviceBuffer &origins,
+    runtime::DeviceBuffer &directions, const std::size_t rayCount,
+    runtime::DeviceBuffer &hits, const std::size_t outputCapacity,
+    std::string &e) {
+  e.clear();
+  if (!ready(e) || !built_)
+    return fail(e, "triangle BVH geometry is not built");
+  if (commandBuffer == VK_NULL_HANDLE ||
+      rayCount > std::numeric_limits<std::uint32_t>::max() ||
+      outputCapacity < rayCount || rayCount > origins.size() / 16U ||
+      rayCount > directions.size() / 16U ||
+      outputCapacity > hits.size() / sizeof(TriangleHit))
+    return fail(e, "triangle BVH record buffer capacity is invalid");
+  const std::array<runtime::DeviceBuffer *, 6U> buffers = {
+      &origins, &directions, &nodes_, &triangles_, &indices_, &hits};
+  for (std::size_t i = 0; i < buffers.size(); ++i) {
+    if (!buffers[i]->isValid() ||
+        buffers[i]->ownerDevice() != session_->device().get() ||
+        buffers[i]->ownerSessionGeneration() != session_->generation())
+      return fail(e, "triangle BVH record buffer has wrong device or session");
+    for (std::size_t j = i + 1U; j < buffers.size(); ++j)
+      if (buffers[i]->handle() == buffers[j]->handle())
+        return fail(e, "triangle BVH record buffers must not alias");
+  }
+  if (rayCount == 0U)
+    return true;
+  const std::array<VkBuffer, 6U> handles = {
+      origins.handle(),    directions.handle(), nodes_.handle(),
+      triangles_.handle(), indices_.handle(),   hits.handle()};
+  std::array<VkDescriptorBufferInfo, 6U> infos{};
+  std::array<VkWriteDescriptorSet, 6U> writes{};
+  for (std::uint32_t i = 0; i < writes.size(); ++i) {
+    infos[i] = {handles[i], 0U, VK_WHOLE_SIZE};
+    writes[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                 nullptr,
+                 descriptorSet_,
+                 i,
+                 0U,
+                 1U,
+                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                 nullptr,
+                 &infos[i],
+                 nullptr};
+  }
+  vkUpdateDescriptorSets(session_->device().get(),
+                         static_cast<std::uint32_t>(writes.size()),
+                         writes.data(), 0U, nullptr);
+  std::array<VkBufferMemoryBarrier, 5U> pre{};
+  for (std::size_t i = 0; i < pre.size(); ++i)
+    pre[i] = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+              nullptr,
+              VK_ACCESS_TRANSFER_WRITE_BIT,
+              VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+              VK_QUEUE_FAMILY_IGNORED,
+              VK_QUEUE_FAMILY_IGNORED,
+              handles[i],
+              0U,
+              VK_WHOLE_SIZE};
+  vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 0U, nullptr,
+                       static_cast<std::uint32_t>(pre.size()), pre.data(), 0U,
+                       nullptr);
+  vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                    pipeline_.get());
+  vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          pipelineLayout_.get(), 0U, 1U, &descriptorSet_, 0U,
+                          nullptr);
+  const std::array<std::uint32_t, 4U> pc = {
+      static_cast<std::uint32_t>(rayCount),
+      static_cast<std::uint32_t>(nodes_.size() / sizeof(TriangleBvhNode)),
+      static_cast<std::uint32_t>(triangleCount_),
+      static_cast<std::uint32_t>(indices_.size() / sizeof(std::uint32_t))};
+  vkCmdPushConstants(commandBuffer, pipelineLayout_.get(),
+                     VK_SHADER_STAGE_COMPUTE_BIT, 0U, sizeof(pc), pc.data());
+  vkCmdDispatch(commandBuffer,
+                static_cast<std::uint32_t>((rayCount + 63U) / 64U), 1U, 1U);
+  const VkBufferMemoryBarrier post = {VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
+                                      nullptr,
+                                      VK_ACCESS_SHADER_WRITE_BIT,
+                                      VK_ACCESS_SHADER_READ_BIT |
+                                          VK_ACCESS_SHADER_WRITE_BIT,
+                                      VK_QUEUE_FAMILY_IGNORED,
+                                      VK_QUEUE_FAMILY_IGNORED,
+                                      hits.handle(),
+                                      0U,
+                                      VK_WHOLE_SIZE};
+  vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 0U, nullptr,
+                       1U, &post, 0U, nullptr);
+  return true;
+}
+
 const runtime::VulkanDevice &TriangleBvhHitPrimitive::device() const {
   static const runtime::VulkanDevice empty{};
   return session_ ? session_->device() : empty;

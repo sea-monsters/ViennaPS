@@ -2155,13 +2155,21 @@ Vulkan ray-tracing extension dependency. CPU construction/upload is the
 explicit geometry-change boundary in this slice. Intersection dispatch uploads
 rays and downloads only final hits.
 
+P5-R2 retains that convenience path and adds `recordDispatch`: a caller-owned
+command buffer can consume device-resident origin/direction buffers and produce
+device-resident hits without beginning, ending, submitting, waiting, or
+performing host transfers. It validates session generation, buffer ownership,
+capacity, and aliases before recording the transfer-to-compute and
+compute-to-compute barriers required by the next device ray-flux stage.
+
 | Gate | Result |
 |---|---|
 | ABI and traversal | A 32-byte node stores conservative bounds, `leftFirst`, and leaf count. Internal nodes reserve adjacent child roots before recursive construction, so `leftFirst` and `leftFirst + 1` remain valid at arbitrary tested depth. |
 | CPU oracle | The smoke compares the raw `TriangleHit` fields from `intersectCpu` against device results. A normal-scale 20-triangle, six-ray tree puts equal-distance IDs 9 and 10 in opposite root branches; the device first visits ID 10 but must replace it with ID 9. A separate `1e-31` x-direction case verifies that a small nonzero slab direction is not culled. A successful empty-BVH rebuild returns all misses without a self-referential root traversal. A deterministic LCG differential over 32 triangles and 16 rays reports zero bit mismatches (seed `0x5EED`). |
+| Record-only chain | The smoke records P5-R2 into a caller command buffer, submits that buffer exactly once, and raw-bit compares downloaded hits to the CPU oracle. A null-command-buffer rejection preserves a pre-uploaded device hit sentinel. |
 | Transaction boundary | Invalid normal-FP32 inputs and undersized output return before dispatch and preserve caller sentinels. A zero-ray call preserves the output sentinel. |
 | Build and test | A fresh standalone Ninja build using MSVC `19.44.35223` and the local Intel Arc Vulkan adapter builds `viennaps-vulkan-triangle-bvh-hit-smoke`; focused CTest passes 1/1. |
-| Scope boundary | This is CPU-built BVH plus compute traversal only. It does not perform GPU BVH construction/refit, reflection or multi-bounce transport, particle/material physics, device-ray-flux routing, Process integration, or use Vulkan RT extensions. |
+| Scope boundary | This is CPU-built BVH plus compute traversal only. P5-R2 exposes but does not yet select it in device-ray-flux routing. It does not perform GPU BVH construction/refit, reflection or multi-bounce transport, particle/material physics, Process integration, or use Vulkan RT extensions. |
 
 ## Next slice
 
@@ -2340,3 +2348,30 @@ instead of producing an under-specified executable.
 | Residual top-level gate | local VTK-source configuration reached VTK feature detection but exceeds the bounded interactive configuration window; a future long-running top-level build must execute the registered deployment-session CTest with the same environment-provided SDK/dependency paths |
 | Temp hygiene | all temporary compile overlays and `build-p5k3e-*` validation directories were removed after validation; the generic `build` directory was preserved |
 | Scope boundary | deployment-session header/smoke, Vulkan CMake dependency propagation, and this status entry are changed; Process/controller behavior, CUDA/OptiX, shader algorithms, profile persistence, and fixed local paths remain untouched |
+
+### P6-C: focused Vulkan smoke option propagation
+
+- Status: implemented as a CMake-only validation seam; no computation or
+  simulation behavior changed
+- Date: 2026-08-03
+
+The root project now declares the surface-model focused smoke option alongside
+the existing runtime, primitive, level-set, and ray switches. The Vulkan probe
+helper recognizes ray and surface switches when Vulkan is otherwise disabled,
+while keeping every focused switch default-off. Runtime, primitive, and level-set
+CTest registration accepts either CMake's `BUILD_TESTING` or ViennaPS's
+`VIENNAPS_BUILD_TESTS`; each smoke family additionally requires its focused
+switch. Runtime deployment checks use the documented runtime/level-set
+deployment switches, while primitive smoke tests additionally require the
+explicit primitive switch, so prerequisite targets pulled in by level-set or
+ray builds do not silently become test selections. SDK and dependency paths
+remain environment/cache supplied.
+
+| Gate | Result |
+|---|---|
+| Option surface | root parses `VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE`; all focused switches remain opt-in |
+| Registration | runtime, primitives, and level-set smoke tests use the same test-enable condition as ray/surface |
+| Compatibility | standalone `gpu/vulkan` defaults and existing target names are unchanged |
+| Validation | temporary CMake configure and target-graph checks are run outside the repository; no full build or CUDA path is required |
+| Residual gate | a dependency-complete root configure/CTest run remains a long-running follow-up; this slice does not fetch CPM/VTK dependencies |
+| Scope boundary | only CMake option/probe propagation, smoke test registration, and this status record changed |

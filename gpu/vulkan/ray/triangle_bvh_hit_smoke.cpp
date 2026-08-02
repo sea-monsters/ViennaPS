@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 #include "triangle_bvh_hit.hpp"
 
+#include <array>
 #include <bit>
 #include <cstdint>
 #include <iostream>
@@ -78,6 +79,92 @@ int main() {
     std::cerr << "cross-root tie selected wrong triangle\n";
     return 1;
   }
+  std::vector<std::array<float, 4>> originPacked;
+  std::vector<std::array<float, 4>> directionPacked;
+  for (const auto &ray : rays) {
+    originPacked.push_back(
+        {ray.origin[0], ray.origin[1], ray.origin[2], ray.tMin});
+    directionPacked.push_back(
+        {ray.direction[0], ray.direction[1], ray.direction[2], ray.tMax});
+  }
+  viennaps::vulkan::runtime::DeviceBuffer recordOrigins, recordDirections,
+      recordHits;
+  if (!recordOrigins.create(
+          session, originPacked.size() * sizeof(originPacked[0]), error) ||
+      !recordDirections.create(
+          session, directionPacked.size() * sizeof(directionPacked[0]),
+          error) ||
+      !recordHits.create(session, gpu.size() * sizeof(TriangleHit), error) ||
+      !recordOrigins.upload(session, originPacked.data(),
+                            originPacked.size() * sizeof(originPacked[0]), 0U,
+                            error) ||
+      !recordDirections.upload(
+          session, directionPacked.data(),
+          directionPacked.size() * sizeof(directionPacked[0]), 0U, error)) {
+    std::cerr << "record buffer setup failed: " << error << '\n';
+    return 1;
+  }
+  std::vector<TriangleHit> recordSentinel(rays.size(), sentinel);
+  if (!recordHits.upload(session, recordSentinel.data(),
+                         recordSentinel.size() * sizeof(TriangleHit), 0U,
+                         error)) {
+    std::cerr << "record sentinel upload failed: " << error << '\n';
+    return 1;
+  }
+  VkCommandBuffer recordCommand = VK_NULL_HANDLE;
+  viennaps::vulkan::runtime::Fence recordFence;
+  if (!session.commandContext().allocatePrimary(recordCommand, error) ||
+      !recordFence.create(session.device(), error)) {
+    std::cerr << "record command setup failed: " << error << '\n';
+    return 1;
+  }
+  if (primitive.recordDispatch(VK_NULL_HANDLE, recordOrigins, recordDirections,
+                               rays.size(), recordHits, rays.size(), error)) {
+    std::cerr << "invalid record unexpectedly succeeded\n";
+    return 1;
+  }
+  std::vector<TriangleHit> preserved(rays.size());
+  if (!recordHits.download(session, preserved.data(),
+                           preserved.size() * sizeof(TriangleHit), 0U, error)) {
+    std::cerr << "record sentinel download failed: " << error << '\n';
+    return 1;
+  }
+  for (const auto &hit : preserved)
+    if (!same(hit, sentinel)) {
+      std::cerr << "invalid record modified output sentinel\n";
+      return 1;
+    }
+  VkCommandBufferBeginInfo recordBegin{
+      VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+  recordBegin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  if (vkBeginCommandBuffer(recordCommand, &recordBegin) != VK_SUCCESS ||
+      !primitive.recordDispatch(recordCommand, recordOrigins, recordDirections,
+                                rays.size(), recordHits, rays.size(), error) ||
+      vkEndCommandBuffer(recordCommand) != VK_SUCCESS) {
+    std::cerr << "record dispatch failed: " << error << '\n';
+    return 1;
+  }
+  VkSubmitInfo recordSubmit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+  recordSubmit.commandBufferCount = 1U;
+  recordSubmit.pCommandBuffers = &recordCommand;
+  if (vkQueueSubmit(session.device().computeQueue(), 1U, &recordSubmit,
+                    recordFence.get()) != VK_SUCCESS ||
+      !recordFence.wait(10'000'000'000ULL, error)) {
+    std::cerr << "record submit failed: " << error << '\n';
+    return 1;
+  }
+  recordFence.reset();
+  std::vector<TriangleHit> recorded(rays.size());
+  if (!recordHits.download(session, recorded.data(),
+                           recorded.size() * sizeof(TriangleHit), 0U, error)) {
+    std::cerr << "record hit download failed: " << error << '\n';
+    return 1;
+  }
+  for (std::size_t i = 0; i < recorded.size(); ++i)
+    if (!same(cpu[i], recorded[i])) {
+      std::cerr << "record raw-bit mismatch at " << i << '\n';
+      return 1;
+    }
   std::vector<TriangleHit> shortOut(1U, sentinel);
   if (primitive.intersect(rays, shortOut, error) ||
       shortOut[0].triangleIndex != sentinel.triangleIndex) {

@@ -39,6 +39,14 @@ public:
   [[nodiscard]] bool intersect(std::span<const Ray> rays,
                                std::span<TriangleHit> output,
                                std::string &error);
+  // Records traversal into a caller-owned command buffer. Geometry must first
+  // be built; this method neither changes command-buffer lifecycle nor moves
+  // data between host and device.
+  [[nodiscard]] bool
+  recordDispatch(VkCommandBuffer commandBuffer, runtime::DeviceBuffer &origins,
+                 runtime::DeviceBuffer &directions, std::size_t rayCount,
+                 runtime::DeviceBuffer &hits, std::size_t outputCapacity,
+                 std::string &error);
   [[nodiscard]] const runtime::VulkanDevice &device() const;
 
 private:

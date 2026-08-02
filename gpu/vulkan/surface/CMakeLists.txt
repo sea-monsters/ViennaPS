@@ -122,7 +122,8 @@ target_compile_definitions(
 target_link_libraries(viennaps-vulkan-graph-diffusion-smoke
                       PRIVATE viennaps_vulkan_graph_diffusion Vulkan::Vulkan)
 
-if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
+   VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE)
   add_test(NAME viennaps-vulkan-graph-diffusion-smoke
            COMMAND viennaps-vulkan-graph-diffusion-smoke)
 endif()
@@ -141,7 +142,8 @@ target_compile_definitions(
 target_link_libraries(viennaps-vulkan-neutral-transport-surface-smoke
                       PRIVATE viennaps_vulkan_surface Vulkan::Vulkan)
 
-if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
+   VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE)
   add_test(NAME viennaps-vulkan-neutral-transport-surface-smoke
            COMMAND viennaps-vulkan-neutral-transport-surface-smoke)
 endif()

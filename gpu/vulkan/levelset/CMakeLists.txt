@@ -386,7 +386,8 @@ elseif(VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE)
           "top-level ViennaPS target; skipping standalone GPU build.")
 endif()
 
-if(BUILD_TESTING)
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
+   VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE)
   add_test(NAME viennaps-vulkan-levelset-update-smoke
            COMMAND viennaps-vulkan-levelset-update-smoke)
   add_test(NAME viennaps-vulkan-hrle-classification-smoke

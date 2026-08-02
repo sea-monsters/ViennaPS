@@ -96,7 +96,8 @@ if(VIENNAPS_BUILD_VULKAN_SMOKE OR VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE)
     target_compile_options(viennaps-deployment-hardware-fingerprint-smoke
                            PRIVATE -Wall -Wextra -Wpedantic -Werror)
   endif()
-  if(BUILD_TESTING)
+  if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
+     (VIENNAPS_BUILD_VULKAN_SMOKE OR VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE))
     add_test(NAME viennaps-deployment-hardware-fingerprint-smoke
              COMMAND viennaps-deployment-hardware-fingerprint-smoke)
   endif()
@@ -114,7 +115,8 @@ if(VIENNAPS_BUILD_VULKAN_SMOKE OR VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE)
     target_compile_options(viennaps-deployment-compute-context-smoke
                            PRIVATE -Wall -Wextra -Wpedantic -Werror)
   endif()
-  if(BUILD_TESTING)
+  if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
+     (VIENNAPS_BUILD_VULKAN_SMOKE OR VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE))
     add_test(NAME viennaps-deployment-compute-context-smoke
              COMMAND viennaps-deployment-compute-context-smoke)
   endif()
@@ -139,7 +141,7 @@ else()
   target_compile_options(viennaps-runtime-device-buffer-smoke
                          PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
-if(BUILD_TESTING)
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_SMOKE)
   add_test(NAME viennaps-runtime-device-buffer-smoke
            COMMAND viennaps-runtime-device-buffer-smoke)
 endif()
@@ -241,7 +243,7 @@ else()
                          PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
-if(BUILD_TESTING)
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_SMOKE)
   add_test(NAME viennaps-runtime-compute-smoke
            COMMAND viennaps-runtime-compute-smoke)
   add_test(NAME viennaps-runtime-compute-session-smoke

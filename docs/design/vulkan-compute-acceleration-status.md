@@ -2727,3 +2727,27 @@ reset/destruction.
 | Hardware acceptance | Root Visual Studio 2022 configuration using the local CPM cache built both bridge smoke targets; Intel Arc focused CTest passed 2/2 (`viennaps-vulkan-surface-diffusion-executor-smoke` in 0.29 s and `viennaps-vulkan-coverage-delta-executor-smoke` in 0.32 s). |
 | Standalone CMake note | The direct `gpu/vulkan` configuration hit an Embree FetchContent directory-removal failure before compilation; its exact temporary directory was removed. The accepted root configuration uses the project CPM cache and does not depend on that FetchContent path. |
 | Scope boundary | Only the two surface bridge headers/implementations, their smokes, and this record changed; no Process binding, shaders, numerical primitives, backend policy, CUDA, or dependency logic changed. |
+
+### PD1-B: cache-only Process surface binding facade
+
+- Status: implemented as a Vulkan-only deployment binding for FP32 coverage
+  convergence and surface diffusion; Level Set lifecycle remains separate
+- Date: 2026-08-03
+
+`ProcessDeploymentBinding<D>` consumes a resolved deployment decision,
+hardware fingerprint, stage workloads, manual selection, device options, and
+the two SPIR-V paths without reading profiles or probing hardware. It clears
+both existing Process callbacks before every reconfiguration, prepares one
+`DeploymentComputeContext`, and borrows exactly that context session for both
+bridges when coverage and surface diffusion select Vulkan. CPU-only selection
+uses no session. Automatic bridge/path failures degrade these two seams to CPU
+with an explicit diagnostic; manual and selection-plan failures remain
+fail-closed errors. A shared callback holder keeps the context and bridge state
+alive when a copied Process callback outlives the binding, with bridge teardown
+ordered before session teardown.
+
+| Gate | Result |
+|---|---|
+| Scope boundary | Only the surface binding facade, its smoke target, CMake registration, and this status entry are in scope; core Process APIs, Level Set, shaders, policy/profile schema, CUDA, and dependencies remain untouched. |
+| Hardware acceptance | A fresh root Visual Studio 2022 configuration with the local CPM cache and a temporary patched ViennaLS source built the binding smoke; Intel Arc focused CTest `viennaps-vulkan-process-deployment-binding-smoke` passed 1/1 in 0.34 s. Both exact temporary directories were removed after the run. |
+| Validation coverage | The binding smoke covers unsupported-stage rejection, manual mixed-profile fail-closed behavior, automatic empty-shader degradation, real profile/session binding, raw-bit coverage/surface executor checks, and callback retention after binding destruction. |

@@ -171,6 +171,31 @@ else()
                          PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
+add_executable(viennaps-vulkan-process-deployment-binding-smoke
+               process_deployment_binding_smoke.cpp)
+add_dependencies(viennaps-vulkan-process-deployment-binding-smoke
+                 viennaps-vulkan-graph-diffusion-spv
+                 viennaps-vulkan-coverage-delta-metric-spv)
+target_compile_features(viennaps-vulkan-process-deployment-binding-smoke
+                         PRIVATE cxx_std_20)
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH
+               "${VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV}")
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV_PATH
+               "${VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV}")
+target_compile_definitions(
+  viennaps-vulkan-process-deployment-binding-smoke PRIVATE
+  "VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH=\"${VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH}\""
+  "VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV_PATH=\"${VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-process-deployment-binding-smoke
+                      PRIVATE ViennaPS viennaps_vulkan_surface_diffusion
+                              viennaps_vulkan_coverage_delta_metric Vulkan::Vulkan)
+
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
+   VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE)
+  add_test(NAME viennaps-vulkan-process-deployment-binding-smoke
+           COMMAND viennaps-vulkan-process-deployment-binding-smoke)
+endif()
+
 string(REPLACE "\\" "/" VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH
                "${VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV}")
 add_executable(viennaps-vulkan-graph-diffusion-smoke

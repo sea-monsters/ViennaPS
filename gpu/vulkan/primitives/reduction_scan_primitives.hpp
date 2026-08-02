@@ -6,12 +6,14 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string>
 #include <string_view>
 
 #include <vulkan/vulkan.h>
 
+#include "../runtime/compute_session.hpp"
 #include "../runtime/vulkan_compute_runtime.hpp"
 
 namespace viennaps::vulkan::primitives {
@@ -39,14 +41,16 @@ struct ReductionScanOptions {
 class ReductionScanPrimitives {
 public:
   ReductionScanPrimitives() = default;
-  ~ReductionScanPrimitives() = default;
+  ~ReductionScanPrimitives();
 
   ReductionScanPrimitives(const ReductionScanPrimitives &) = delete;
   ReductionScanPrimitives &operator=(const ReductionScanPrimitives &) = delete;
-  ReductionScanPrimitives(ReductionScanPrimitives &&) = default;
-  ReductionScanPrimitives &operator=(ReductionScanPrimitives &&) = default;
+  ReductionScanPrimitives(ReductionScanPrimitives &&other) noexcept;
+  ReductionScanPrimitives &operator=(ReductionScanPrimitives &&other) noexcept;
 
   [[nodiscard]] bool initialize(std::string_view spirvPath, std::string &error);
+  [[nodiscard]] bool initialize(runtime::ComputeSession &session,
+                                std::string_view spirvPath, std::string &error);
   void reset();
   [[nodiscard]] bool isInitialized() const;
 
@@ -167,8 +171,6 @@ private:
                                       runtime::HostVisibleBuffer &output,
                                       std::string &error);
 
-  runtime::VulkanInstance instance_{};
-  runtime::VulkanDevice device_{};
   runtime::ShaderModule shaderModule_{};
   runtime::DescriptorSetLayout descriptorSetLayout_{};
   runtime::PipelineLayout pipelineLayout_{};
@@ -180,10 +182,11 @@ private:
   runtime::ComputePipeline compactFloatPipeline_{};
   runtime::ComputePipeline compactUInt32Pipeline_{};
   runtime::DescriptorPool descriptorPool_{};
-  runtime::CommandContext commandContext_{};
   runtime::Fence fence_{};
   runtime::HostVisibleBuffer dummyFloat_{};
   runtime::HostVisibleBuffer dummyInt_{};
+  std::unique_ptr<runtime::ComputeSession> ownedSession_{};
+  runtime::ComputeSession *activeSession_{nullptr};
   VkDescriptorSet descriptorSet_{VK_NULL_HANDLE};
   VkCommandBuffer commandBuffer_{VK_NULL_HANDLE};
 };

@@ -8,6 +8,7 @@
 #include <cstring>
 #include <limits>
 #include <sstream>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -46,34 +47,113 @@ constexpr std::string_view kPipelineEntryPoint{"main"};
 
 namespace viennaps::vulkan::primitives {
 
+ReductionScanPrimitives::~ReductionScanPrimitives() { reset(); }
+
+ReductionScanPrimitives::ReductionScanPrimitives(
+    ReductionScanPrimitives &&other) noexcept
+    : shaderModule_(std::move(other.shaderModule_)),
+      descriptorSetLayout_(std::move(other.descriptorSetLayout_)),
+      pipelineLayout_(std::move(other.pipelineLayout_)),
+      reducePipeline_(std::move(other.reducePipeline_)),
+      scanBlocksPipeline_(std::move(other.scanBlocksPipeline_)),
+      scanAddOffsetsPipeline_(std::move(other.scanAddOffsetsPipeline_)),
+      normalizeFlagsPipeline_(std::move(other.normalizeFlagsPipeline_)),
+      compactionCountPipeline_(std::move(other.compactionCountPipeline_)),
+      compactFloatPipeline_(std::move(other.compactFloatPipeline_)),
+      compactUInt32Pipeline_(std::move(other.compactUInt32Pipeline_)),
+      descriptorPool_(std::move(other.descriptorPool_)),
+      fence_(std::move(other.fence_)),
+      dummyFloat_(std::move(other.dummyFloat_)),
+      dummyInt_(std::move(other.dummyInt_)),
+      ownedSession_(std::move(other.ownedSession_)),
+      activeSession_(std::exchange(other.activeSession_, nullptr)),
+      descriptorSet_(std::exchange(other.descriptorSet_, VK_NULL_HANDLE)),
+      commandBuffer_(std::exchange(other.commandBuffer_, VK_NULL_HANDLE)) {}
+
+ReductionScanPrimitives &
+ReductionScanPrimitives::operator=(ReductionScanPrimitives &&other) noexcept {
+  if (this == &other) {
+    return *this;
+  }
+  reset();
+  shaderModule_ = std::move(other.shaderModule_);
+  descriptorSetLayout_ = std::move(other.descriptorSetLayout_);
+  pipelineLayout_ = std::move(other.pipelineLayout_);
+  reducePipeline_ = std::move(other.reducePipeline_);
+  scanBlocksPipeline_ = std::move(other.scanBlocksPipeline_);
+  scanAddOffsetsPipeline_ = std::move(other.scanAddOffsetsPipeline_);
+  normalizeFlagsPipeline_ = std::move(other.normalizeFlagsPipeline_);
+  compactionCountPipeline_ = std::move(other.compactionCountPipeline_);
+  compactFloatPipeline_ = std::move(other.compactFloatPipeline_);
+  compactUInt32Pipeline_ = std::move(other.compactUInt32Pipeline_);
+  descriptorPool_ = std::move(other.descriptorPool_);
+  fence_ = std::move(other.fence_);
+  dummyFloat_ = std::move(other.dummyFloat_);
+  dummyInt_ = std::move(other.dummyInt_);
+  ownedSession_ = std::move(other.ownedSession_);
+  activeSession_ = std::exchange(other.activeSession_, nullptr);
+  descriptorSet_ = std::exchange(other.descriptorSet_, VK_NULL_HANDLE);
+  commandBuffer_ = std::exchange(other.commandBuffer_, VK_NULL_HANDLE);
+  return *this;
+}
+
 bool ReductionScanPrimitives::initialize(const std::string_view spirvPath,
                                          std::string &error) {
+  error.clear();
   if (isInitialized()) {
     return true;
   }
   if (spirvPath.empty()) {
     return setError(error, "initialization", "SPIR-V path is empty");
   }
+  auto localSession = std::make_unique<runtime::ComputeSession>();
+  if (!localSession->initialize(error)) {
+    const std::string detail = error;
+    return setError(error, "initialization", detail);
+  }
+  if (!initialize(*localSession, spirvPath, error)) {
+    return false;
+  }
+  ownedSession_ = std::move(localSession);
+  return true;
+}
+
+bool ReductionScanPrimitives::initialize(runtime::ComputeSession &session,
+                                         const std::string_view spirvPath,
+                                         std::string &error) {
+  error.clear();
+  if (isInitialized()) {
+    if (activeSession_ == &session) {
+      return true;
+    }
+    return setError(
+        error, "initialization",
+        "reduction/scan primitives are already initialized with a different "
+        "session");
+  }
+  if (spirvPath.empty()) {
+    return setError(error, "initialization", "SPIR-V path is empty");
+  }
+  if (!session.isValid()) {
+    return setError(error, "initialization",
+                    "compute session is not initialized");
+  }
 
   reset();
+  ownedSession_.reset();
+  activeSession_ = &session;
   const auto fail = [this, &error]() {
     const std::string detail = error;
     reset();
     return setError(error, "initialization", detail);
   };
-
-  if (!instance_.create(error)) {
-    return fail();
-  }
-  runtime::ComputeDeviceSelection selection{};
-  if (!runtime::pickFirstComputeDevice(instance_.get(), selection, error) ||
-      !device_.create(selection, error) || !validateDeviceLimits(error)) {
+  if (!validateDeviceLimits(error)) {
     return fail();
   }
 
   runtime::SpirvProgram program{};
   if (!runtime::readSpirv(spirvPath, program, error) ||
-      !shaderModule_.create(device_, program, error)) {
+      !shaderModule_.create(session.device(), program, error)) {
     return fail();
   }
 
@@ -84,24 +164,23 @@ bool ReductionScanPrimitives::initialize(const std::string_view spirvPath,
     bindings[index].descriptorCount = 1u;
     bindings[index].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   }
-  if (!descriptorSetLayout_.create(device_, bindings, error)) {
+  if (!descriptorSetLayout_.create(session.device(), bindings, error)) {
     return fail();
   }
 
   const VkPushConstantRange pushRange{VK_SHADER_STAGE_COMPUTE_BIT, 0u,
                                       sizeof(PushConstants)};
-  if (!pipelineLayout_.create(device_, descriptorSetLayout_.get(),
+  if (!pipelineLayout_.create(session.device(), descriptorSetLayout_.get(),
                               std::span(&pushRange, 1u), error)) {
     return fail();
   }
 
-  if (!descriptorPool_.create(device_, 1u, 5u,
+  if (!descriptorPool_.create(session.device(), 1u, 5u,
                               VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, error) ||
       !descriptorPool_.allocate(descriptorSetLayout_.get(), descriptorSet_,
                                 error) ||
-      !commandContext_.create(device_, device_.computeQueueFamily(), error) ||
-      !commandContext_.allocatePrimary(commandBuffer_, error) ||
-      !fence_.create(device_, error)) {
+      !session.commandContext().allocatePrimary(commandBuffer_, error) ||
+      !fence_.create(session.device(), error)) {
     return fail();
   }
 
@@ -130,7 +209,13 @@ void ReductionScanPrimitives::reset() {
   dummyInt_.reset();
   dummyFloat_.reset();
   fence_.destroy();
-  commandContext_.reset();
+  if (commandBuffer_ != VK_NULL_HANDLE && activeSession_ != nullptr &&
+      activeSession_->device().get() != VK_NULL_HANDLE &&
+      activeSession_->commandContext().pool() != VK_NULL_HANDLE) {
+    vkFreeCommandBuffers(activeSession_->device().get(),
+                         activeSession_->commandContext().pool(), 1u,
+                         &commandBuffer_);
+  }
   descriptorPool_.reset();
   compactUInt32Pipeline_.reset();
   compactFloatPipeline_.reset();
@@ -142,14 +227,14 @@ void ReductionScanPrimitives::reset() {
   pipelineLayout_.reset();
   descriptorSetLayout_.reset();
   shaderModule_.reset();
-  device_.reset();
-  instance_.reset();
+  activeSession_ = nullptr;
+  ownedSession_.reset();
   descriptorSet_ = VK_NULL_HANDLE;
   commandBuffer_ = VK_NULL_HANDLE;
 }
 
 bool ReductionScanPrimitives::isInitialized() const {
-  return instance_.isValid() && device_.isValid() &&
+  return activeSession_ != nullptr && activeSession_->isValid() &&
          shaderModule_.get() != VK_NULL_HANDLE &&
          descriptorSetLayout_.get() != VK_NULL_HANDLE &&
          pipelineLayout_.get() != VK_NULL_HANDLE &&
@@ -163,7 +248,7 @@ bool ReductionScanPrimitives::isInitialized() const {
          descriptorPool_.get() != VK_NULL_HANDLE &&
          descriptorSet_ != VK_NULL_HANDLE && commandBuffer_ != VK_NULL_HANDLE &&
          fence_.get() != VK_NULL_HANDLE &&
-         commandContext_.pool() != VK_NULL_HANDLE;
+         activeSession_->commandContext().pool() != VK_NULL_HANDLE;
 }
 
 bool ReductionScanPrimitives::isReady(std::string &error) const {
@@ -175,7 +260,7 @@ bool ReductionScanPrimitives::isReady(std::string &error) const {
 }
 
 bool ReductionScanPrimitives::validateDeviceLimits(std::string &error) const {
-  const auto &limits = device_.selection().properties.limits;
+  const auto &limits = activeSession_->device().selection().properties.limits;
   if (kWorkgroupSize > limits.maxComputeWorkGroupInvocations ||
       kWorkgroupSize > limits.maxComputeWorkGroupSize[0]) {
     return setError(error, "device validation",
@@ -195,8 +280,8 @@ bool ReductionScanPrimitives::createPipeline(
   const VkSpecializationMapEntry entry{0u, 0u, sizeof(value)};
   const runtime::ComputePipelineOptions options{
       kPipelineEntryPoint, std::span(&entry, 1u), &value, sizeof(value)};
-  return pipeline.create(device_, shaderModule_, pipelineLayout_, options,
-                         error);
+  return pipeline.create(activeSession_->device(), shaderModule_,
+                         pipelineLayout_, options, error);
 }
 
 bool ReductionScanPrimitives::createBuffer(const std::size_t elementCount,
@@ -212,11 +297,14 @@ bool ReductionScanPrimitives::createBuffer(const std::size_t elementCount,
   }
   const auto allocatedCount = std::max<std::size_t>(1u, elementCount);
   const auto bytes = static_cast<VkDeviceSize>(allocatedCount * elementSize);
-  if (bytes > device_.selection().properties.limits.maxStorageBufferRange) {
+  if (bytes > activeSession_->device()
+                  .selection()
+                  .properties.limits.maxStorageBufferRange) {
     return setError(error, "buffer creation",
                     "requested size exceeds maxStorageBufferRange");
   }
-  return buffer.create(device_, bytes, kBufferUsage, kMemoryFlags, error);
+  return buffer.create(activeSession_->device(), bytes, kBufferUsage,
+                       kMemoryFlags, error);
 }
 
 bool ReductionScanPrimitives::createFloatBuffer(
@@ -238,12 +326,13 @@ bool ReductionScanPrimitives::validateFloatLength(
     return setError(error, "validation",
                     std::string(label) + " buffer is not initialized");
   }
-  if (buffer.ownerDevice() != device_.get()) {
+  if (buffer.ownerDevice() != activeSession_->device().get()) {
     return setError(error, "validation",
                     std::string(label) + " belongs to a different device");
   }
-  if (buffer.size() >
-      device_.selection().properties.limits.maxStorageBufferRange) {
+  if (buffer.size() > activeSession_->device()
+                          .selection()
+                          .properties.limits.maxStorageBufferRange) {
     return setError(error, "validation",
                     std::string(label) + " exceeds maxStorageBufferRange");
   }
@@ -262,12 +351,13 @@ bool ReductionScanPrimitives::validateIntLength(
     return setError(error, "validation",
                     std::string(label) + " buffer is not initialized");
   }
-  if (buffer.ownerDevice() != device_.get()) {
+  if (buffer.ownerDevice() != activeSession_->device().get()) {
     return setError(error, "validation",
                     std::string(label) + " belongs to a different device");
   }
-  if (buffer.size() >
-      device_.selection().properties.limits.maxStorageBufferRange) {
+  if (buffer.size() > activeSession_->device()
+                          .selection()
+                          .properties.limits.maxStorageBufferRange) {
     return setError(error, "validation",
                     std::string(label) + " exceeds maxStorageBufferRange");
   }
@@ -332,7 +422,7 @@ bool ReductionScanPrimitives::updateDescriptors(
     writes[index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[index].pBufferInfo = &infos[index];
   }
-  vkUpdateDescriptorSets(device_.get(),
+  vkUpdateDescriptorSets(activeSession_->device().get(),
                          static_cast<std::uint32_t>(writes.size()),
                          writes.data(), 0u, nullptr);
   return true;
@@ -349,8 +439,9 @@ bool ReductionScanPrimitives::dispatchKernel(
                ? setError(error, "dispatch", "workgroup count is zero")
                : false;
   }
-  const auto maxGroups =
-      device_.selection().properties.limits.maxComputeWorkGroupCount[0];
+  const auto maxGroups = activeSession_->device()
+                             .selection()
+                             .properties.limits.maxComputeWorkGroupCount[0];
   if (dispatchX > maxGroups ||
       dispatchX > std::numeric_limits<std::uint32_t>::max()) {
     return setError(error, "dispatch", "workgroup count exceeds device limit");
@@ -390,8 +481,8 @@ bool ReductionScanPrimitives::dispatchKernel(
   submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
   submit.commandBufferCount = 1u;
   submit.pCommandBuffers = &commandBuffer_;
-  if (vkQueueSubmit(device_.computeQueue(), 1u, &submit, fence_.get()) !=
-      VK_SUCCESS) {
+  if (vkQueueSubmit(activeSession_->device().computeQueue(), 1u, &submit,
+                    fence_.get()) != VK_SUCCESS) {
     return setError(error, "dispatch", "vkQueueSubmit failed");
   }
   if (!fence_.wait(10'000'000'000ULL, error)) {
@@ -813,7 +904,8 @@ bool ReductionScanPrimitives::stableCompactUInt32(
 }
 
 const runtime::VulkanDevice &ReductionScanPrimitives::device() const {
-  return device_;
+  static const runtime::VulkanDevice defaultDevice{};
+  return activeSession_ != nullptr ? activeSession_->device() : defaultDevice;
 }
 
 } // namespace viennaps::vulkan::primitives

@@ -152,9 +152,29 @@ int main() try {
       error));
 
   primitives::ReductionScanPrimitives compactionPrimitives;
-  VC_TEST_ASSERT(
-      compactionPrimitives.initialize(VIENNAPS_REDUCTION_SCAN_SPV_PATH, error));
+  VC_TEST_ASSERT(compactionPrimitives.initialize(
+      session, VIENNAPS_REDUCTION_SCAN_SPV_PATH, error));
+  VC_TEST_ASSERT(compactionPrimitives.device().get() == session.device().get());
   CompactResult vulkanResult;
+  VC_TEST_ASSERT(vkLevelSet::compactHrleRebuildDecisionsFp32(
+      compactionPrimitives, vulkanDecisions, vulkanResult, error));
+  VC_TEST_ASSERT(error.empty());
+  assertExactResult(vulkanResult, cpuResult);
+
+  runtime::ComputeSession differentSession;
+  VC_TEST_ASSERT(differentSession.initialize(error));
+  VC_TEST_ASSERT(!compactionPrimitives.initialize(
+      differentSession, VIENNAPS_REDUCTION_SCAN_SPV_PATH, error));
+  VC_TEST_ASSERT(!error.empty());
+  VC_TEST_ASSERT(compactionPrimitives.isInitialized());
+  VC_TEST_ASSERT(compactionPrimitives.device().get() == session.device().get());
+
+  compactionPrimitives.reset();
+  VC_TEST_ASSERT(session.isValid());
+
+  VC_TEST_ASSERT(compactionPrimitives.initialize(
+      session, VIENNAPS_REDUCTION_SCAN_SPV_PATH, error));
+  VC_TEST_ASSERT(compactionPrimitives.device().get() == session.device().get());
   VC_TEST_ASSERT(vkLevelSet::compactHrleRebuildDecisionsFp32(
       compactionPrimitives, vulkanDecisions, vulkanResult, error));
   VC_TEST_ASSERT(error.empty());

@@ -1051,13 +1051,61 @@ is wired and persisted.
 
 ## Next slice
 
-Refactor classification and compaction to share one selected compute session,
-keep their intermediate buffers device-resident, and add transactional sparse
-HRLE reconstruction. Then wire the complete path into the ViennaLS executor
-and deployment-time primitive suite. Direct negative/non-finite time injection
-also remains a defensive-branch coverage gap. The optional VTK-enabled
-install/export conflict should be isolated from the compute backend before
-packaging validation.
+## P4C1-HRLE-session-sharing: one selected Vulkan device
+
+- Status: accepted locally
+- Date: 2026-08-02
+- Scope: allow reduction, scan, and compaction primitives to borrow the same
+  deployment-selected `ComputeSession` used by HRLE classification
+
+`ReductionScanPrimitives` now has an external-session initialization overload.
+The original path remains compatible by creating and owning a private session,
+while the new path borrows the caller's device, queue, command pool, and
+capability selection. Reinitialization with the same session is idempotent;
+attempting to switch an initialized primitive to another session fails without
+invalidating its working state. Reset releases only the primitive-owned Vulkan
+objects and command buffer and does not reset a borrowed session.
+
+An explicit destructor and move implementation preserve the required teardown
+order for the standalone compatibility path: primitive resources are released
+before its privately owned device session. This also prevents a moved-from
+object from freeing the moved command buffer. For a borrowed session, the
+caller must keep the session object initialized and alive until the primitive
+has been reset or destroyed. The shared command context remains externally
+synchronized and the current production flow uses it serially.
+
+The real sphere compaction smoke initializes classification and compaction from
+one session, verifies their device handles are identical, rejects a different
+session, resets compaction without invalidating the shared session, then
+reinitializes and repeats the exact CPU/Vulkan comparison. The standalone
+reduction/scan and compaction production smokes also pass, preserving existing
+callers.
+
+This slice removes duplicate device selection but does not yet keep the
+classification-to-compaction arrays device-resident: the current adapter still
+reads classifications to host-visible vectors and uploads masks for compaction.
+No deployment profile schema or routing rule changes are needed for this
+lifetime refactor.
+
+| Gate | Result |
+|---|---|
+| Shared selection | classification and compaction use the same `VkDevice` from one session |
+| Borrowed lifetime | reset preserves the caller session; cross-session reinitialization is rejected |
+| Standalone compatibility | private-session initialization and destruction pass both production smokes |
+| Exact oracle | the 183-candidate, 68-defined sphere comparison remains bit exact |
+| Concurrency boundary | shared command pool is used serially and remains externally synchronized |
+| Residency boundary | intermediate classification and mask streams still cross host memory |
+| Path policy | SDK and dependency discovery remain environment/cache supplied; no resolved local path is tracked |
+
+## Next slice
+
+Accept and integrate transactional sparse HRLE reconstruction, then remove the
+classification-to-compaction host round trip with device-resident intermediate
+buffers. Wire the complete path into the ViennaLS executor and deployment-time
+primitive suite only after those gates pass. Direct negative/non-finite time
+injection also remains a defensive-branch coverage gap. The optional
+VTK-enabled install/export conflict should be isolated from the compute backend
+before packaging validation.
 
 After those production-seam gates, the Level Set work advances to HRLE
 sparse rebuild integration, followed by particle/ray and surface/oxidation

@@ -1,0 +1,31 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types : require
+
+layout(local_size_x = 64) in;
+
+struct TriangleHit { float t; uint triangleIndex; float u; float v; };
+struct RayRecord { uint rayId; uint surfaceId; uint weightBits; uint reserved; };
+
+layout(std430, binding = 0) readonly buffer Hits { TriangleHit hits[]; };
+layout(std430, binding = 1) readonly buffer Weights { uint weights[]; };
+layout(std430, binding = 2) buffer Flags { uint flags[]; };
+layout(std430, binding = 3) readonly buffer Offsets { uint offsets[]; };
+layout(std430, binding = 4) buffer Records { RayRecord records[]; };
+
+layout(push_constant) uniform Params { uint rayCount; uint surfaceDomain; uint mode; } params;
+
+void main() {
+  uint id = gl_GlobalInvocationID.x;
+  if (id >= params.rayCount) return;
+  if (params.mode == 0u) {
+    uint surface = hits[id].triangleIndex;
+    flags[id] = (surface != 0xffffffffu && surface < params.surfaceDomain) ? 1u : 0u;
+    return;
+  }
+  if (flags[id] == 0u) return;
+  uint dst = offsets[id];
+  records[dst].rayId = id;
+  records[dst].surfaceId = hits[id].triangleIndex;
+  records[dst].weightBits = weights[id];
+  records[dst].reserved = 0u;
+}

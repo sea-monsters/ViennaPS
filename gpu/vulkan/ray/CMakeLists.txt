@@ -339,3 +339,77 @@ if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
   add_test(NAME viennaps-vulkan-triangle-hit-device-smoke
            COMMAND viennaps-vulkan-triangle-hit-device-smoke)
 endif()
+
+set(VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/ray_record_compaction.comp")
+set(VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/ray_record_compaction.comp.spv")
+if("${VIENNAPS_VULKAN_RAY_SHADER_COMPILER}" MATCHES ".*glslangValidator.*")
+  add_custom_command(OUTPUT ${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV}
+    COMMAND ${VIENNAPS_VULKAN_RAY_SHADER_COMPILER} -V
+            ${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SHADER} -o
+            ${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV}
+    DEPENDS ${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+else()
+  add_custom_command(OUTPUT ${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV}
+    COMMAND ${VIENNAPS_VULKAN_RAY_SHADER_COMPILER} -o
+            ${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV}
+            ${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SHADER}
+    DEPENDS ${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+endif()
+find_program(VIENNAPS_VULKAN_SPIRV_VAL NAMES spirv-val)
+if(VIENNAPS_VULKAN_SPIRV_VAL)
+  add_custom_command(OUTPUT ${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV}.validated
+    COMMAND ${VIENNAPS_VULKAN_SPIRV_VAL} ${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV}
+    COMMAND ${CMAKE_COMMAND} -E touch ${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV}.validated
+    DEPENDS ${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV})
+  add_custom_target(viennaps-vulkan-ray-record-compaction-spv
+                    DEPENDS ${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV}.validated)
+else()
+  add_custom_target(viennaps-vulkan-ray-record-compaction-spv
+                    DEPENDS ${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV})
+endif()
+get_target_property(VIENNAPS_VULKAN_REDUCTION_SCAN_SPV
+                    viennaps_vulkan_reduction_scan_primitives
+                    VIENNAPS_REDUCTION_SCAN_SPV)
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV_PATH
+               "${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV}")
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_RAY_RECORD_REDUCTION_SCAN_SPV_PATH
+               "${VIENNAPS_VULKAN_REDUCTION_SCAN_SPV}")
+add_library(viennaps_vulkan_ray_record_compaction ray_record_compaction.cpp)
+add_dependencies(viennaps_vulkan_ray_record_compaction
+                 viennaps-vulkan-ray-record-compaction-spv
+                 viennaps-vulkan-reduction-scan-smoke-spv)
+target_link_libraries(viennaps_vulkan_ray_record_compaction PUBLIC
+                      viennaps_vulkan_compute_runtime
+                      viennaps_vulkan_reduction_scan_primitives Vulkan::Vulkan)
+target_include_directories(viennaps_vulkan_ray_record_compaction PUBLIC
+                           "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(viennaps_vulkan_ray_record_compaction PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps_vulkan_ray_record_compaction PRIVATE /W4 /WX)
+else()
+  target_compile_options(viennaps_vulkan_ray_record_compaction PRIVATE
+                         -Wall -Wextra -Wpedantic -Werror)
+endif()
+add_executable(viennaps-vulkan-ray-record-compaction-smoke
+               ray_record_compaction_smoke.cpp)
+add_dependencies(viennaps-vulkan-ray-record-compaction-smoke
+                 viennaps-vulkan-ray-record-compaction-spv
+                 viennaps-vulkan-triangle-hit-device-spv
+                 viennaps-vulkan-reduction-scan-smoke-spv)
+target_compile_features(viennaps-vulkan-ray-record-compaction-smoke PRIVATE cxx_std_20)
+target_compile_definitions(viennaps-vulkan-ray-record-compaction-smoke PRIVATE
+  "VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV_PATH}\""
+  "VIENNAPS_VULKAN_REDUCTION_SCAN_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_REDUCTION_SCAN_SPV_PATH}\""
+  "VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-ray-record-compaction-smoke PRIVATE
+                      viennaps_vulkan_ray_record_compaction
+                      viennaps_vulkan_triangle_hit_device
+                      viennaps_vulkan_ray_hit_batch Vulkan::Vulkan)
+if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+  add_test(NAME viennaps-vulkan-ray-record-compaction-smoke
+           COMMAND viennaps-vulkan-ray-record-compaction-smoke)
+endif()

@@ -1825,6 +1825,30 @@ back results nor runs a CPU fallback.
 | Build and test | MSVC builds `viennaps-vulkan-triangle-hit-device-smoke`; direct Intel Arc execution prints `triangle hit device Vulkan dispatch PASS` and focused CTest passes 1/1 |
 | Scope boundary | this is intersection only: it does not compact hits, sort records, reduce flux, maintain a BVH, perform a per-call CPU integrity check, or route particle/process work |
 
+### P5-JA: stable device-resident ray-record compaction
+
+- Status: accepted locally as the first scalable ray-flux data stage; no
+  production Process route
+- Date: 2026-08-02
+
+`DeviceRayRecordCompactor` receives the `DeviceTriangleHitPrimitive` output
+and a device-resident weight-word buffer, then runs a GPU flags pass, the
+existing `ReductionScanPrimitives` DeviceBuffer exclusive scan/count writer,
+and a stable GPU scatter. It produces the 16-byte std430-compatible
+`RayRecord { rayId, surfaceId, weightBits, reserved }` layout, retaining the
+input order of accepted rays. Weight data is declared as `uint` in the shader
+and copied directly into `weightBits`; this deliberately has no floating-point
+arithmetic, so a singleton negative zero cannot be canonicalized.
+
+| Gate | Result |
+|---|---|
+| Exact GPU work | a real P5-I hit DeviceBuffer feeds flags -> device scan/count -> scatter without intermediate host readback; after final download, records and `weightBits` (including `-0`) match the CPU `compactCpu` oracle exactly |
+| Device contract | the primitive supports owned/external `ComputeSession`; nonempty input/output buffers must be valid, non-aliased, sized, and owned by the active device and session generation; a post-scatter compute/transfer visibility barrier makes records available to the next device stage |
+| Capacity and transaction | because P5-JA does not read the device count back, it conservatively requires `outputCapacity >= rayCount` before the first dispatch; invalid capacity, input/output alias, foreign session, zero surface domain, and `N=0` leave caller record sentinels unchanged |
+| Numeric and shader gate | generated SPIR-V passes `spirv-val`; it exposes a uint weight/record interface and contains no FP arithmetic or `NoContraction` requirement |
+| Build and test | MSVC builds `viennaps-vulkan-ray-record-compaction-smoke`; direct Intel Arc execution prints `ray record compaction Vulkan dispatch PASS` and focused CTest passes 1/1 |
+| Scope boundary | scan/count and scatter are currently ordered through multiple submissions from the reusable scan primitive, rather than P5-J's final one-command submission; no device radix sort, segment reduction, exact dynamic capacity admission, BVH, particle transport, or Process route is included |
+
 ## Next slice
 
 The segmented rebuild adapter is installed by the level-set controller, the
@@ -1834,17 +1858,17 @@ RK2/RK3 remain deliberately CPU-only until a multi-stage device state machine
 is proven. The first surface velocity formula is now exact but intentionally
 unwired to process selection. Direct negative/non-finite time injection and
 the optional VTK-enabled install/export conflict remain validation gaps. The
-next ray slice is P5-J: a GPU-only pipeline over P5-I hit buffers. It will
-create stable `RayRecord` values containing `rayId`, `surfaceId`, and
-`weightBits`, compact them with a device scan, then stably radix-sort by
-`rayId` and `surfaceId` before segment reduction. The reduction must seed from
-the first `weightBits` value rather than `+0`, so singleton negative zero and
-all accepted CPU FP32 ordering remain exact. Histogram, prefix, ping-pong,
-segment, and count scratch buffers must stay device-resident in one ordered
-submission; current HostVisible radix helpers cannot be reused. CPU
-differential checking will be an explicit validation gate, not a production
-per-call guard. Coverage reaction is a capability-gated FP64 candidate,
-without weakening the current fail-closed gate.
+the next ray slice is P5-JB: stable device-resident radix sorting of P5-JA
+`RayRecord` values by `rayId` and then `surfaceId`. It must use device-local
+histogram, prefix, ping-pong, and count scratch storage; the existing
+HostVisible radix helpers cannot be reused. P5-JC will construct surface
+segments and reduce each segment in sorted ray order, seeding from the first
+`weightBits` value rather than `+0`, so singleton negative zero and all
+accepted CPU FP32 ordering remain exact. The final P5-J composition must
+replace P5-JA's multiple submissions with one ordered command submission.
+CPU differential checking remains an explicit validation gate, not a
+production per-call guard. Coverage reaction is a capability-gated FP64
+candidate, without weakening the current fail-closed gate.
 
 After those production-seam gates, the Level Set work advances to HRLE
 sparse rebuild integration, followed by particle/ray and surface/oxidation

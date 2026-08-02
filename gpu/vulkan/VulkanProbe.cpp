@@ -14,14 +14,31 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <utility>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <csignal>
+#include <fcntl.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 #include <compute/probeProfileAdapter.hpp>
 
@@ -45,6 +62,724 @@
 
 namespace {
 
+[[nodiscard]] std::string escapeJson(std::string_view input);
+
+struct StrictFp32SmokeResult {
+  viennaps::compute::VulkanFp32NumericalSmokeEvidence evidence{};
+  std::string json;
+  std::string deviceUuid;
+};
+
+[[nodiscard]] std::string strictFp32EvidenceJson(
+    const viennaps::compute::VulkanFp32NumericalSmokeEvidence &evidence,
+    const std::string_view deviceUuid = {}) {
+  const auto status = [&] {
+    switch (evidence.status) {
+    case viennaps::compute::VulkanNumericalSmokeStatus::PASS:
+      return "PASS";
+    case viennaps::compute::VulkanNumericalSmokeStatus::FAIL:
+      return "FAIL";
+    case viennaps::compute::VulkanNumericalSmokeStatus::NOT_RUN:
+    default:
+      return "NOT_RUN";
+    }
+  }();
+  return std::string("{\"status\":\"") + status + "\",\"contractId\":\"" +
+         escapeJson(evidence.contractId) +
+         "\",\"caseCount\":" + std::to_string(evidence.caseCount) +
+         ",\"mismatchCount\":" + std::to_string(evidence.mismatchCount) +
+         ",\"maxUlp\":" + std::to_string(evidence.maxUlp) +
+         ",\"watchdogMs\":" + std::to_string(evidence.watchdogMs) +
+         ",\"elapsedMs\":" + std::to_string(evidence.elapsedMs) +
+         ",\"failureDiagnostic\":\"" + escapeJson(evidence.failureDiagnostic) +
+         "\",\"deviceUuid\":\"" + escapeJson(deviceUuid) + "\"}";
+}
+
+[[nodiscard]] StrictFp32SmokeResult
+makeStrictFp32Result(const viennaps::compute::VulkanNumericalSmokeStatus status,
+                     std::string diagnostic, const std::uint32_t cases = 0U,
+                     const std::uint32_t mismatches = 0U,
+                     const std::uint32_t maxUlp = 0U,
+                     const std::uint64_t elapsed = 0ULL) {
+  StrictFp32SmokeResult result;
+  result.evidence.status = status;
+  result.evidence.contractId =
+      std::string(viennaps::compute::kVulkanFp32NumericalSmokeContract);
+  result.evidence.caseCount = cases;
+  result.evidence.mismatchCount = mismatches;
+  result.evidence.maxUlp = maxUlp;
+  result.evidence.watchdogMs =
+      viennaps::compute::kVulkanFp32NumericalSmokeWatchdogMs;
+  result.evidence.elapsedMs = elapsed;
+  result.evidence.failureDiagnostic = std::move(diagnostic);
+  result.json = strictFp32EvidenceJson(result.evidence);
+  return result;
+}
+
+[[nodiscard]] bool writeStrictFp32Result(
+    const std::string &path,
+    const viennaps::compute::VulkanFp32NumericalSmokeEvidence &evidence,
+    const std::string_view deviceUuid = {}) {
+  if (path.empty())
+    return false;
+  const auto payload = strictFp32EvidenceJson(evidence, deviceUuid) + "\n";
+#if defined(_WIN32)
+  if (payload.size() > std::numeric_limits<DWORD>::max())
+    return false;
+  const auto outputPath = std::filesystem::path(path).wstring();
+  const auto handle =
+      CreateFileW(outputPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                  FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_WRITE_THROUGH, nullptr);
+  if (handle == INVALID_HANDLE_VALUE)
+    return false;
+  DWORD written = 0U;
+  const auto completed =
+      WriteFile(handle, payload.data(), static_cast<DWORD>(payload.size()),
+                &written, nullptr) != FALSE &&
+      written == payload.size();
+  CloseHandle(handle);
+  if (!completed)
+    DeleteFileW(outputPath.c_str());
+  return completed;
+#else
+  const auto descriptor =
+      open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW,
+           S_IRUSR | S_IWUSR);
+  if (descriptor < 0)
+    return false;
+  std::size_t offset = 0U;
+  bool completed = true;
+  while (offset < payload.size()) {
+    const auto written =
+        write(descriptor, payload.data() + offset, payload.size() - offset);
+    if (written <= 0) {
+      completed = false;
+      break;
+    }
+    offset += static_cast<std::size_t>(written);
+  }
+  close(descriptor);
+  if (!completed)
+    unlink(path.c_str());
+  return completed;
+#endif
+}
+
+[[nodiscard]] StrictFp32SmokeResult
+runStrictFp32Child(const bool forceFailure,
+                   const std::uint32_t requestedDeviceIndex = 0U) {
+  const auto start = std::chrono::steady_clock::now();
+#if !defined(VIENNAPS_VULKAN_ENABLED) ||                                       \
+    !defined(VIENNAPS_VULKAN_FP32_BASELINE_SPV_PATH)
+  (void)requestedDeviceIndex;
+#endif
+  if (forceFailure) {
+    return makeStrictFp32Result(
+        viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+        "forced strict-FP32 child failure", 2U, 1U, 1U);
+  }
+  // These CPU cases are deliberately ordered and bitwise, including signed
+  // zero. They guard the oracle independently of device advertised features.
+  std::uint32_t cpuMismatches = 0U;
+#if defined(VIENNAPS_VULKAN_ENABLED) &&                                        \
+    defined(VIENNAPS_VULKAN_FP32_BASELINE_SPV_PATH)
+  std::uint32_t deviceMismatches = 0U;
+  std::ostringstream deviceDiagnostic;
+#endif
+  const float negativeZero = std::bit_cast<float>(0x80000000U);
+  if (std::bit_cast<std::uint32_t>(negativeZero) != 0x80000000U)
+    ++cpuMismatches;
+  volatile float left = 1.0e20F;
+  volatile float middle = -1.0e20F;
+  volatile float right = 3.0F;
+  const float ordered = (left + middle) + right;
+  const float orderedExpected = 3.0F;
+  if (std::bit_cast<std::uint32_t>(ordered) !=
+      std::bit_cast<std::uint32_t>(orderedExpected))
+    ++cpuMismatches;
+
+  std::string selectedUuid;
+#if defined(VIENNAPS_VULKAN_ENABLED) &&                                        \
+    defined(VIENNAPS_VULKAN_FP32_BASELINE_SPV_PATH)
+  // Dispatch the dedicated non-experimental FP32 numerical contract and
+  // compare every returned FP32 word with the host oracle.
+  auto readSpirv = [](const char *path) {
+    std::ifstream input(path, std::ios::binary | std::ios::ate);
+    if (!input.good())
+      return std::vector<std::uint32_t>{};
+    const auto size = input.tellg();
+    if (size <= 0 ||
+        size % static_cast<std::streamoff>(sizeof(std::uint32_t)) != 0)
+      return std::vector<std::uint32_t>{};
+    std::vector<std::uint32_t> code(static_cast<std::size_t>(size) /
+                                    sizeof(std::uint32_t));
+    input.seekg(0);
+    input.read(reinterpret_cast<char *>(code.data()),
+               static_cast<std::streamsize>(size));
+    return input.good() ? code : std::vector<std::uint32_t>{};
+  };
+  const auto spirv = readSpirv(VIENNAPS_VULKAN_FP32_BASELINE_SPV_PATH);
+  if (spirv.empty())
+    return makeStrictFp32Result(
+        viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+        "strict FP32 SPIR-V artifact unavailable", 18U, 1U, 1U);
+  VkApplicationInfo appInfo{};
+  appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+  appInfo.pApplicationName = "ViennaPS strict FP32 numerical smoke";
+  appInfo.apiVersion = VK_API_VERSION_1_2;
+  VkInstanceCreateInfo instanceInfo{};
+  instanceInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+  instanceInfo.pApplicationInfo = &appInfo;
+  VkInstance instance = VK_NULL_HANDLE;
+  if (vkCreateInstance(&instanceInfo, nullptr, &instance) != VK_SUCCESS)
+    return makeStrictFp32Result(
+        viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+        "vkCreateInstance failed", 2U, 1U, 1U);
+  std::uint32_t deviceCount = 0U;
+  if (vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr) !=
+          VK_SUCCESS ||
+      deviceCount == 0U) {
+    vkDestroyInstance(instance, nullptr);
+    return makeStrictFp32Result(
+        viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+        "no Vulkan physical device found", 2U, 1U, 1U);
+  }
+  std::vector<VkPhysicalDevice> devices(deviceCount);
+  if (vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data()) !=
+          VK_SUCCESS ||
+      deviceCount == 0U) {
+    vkDestroyInstance(instance, nullptr);
+    return makeStrictFp32Result(
+        viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+        "Vulkan physical-device enumeration changed during strict smoke", 18U,
+        1U, 1U);
+  }
+  devices.resize(deviceCount);
+  VkPhysicalDevice physical = VK_NULL_HANDLE;
+  std::uint32_t queueFamily = 0U;
+  if (requestedDeviceIndex >= devices.size()) {
+    vkDestroyInstance(instance, nullptr);
+    return makeStrictFp32Result(
+        viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+        "requested Vulkan device index is unavailable", 18U, 1U, 1U);
+  }
+  for (std::uint32_t deviceIndex = 0U; deviceIndex < devices.size();
+       ++deviceIndex) {
+    if (deviceIndex != requestedDeviceIndex)
+      continue;
+    const auto candidate = devices[deviceIndex];
+    std::uint32_t count = 0U;
+    vkGetPhysicalDeviceQueueFamilyProperties(candidate, &count, nullptr);
+    std::vector<VkQueueFamilyProperties> queues(count);
+    vkGetPhysicalDeviceQueueFamilyProperties(candidate, &count, queues.data());
+    for (std::uint32_t i = 0U; i < count; ++i) {
+      if ((queues[i].queueFlags & VK_QUEUE_COMPUTE_BIT) != 0U) {
+        physical = candidate;
+        queueFamily = i;
+        break;
+      }
+    }
+    if (physical != VK_NULL_HANDLE)
+      break;
+  }
+  if (physical == VK_NULL_HANDLE) {
+    vkDestroyInstance(instance, nullptr);
+    return makeStrictFp32Result(
+        viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+        "no compute queue available", 18U, 1U, 1U);
+  }
+  {
+    VkPhysicalDeviceProperties2 properties2{};
+    VkPhysicalDeviceIDProperties idProperties{};
+    properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    idProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+    properties2.pNext = &idProperties;
+    vkGetPhysicalDeviceProperties2(physical, &properties2);
+    std::ostringstream uuid;
+    uuid << std::hex << std::setfill('0');
+    for (const auto byte : idProperties.deviceUUID)
+      uuid << std::setw(2) << static_cast<unsigned>(byte);
+    selectedUuid = uuid.str();
+  }
+  float priority = 1.0F;
+  VkDeviceQueueCreateInfo queueInfo{};
+  queueInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+  queueInfo.queueFamilyIndex = queueFamily;
+  queueInfo.queueCount = 1U;
+  queueInfo.pQueuePriorities = &priority;
+  VkDeviceCreateInfo deviceInfo{};
+  deviceInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+  deviceInfo.queueCreateInfoCount = 1U;
+  deviceInfo.pQueueCreateInfos = &queueInfo;
+  VkDevice device = VK_NULL_HANDLE;
+  if (vkCreateDevice(physical, &deviceInfo, nullptr, &device) != VK_SUCCESS) {
+    vkDestroyInstance(instance, nullptr);
+    return makeStrictFp32Result(
+        viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+        "vkCreateDevice failed", 18U, 1U, 1U);
+  }
+  VkQueue queue = VK_NULL_HANDLE;
+  vkGetDeviceQueue(device, queueFamily, 0U, &queue);
+  VkPhysicalDeviceMemoryProperties memories{};
+  vkGetPhysicalDeviceMemoryProperties(physical, &memories);
+  const auto memoryType = [&](const VkMemoryRequirements &requirements) {
+    for (std::uint32_t i = 0U; i < memories.memoryTypeCount; ++i)
+      if ((requirements.memoryTypeBits & (1U << i)) != 0U &&
+          (memories.memoryTypes[i].propertyFlags &
+           (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) ==
+              (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+               VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))
+        return i;
+    return std::numeric_limits<std::uint32_t>::max();
+  };
+  constexpr std::size_t kCount = 16U;
+  std::array<float, kCount> input{};
+  std::array<float, kCount> expected{};
+  std::array<std::uint32_t, kCount> output{};
+  input[0] = std::bit_cast<float>(0x80000000U);
+  input[1] = 1.0e20F;
+  input[2] = -1.0e20F;
+  input[3] = 3.0F;
+  for (std::size_t i = 4U; i < kCount; ++i)
+    input[i] = static_cast<float>(i) - 4.0F;
+  expected[0] = input[0];
+  expected[1] = (input[1] + input[2]) + input[3];
+  for (std::size_t i = 2U; i < kCount; ++i)
+    expected[i] = input[i] * 2.0F + 1.0F;
+  VkBuffer inputBuffer = VK_NULL_HANDLE, outputBuffer = VK_NULL_HANDLE;
+  VkDeviceMemory inputMemory = VK_NULL_HANDLE, outputMemory = VK_NULL_HANDLE;
+  VkShaderModule shader = VK_NULL_HANDLE;
+  VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
+  VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+  VkPipeline pipeline = VK_NULL_HANDLE;
+  VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
+  VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+  VkCommandPool commandPool = VK_NULL_HANDLE;
+  VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+  VkFence fence = VK_NULL_HANDLE;
+  auto cleanup = [&] {
+    if (device != VK_NULL_HANDLE)
+      vkDeviceWaitIdle(device);
+    if (fence != VK_NULL_HANDLE)
+      vkDestroyFence(device, fence, nullptr);
+    if (commandPool != VK_NULL_HANDLE)
+      vkDestroyCommandPool(device, commandPool, nullptr);
+    if (descriptorPool != VK_NULL_HANDLE)
+      vkDestroyDescriptorPool(device, descriptorPool, nullptr);
+    if (pipeline != VK_NULL_HANDLE)
+      vkDestroyPipeline(device, pipeline, nullptr);
+    if (pipelineLayout != VK_NULL_HANDLE)
+      vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+    if (setLayout != VK_NULL_HANDLE)
+      vkDestroyDescriptorSetLayout(device, setLayout, nullptr);
+    if (shader != VK_NULL_HANDLE)
+      vkDestroyShaderModule(device, shader, nullptr);
+    if (inputBuffer != VK_NULL_HANDLE)
+      vkDestroyBuffer(device, inputBuffer, nullptr);
+    if (outputBuffer != VK_NULL_HANDLE)
+      vkDestroyBuffer(device, outputBuffer, nullptr);
+    if (inputMemory != VK_NULL_HANDLE)
+      vkFreeMemory(device, inputMemory, nullptr);
+    if (outputMemory != VK_NULL_HANDLE)
+      vkFreeMemory(device, outputMemory, nullptr);
+    if (device != VK_NULL_HANDLE)
+      vkDestroyDevice(device, nullptr);
+    if (instance != VK_NULL_HANDLE)
+      vkDestroyInstance(instance, nullptr);
+  };
+  auto makeBuffer = [&](VkBufferUsageFlags usage, VkBuffer &buffer,
+                        VkDeviceMemory &memory) {
+    VkBufferCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    info.size = sizeof(input);
+    info.usage = usage;
+    info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(device, &info, nullptr, &buffer) != VK_SUCCESS)
+      return false;
+    VkMemoryRequirements requirements{};
+    vkGetBufferMemoryRequirements(device, buffer, &requirements);
+    const auto type = memoryType(requirements);
+    if (type == std::numeric_limits<std::uint32_t>::max())
+      return false;
+    VkMemoryAllocateInfo allocation{};
+    allocation.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocation.allocationSize = requirements.size;
+    allocation.memoryTypeIndex = type;
+    if (vkAllocateMemory(device, &allocation, nullptr, &memory) != VK_SUCCESS)
+      return false;
+    return vkBindBufferMemory(device, buffer, memory, 0U) == VK_SUCCESS;
+  };
+  if (!makeBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, inputBuffer,
+                  inputMemory) ||
+      !makeBuffer(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, outputBuffer,
+                  outputMemory)) {
+    cleanup();
+    return makeStrictFp32Result(
+        viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+        "baseline buffer allocation failed", 18U, 1U, 1U);
+  }
+  void *inputPtr = nullptr;
+  void *outputPtr = nullptr;
+  if (vkMapMemory(device, inputMemory, 0U, sizeof(input), 0U, &inputPtr) !=
+          VK_SUCCESS ||
+      vkMapMemory(device, outputMemory, 0U, sizeof(output), 0U, &outputPtr) !=
+          VK_SUCCESS) {
+    cleanup();
+    return makeStrictFp32Result(
+        viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+        "baseline memory map failed", 18U, 1U, 1U);
+  }
+  std::memcpy(inputPtr, input.data(), sizeof(input));
+  std::memset(outputPtr, 0, sizeof(output));
+  vkUnmapMemory(device, inputMemory);
+  vkUnmapMemory(device, outputMemory);
+  VkShaderModuleCreateInfo shaderInfo{};
+  shaderInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+  shaderInfo.codeSize = spirv.size() * sizeof(std::uint32_t);
+  shaderInfo.pCode = spirv.data();
+  if (vkCreateShaderModule(device, &shaderInfo, nullptr, &shader) !=
+      VK_SUCCESS) {
+    cleanup();
+    return makeStrictFp32Result(
+        viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+        "baseline shader module creation failed", 18U, 1U, 1U);
+  }
+  VkDescriptorSetLayoutBinding bindings[2]{};
+  for (std::uint32_t i = 0U; i < 2U; ++i) {
+    bindings[i].binding = i;
+    bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    bindings[i].descriptorCount = 1U;
+    bindings[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+  }
+  VkDescriptorSetLayoutCreateInfo layoutInfo{};
+  layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+  layoutInfo.bindingCount = 2U;
+  layoutInfo.pBindings = bindings;
+  if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &setLayout) !=
+      VK_SUCCESS) {
+    cleanup();
+    return makeStrictFp32Result(
+        viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+        "baseline descriptor layout failed", 18U, 1U, 1U);
+  }
+  VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+  pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+  pipelineLayoutInfo.setLayoutCount = 1U;
+  pipelineLayoutInfo.pSetLayouts = &setLayout;
+  if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr,
+                             &pipelineLayout) != VK_SUCCESS) {
+    cleanup();
+    return makeStrictFp32Result(
+        viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+        "baseline pipeline layout failed", 18U, 1U, 1U);
+  }
+  VkPipelineShaderStageCreateInfo stage{};
+  stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+  stage.module = shader;
+  stage.pName = "main";
+  VkComputePipelineCreateInfo pipelineInfo{};
+  pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+  pipelineInfo.stage = stage;
+  pipelineInfo.layout = pipelineLayout;
+  if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1U, &pipelineInfo,
+                               nullptr, &pipeline) != VK_SUCCESS) {
+    cleanup();
+    return makeStrictFp32Result(
+        viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+        "baseline compute pipeline failed", 18U, 1U, 1U);
+  }
+  VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2U};
+  VkDescriptorPoolCreateInfo poolInfo{};
+  poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+  poolInfo.poolSizeCount = 1U;
+  poolInfo.pPoolSizes = &poolSize;
+  poolInfo.maxSets = 1U;
+  if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) !=
+      VK_SUCCESS) {
+    cleanup();
+    return makeStrictFp32Result(
+        viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+        "baseline descriptor pool failed", 18U, 1U, 1U);
+  }
+  VkDescriptorSetAllocateInfo setAlloc{};
+  setAlloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+  setAlloc.descriptorPool = descriptorPool;
+  setAlloc.descriptorSetCount = 1U;
+  setAlloc.pSetLayouts = &setLayout;
+  if (vkAllocateDescriptorSets(device, &setAlloc, &descriptorSet) !=
+      VK_SUCCESS) {
+    cleanup();
+    return makeStrictFp32Result(
+        viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+        "baseline descriptor allocation failed", 18U, 1U, 1U);
+  }
+  VkDescriptorBufferInfo inInfo{inputBuffer, 0U, sizeof(input)};
+  VkDescriptorBufferInfo outInfo{outputBuffer, 0U, sizeof(output)};
+  VkWriteDescriptorSet writes[2]{};
+  for (std::uint32_t i = 0U; i < 2U; ++i) {
+    writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[i].dstSet = descriptorSet;
+    writes[i].dstBinding = i;
+    writes[i].descriptorCount = 1U;
+    writes[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[i].pBufferInfo = i == 0U ? &inInfo : &outInfo;
+  }
+  vkUpdateDescriptorSets(device, 2U, writes, 0U, nullptr);
+  VkCommandPoolCreateInfo commandPoolInfo{};
+  commandPoolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+  commandPoolInfo.queueFamilyIndex = queueFamily;
+  if (vkCreateCommandPool(device, &commandPoolInfo, nullptr, &commandPool) !=
+      VK_SUCCESS) {
+    cleanup();
+    return makeStrictFp32Result(
+        viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+        "baseline command pool failed", 18U, 1U, 1U);
+  }
+  VkCommandBufferAllocateInfo commandAlloc{};
+  commandAlloc.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+  commandAlloc.commandPool = commandPool;
+  commandAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  commandAlloc.commandBufferCount = 1U;
+  if (vkAllocateCommandBuffers(device, &commandAlloc, &commandBuffer) !=
+      VK_SUCCESS) {
+    cleanup();
+    return makeStrictFp32Result(
+        viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+        "baseline command buffer failed", 18U, 1U, 1U);
+  }
+  VkCommandBufferBeginInfo begin{};
+  begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  vkBeginCommandBuffer(commandBuffer, &begin);
+  VkBufferMemoryBarrier hostToDevice[2]{};
+  for (std::uint32_t i = 0U; i < 2U; ++i) {
+    hostToDevice[i].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    hostToDevice[i].srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
+    hostToDevice[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    hostToDevice[i].buffer = i == 0U ? inputBuffer : outputBuffer;
+    hostToDevice[i].size = sizeof(input);
+  }
+  vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_HOST_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0U, 0U, nullptr,
+                       2U, hostToDevice, 0U, nullptr);
+  vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+  vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          pipelineLayout, 0U, 1U, &descriptorSet, 0U, nullptr);
+  vkCmdDispatch(commandBuffer, 1U, 1U, 1U);
+  VkBufferMemoryBarrier deviceToHost{};
+  deviceToHost.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+  deviceToHost.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+  deviceToHost.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+  deviceToHost.buffer = outputBuffer;
+  deviceToHost.size = sizeof(output);
+  vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                       VK_PIPELINE_STAGE_HOST_BIT, 0U, 0U, nullptr, 1U,
+                       &deviceToHost, 0U, nullptr);
+  vkEndCommandBuffer(commandBuffer);
+  VkFenceCreateInfo fenceInfo{};
+  fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+  VkSubmitInfo submitInfo{};
+  submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  submitInfo.commandBufferCount = 1U;
+  submitInfo.pCommandBuffers = &commandBuffer;
+  if (vkCreateFence(device, &fenceInfo, nullptr, &fence) != VK_SUCCESS ||
+      vkQueueSubmit(queue, 1U, &submitInfo, fence) != VK_SUCCESS ||
+      vkWaitForFences(device, 1U, &fence, VK_TRUE, 10'000'000'000ULL) !=
+          VK_SUCCESS) {
+    cleanup();
+    return makeStrictFp32Result(
+        viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+        "baseline queue submission/fence failed", 18U, 1U, 1U);
+  }
+  if (vkMapMemory(device, outputMemory, 0U, sizeof(output), 0U, &outputPtr) !=
+      VK_SUCCESS) {
+    cleanup();
+    return makeStrictFp32Result(
+        viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+        "baseline output map failed", 18U, 1U, 1U);
+  }
+  std::memcpy(output.data(), outputPtr, sizeof(output));
+  vkUnmapMemory(device, outputMemory);
+  for (std::size_t i = 0U; i < kCount; ++i) {
+    if (output[i] == std::bit_cast<std::uint32_t>(expected[i]))
+      continue;
+    if (deviceMismatches++ == 0U)
+      deviceDiagnostic << "Vulkan bitwise mismatch at case";
+    deviceDiagnostic << ' ' << i;
+  }
+  cleanup();
+#else
+  const auto elapsed = static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - start)
+          .count());
+  return makeStrictFp32Result(
+      viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+      "Vulkan strict FP32 smoke unavailable: strict shader artifacts are not "
+      "built",
+      2U, 1U, 1U, elapsed);
+#endif
+
+#if defined(VIENNAPS_VULKAN_ENABLED) &&                                        \
+    defined(VIENNAPS_VULKAN_FP32_BASELINE_SPV_PATH)
+  const auto elapsed = static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - start)
+          .count());
+  const auto mismatches = cpuMismatches + deviceMismatches;
+  std::string diagnostic;
+  if (cpuMismatches != 0U)
+    diagnostic = "CPU bitwise oracle mismatch";
+  else if (deviceMismatches != 0U)
+    diagnostic = deviceDiagnostic.str();
+  auto result = makeStrictFp32Result(
+      mismatches == 0U ? viennaps::compute::VulkanNumericalSmokeStatus::PASS
+                       : viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+      std::move(diagnostic), 18U, mismatches, mismatches == 0U ? 0U : 1U,
+      elapsed);
+  result.deviceUuid = selectedUuid;
+  result.json = strictFp32EvidenceJson(result.evidence, result.deviceUuid);
+  return result;
+#endif
+}
+
+[[nodiscard]] bool
+parseStrictFp32Result(const std::string &json,
+                      viennaps::compute::VulkanFp32NumericalSmokeEvidence &out,
+                      std::string &deviceUuid) {
+  std::size_t first = 0U;
+  while (first < json.size() && (json[first] == ' ' || json[first] == '\t' ||
+                                 json[first] == '\r' || json[first] == '\n'))
+    ++first;
+  std::size_t last = json.size();
+  while (last > first && (json[last - 1U] == ' ' || json[last - 1U] == '\t' ||
+                          json[last - 1U] == '\r' || json[last - 1U] == '\n'))
+    --last;
+  if (last - first < 2U || json[first] != '{' || json[last - 1U] != '}')
+    return false;
+  const std::string normalized = json.substr(first, last - first);
+  const std::string &inputJson = normalized;
+  const auto isKnownKey = [](const std::string_view key) {
+    for (const auto candidate :
+         {"status", "contractId", "caseCount", "mismatchCount", "maxUlp",
+          "watchdogMs", "elapsedMs", "failureDiagnostic", "deviceUuid"})
+      if (key == candidate)
+        return true;
+    return false;
+  };
+  for (std::size_t cursor = 0U; cursor < inputJson.size();) {
+    if (inputJson[cursor] != '"') {
+      ++cursor;
+      continue;
+    }
+    const auto keyStart = ++cursor;
+    while (cursor < inputJson.size() && inputJson[cursor] != '"') {
+      if (inputJson[cursor] == '\\' && cursor + 1U < inputJson.size())
+        cursor += 2U;
+      else
+        ++cursor;
+    }
+    if (cursor >= inputJson.size())
+      return false;
+    const auto key = inputJson.substr(keyStart, cursor - keyStart);
+    ++cursor;
+    while (cursor < inputJson.size() &&
+           (inputJson[cursor] == ' ' || inputJson[cursor] == '\t' ||
+            inputJson[cursor] == '\r' || inputJson[cursor] == '\n'))
+      ++cursor;
+    if (cursor < inputJson.size() && inputJson[cursor] == ':' &&
+        !isKnownKey(key))
+      return false;
+  }
+  const auto countKey = [&](const std::string_view key) {
+    const auto marker = std::string("\"") + std::string(key) + "\":";
+    std::size_t count = 0U;
+    std::size_t offset = 0U;
+    while ((offset = inputJson.find(marker, offset)) != std::string::npos) {
+      ++count;
+      offset += marker.size();
+    }
+    return count;
+  };
+  for (const auto key :
+       {"status", "contractId", "caseCount", "mismatchCount", "maxUlp",
+        "watchdogMs", "elapsedMs", "failureDiagnostic"})
+    if (countKey(key) != 1U)
+      return false;
+  if (countKey("deviceUuid") != 1U)
+    return false;
+  const auto findString = [&](const std::string_view key,
+                              std::string &value) -> bool {
+    const auto marker = std::string("\"") + std::string(key) + "\":\"";
+    const auto begin = inputJson.find(marker);
+    if (begin == std::string::npos)
+      return false;
+    const auto start = begin + marker.size();
+    const auto end = inputJson.find('"', start);
+    if (end == std::string::npos)
+      return false;
+    value = inputJson.substr(start, end - start);
+    return true;
+  };
+  const auto findUint = [&](const std::string_view key,
+                            std::uint64_t &value) -> bool {
+    const auto marker = std::string("\"") + std::string(key) + "\":";
+    const auto begin = inputJson.find(marker);
+    if (begin == std::string::npos)
+      return false;
+    const auto start = begin + marker.size();
+    std::size_t end = start;
+    while (end < inputJson.size() && inputJson[end] >= '0' &&
+           inputJson[end] <= '9')
+      ++end;
+    if (end == start || (end < inputJson.size() && inputJson[end] != ',' &&
+                         inputJson[end] != '}'))
+      return false;
+    try {
+      std::size_t consumed = 0U;
+      value = std::stoull(inputJson.substr(start, end - start), &consumed);
+      if (consumed != end - start)
+        return false;
+    } catch (...) {
+      return false;
+    }
+    return true;
+  };
+  std::string status;
+  if (!findString("status", status) ||
+      (status != "PASS" && status != "FAIL" && status != "NOT_RUN") ||
+      !findString("contractId", out.contractId) ||
+      out.contractId != viennaps::compute::kVulkanFp32NumericalSmokeContract ||
+      !findString("failureDiagnostic", out.failureDiagnostic))
+    return false;
+  if (!findString("deviceUuid", deviceUuid) || deviceUuid.empty())
+    return false;
+  std::uint64_t value = 0ULL;
+  if (!findUint("caseCount", value) ||
+      value > std::numeric_limits<std::uint32_t>::max())
+    return false;
+  out.caseCount = static_cast<std::uint32_t>(value);
+  if (!findUint("mismatchCount", value) ||
+      value > std::numeric_limits<std::uint32_t>::max())
+    return false;
+  out.mismatchCount = static_cast<std::uint32_t>(value);
+  if (!findUint("maxUlp", value) ||
+      value > std::numeric_limits<std::uint32_t>::max())
+    return false;
+  out.maxUlp = static_cast<std::uint32_t>(value);
+  if (!findUint("watchdogMs", out.watchdogMs) ||
+      !findUint("elapsedMs", out.elapsedMs))
+    return false;
+  out.status = status == "PASS"
+                   ? viennaps::compute::VulkanNumericalSmokeStatus::PASS
+               : status == "FAIL"
+                   ? viennaps::compute::VulkanNumericalSmokeStatus::FAIL
+                   : viennaps::compute::VulkanNumericalSmokeStatus::NOT_RUN;
+  return true;
+}
+
 using viennaps::compute::CapabilityProfileRecord;
 
 struct ArgView {
@@ -53,6 +788,12 @@ struct ArgView {
   bool validateProfile = false;
   std::string profilePath;
   std::string deploymentProfilePath;
+  bool strictFp32Smoke = false;
+  bool strictFp32Child = false;
+  bool strictFp32ForceFailure = false;
+  bool strictFp32DeviceIndexValid = true;
+  std::uint32_t strictFp32DeviceIndex = 0U;
+  std::string strictFp32ChildOutput;
 };
 
 struct ProbeResult {
@@ -805,7 +1546,17 @@ makeDeviceProfile(const VkPhysicalDevice physicalDevice,
   }
 
   std::vector<VkPhysicalDevice> devices(deviceCount);
-  vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
+  if (vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data()) !=
+          VK_SUCCESS ||
+      deviceCount == 0U) {
+    vkDestroyInstance(instance, nullptr);
+    out.rawSummary =
+        std::string("{\"schemaVersion\":1,\"status\":\"disabled\",") +
+        "\"reason\":\"Vulkan physical-device enumeration changed during "
+        "probe.\"}";
+    return out;
+  }
+  devices.resize(deviceCount);
 
   std::ostringstream outStream;
   outStream << "{\n";
@@ -870,6 +1621,22 @@ makeDeviceProfile(const VkPhysicalDevice physicalDevice,
       args.deploymentProfilePath = argv[++i];
     } else if (arg == "--validate-profile") {
       args.validateProfile = true;
+    } else if (arg == "--strict-fp32-smoke") {
+      args.strictFp32Smoke = true;
+    } else if (arg == "--strict-fp32-child") {
+      args.strictFp32Child = true;
+    } else if (arg == "--strict-fp32-force-failure") {
+      args.strictFp32ForceFailure = true;
+    } else if (arg == "--strict-fp32-child-output" && i + 1 < argc) {
+      args.strictFp32ChildOutput = argv[++i];
+    } else if (arg == "--strict-fp32-device-index" && i + 1 < argc) {
+      try {
+        args.strictFp32DeviceIndex =
+            static_cast<std::uint32_t>(std::stoul(argv[++i]));
+      } catch (...) {
+        std::cerr << "Invalid strict FP32 device index.\n";
+        args.strictFp32DeviceIndexValid = false;
+      }
     } else if (arg == "--help") {
       std::cout
           << "viennaps-device-probe [--write-profile <path>|--write <path>] "
@@ -879,6 +1646,166 @@ makeDeviceProfile(const VkPhysicalDevice physicalDevice,
     }
   }
   return args;
+}
+
+struct IsolatedStrictSmokeResult {
+  bool launched = false;
+  bool timedOut = false;
+  int exitCode = -1;
+  std::string diagnostic;
+};
+
+[[nodiscard]] IsolatedStrictSmokeResult runIsolatedStrictFp32Child(
+    const std::string &executable, const std::string &outputPath,
+    const bool forceFailure, const std::uint32_t deviceIndex) {
+  IsolatedStrictSmokeResult result;
+#if defined(_WIN32)
+  std::wstring command =
+      L"\"" + std::filesystem::path(executable).wstring() +
+      L"\" --strict-fp32-child --strict-fp32-child-output \"" +
+      std::filesystem::path(outputPath).wstring() +
+      L"\" --strict-fp32-device-index " + std::to_wstring(deviceIndex);
+  if (forceFailure)
+    command += L" --strict-fp32-force-failure";
+  std::vector<wchar_t> commandLine(command.begin(), command.end());
+  commandLine.push_back(L'\0');
+  STARTUPINFOW startup{};
+  startup.cb = sizeof(startup);
+  PROCESS_INFORMATION process{};
+  if (!CreateProcessW(nullptr, commandLine.data(), nullptr, nullptr, FALSE, 0,
+                      nullptr, nullptr, &startup, &process)) {
+    result.diagnostic = "strict FP32 child launch failed";
+    return result;
+  }
+  result.launched = true;
+  const DWORD waitResult = WaitForSingleObject(
+      process.hProcess,
+      static_cast<DWORD>(
+          viennaps::compute::kVulkanFp32NumericalSmokeWatchdogMs));
+  if (waitResult == WAIT_TIMEOUT) {
+    result.timedOut = true;
+    TerminateProcess(process.hProcess, 124U);
+    WaitForSingleObject(process.hProcess, INFINITE);
+    result.diagnostic = "strict FP32 child watchdog timeout";
+  } else if (waitResult != WAIT_OBJECT_0) {
+    result.diagnostic = "strict FP32 child wait failed";
+  }
+  DWORD exitCode = 1U;
+  GetExitCodeProcess(process.hProcess, &exitCode);
+  result.exitCode = static_cast<int>(exitCode);
+  CloseHandle(process.hThread);
+  CloseHandle(process.hProcess);
+#else
+  const pid_t child = fork();
+  if (child < 0) {
+    result.diagnostic = "strict FP32 child fork failed";
+    return result;
+  }
+  if (child == 0) {
+    const std::string deviceIndexText = std::to_string(deviceIndex);
+    char *childArgv[] = {const_cast<char *>(executable.c_str()),
+                         const_cast<char *>("--strict-fp32-child"),
+                         const_cast<char *>("--strict-fp32-child-output"),
+                         const_cast<char *>(outputPath.c_str()),
+                         const_cast<char *>("--strict-fp32-device-index"),
+                         const_cast<char *>(deviceIndexText.c_str()),
+                         forceFailure
+                             ? const_cast<char *>("--strict-fp32-force-failure")
+                             : nullptr,
+                         nullptr};
+    execvp(executable.c_str(), childArgv);
+    _exit(127);
+  }
+  result.launched = true;
+  const auto deadline =
+      std::chrono::steady_clock::now() +
+      std::chrono::milliseconds(
+          viennaps::compute::kVulkanFp32NumericalSmokeWatchdogMs);
+  int status = 0;
+  while (std::chrono::steady_clock::now() < deadline) {
+    const pid_t waited = waitpid(child, &status, WNOHANG);
+    if (waited == child)
+      break;
+    if (waited < 0) {
+      result.diagnostic = "strict FP32 child wait failed";
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  if (waitpid(child, &status, WNOHANG) == 0) {
+    result.timedOut = true;
+    kill(child, SIGKILL);
+    waitpid(child, &status, 0);
+    result.diagnostic = "strict FP32 child watchdog timeout";
+  }
+  if (WIFEXITED(status))
+    result.exitCode = WEXITSTATUS(status);
+  else if (WIFSIGNALED(status))
+    result.exitCode = 128 + WTERMSIG(status);
+#endif
+  if (!result.timedOut && result.exitCode != 0 && result.diagnostic.empty())
+    result.diagnostic = "strict FP32 child exited nonzero";
+  return result;
+}
+
+[[nodiscard]] StrictFp32SmokeResult
+runIsolatedStrictFp32Smoke(const std::string &executable,
+                           const bool forceFailure,
+                           const std::uint32_t deviceIndex) {
+  const auto unique = std::to_string(
+#if defined(_WIN32)
+      static_cast<unsigned long long>(GetCurrentProcessId())
+#else
+      static_cast<unsigned long long>(getpid())
+#endif
+  );
+  const auto outputPath =
+      std::filesystem::temp_directory_path() /
+      ("viennaps-strict-fp32-" + unique + "-" +
+       std::to_string(static_cast<unsigned long long>(
+           std::chrono::steady_clock::now().time_since_epoch().count())) +
+       ".json");
+  const auto child = runIsolatedStrictFp32Child(executable, outputPath.string(),
+                                                forceFailure, deviceIndex);
+  if (!child.launched || child.timedOut || child.exitCode != 0) {
+    std::error_code removeError;
+    std::filesystem::remove(outputPath, removeError);
+    return makeStrictFp32Result(
+        viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+        child.diagnostic.empty() ? "strict FP32 child failed"
+                                 : child.diagnostic);
+  }
+  std::ifstream input(outputPath, std::ios::binary);
+  std::string content((std::istreambuf_iterator<char>(input)),
+                      std::istreambuf_iterator<char>());
+  std::error_code removeError;
+  std::filesystem::remove(outputPath, removeError);
+  viennaps::compute::VulkanFp32NumericalSmokeEvidence evidence{};
+  std::string deviceUuid;
+  if (content.empty() ||
+      !parseStrictFp32Result(content, evidence, deviceUuid)) {
+    return makeStrictFp32Result(
+        viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+        "strict FP32 child evidence malformed");
+  }
+  if (evidence.status == viennaps::compute::VulkanNumericalSmokeStatus::PASS &&
+      (evidence.contractId !=
+           viennaps::compute::kVulkanFp32NumericalSmokeContract ||
+       evidence.caseCount == 0U || evidence.mismatchCount != 0U ||
+       evidence.maxUlp != 0U ||
+       evidence.watchdogMs !=
+           viennaps::compute::kVulkanFp32NumericalSmokeWatchdogMs ||
+       evidence.elapsedMs > evidence.watchdogMs ||
+       !evidence.failureDiagnostic.empty())) {
+    return makeStrictFp32Result(
+        viennaps::compute::VulkanNumericalSmokeStatus::FAIL,
+        "strict FP32 child PASS evidence violates contract invariants");
+  }
+  StrictFp32SmokeResult result;
+  result.evidence = evidence;
+  result.deviceUuid = deviceUuid;
+  result.json = strictFp32EvidenceJson(evidence, result.deviceUuid);
+  return result;
 }
 
 void writeProfile(const std::string &path, const std::string &content) {
@@ -897,14 +1824,30 @@ void writeProfile(const std::string &path, const std::string &content) {
 
 [[nodiscard]] bool
 writeDeploymentProfile(const std::string &path,
-                       const std::vector<CapabilityProfileRecord> &profiles) {
+                       const std::vector<CapabilityProfileRecord> &profiles,
+                       const std::string_view selectedUuid = {}) {
   if (profiles.empty()) {
     std::cerr << "No generated Vulkan deployment profile available to write.\n";
     return false;
   }
+  std::size_t selected = 0U;
+  if (!selectedUuid.empty()) {
+    std::size_t matches = 0U;
+    for (std::size_t index = 0U; index < profiles.size(); ++index) {
+      if (profiles[index].hardware.deviceUuid == selectedUuid) {
+        selected = index;
+        ++matches;
+      }
+    }
+    if (matches != 1U) {
+      std::cerr
+          << "Strict FP32 device UUID did not match exactly one profile.\n";
+      return false;
+    }
+  }
   std::string error;
   if (!viennaps::compute::writeCapabilityProfileRecordToFile(
-          path, profiles.front(), &error)) {
+          path, profiles[selected], &error)) {
     std::cerr << "Failed to write deployment profile to " << path << ": "
               << error << '\n';
     return false;
@@ -917,10 +1860,58 @@ writeDeploymentProfile(const std::string &path,
 
 int main(int argc, char **argv) {
   const ArgView args = parseArgs(argc, argv);
+  if (!args.strictFp32DeviceIndexValid)
+    return 2;
+  if (args.strictFp32Child) {
+    const auto childResult = runStrictFp32Child(args.strictFp32ForceFailure,
+                                                args.strictFp32DeviceIndex);
+    if (!writeStrictFp32Result(args.strictFp32ChildOutput, childResult.evidence,
+                               childResult.deviceUuid)) {
+      std::cerr << "Failed to write strict FP32 child evidence.\n";
+      return 2;
+    }
+    std::cout << childResult.json << '\n';
+    const bool passed = childResult.evidence.status ==
+                        viennaps::compute::VulkanNumericalSmokeStatus::PASS;
+    if (!passed) {
+      std::error_code removeError;
+      std::filesystem::remove(args.strictFp32ChildOutput, removeError);
+    }
+    return passed ? 0 : 1;
+  }
   const ProbeResult profile = probeSummary();
   std::cout << profile.rawSummary << '\n';
   bool success = true;
   bool deploymentProfileWritten = false;
+  std::string strictDeviceUuid;
+
+  ProbeResult mutableProfile = profile;
+  if (args.strictFp32Smoke) {
+    const auto strictResult = runIsolatedStrictFp32Smoke(
+        argv[0], args.strictFp32ForceFailure, args.strictFp32DeviceIndex);
+    std::cout << strictResult.json << '\n';
+    strictDeviceUuid = strictResult.deviceUuid;
+    std::size_t matches = 0U;
+    std::size_t matchedIndex = 0U;
+    for (std::size_t index = 0U;
+         index < mutableProfile.deploymentProfiles.size(); ++index) {
+      if (mutableProfile.deploymentProfiles[index].hardware.deviceUuid ==
+          strictDeviceUuid) {
+        matchedIndex = index;
+        ++matches;
+      }
+    }
+    if (strictDeviceUuid.empty() || matches != 1U) {
+      success = false;
+    } else {
+      mutableProfile.deploymentProfiles[matchedIndex]
+          .capabilityProfile.vulkanFp32NumericalSmoke = strictResult.evidence;
+    }
+    if (strictResult.evidence.status !=
+        viennaps::compute::VulkanNumericalSmokeStatus::PASS) {
+      success = false;
+    }
+  }
 
   if (args.writeProfile && !args.profilePath.empty()) {
     writeProfile(args.profilePath, profile.rawSummary);
@@ -928,7 +1919,8 @@ int main(int argc, char **argv) {
 
   if (args.writeDeploymentProfile && !args.deploymentProfilePath.empty()) {
     deploymentProfileWritten = writeDeploymentProfile(
-        args.deploymentProfilePath, profile.deploymentProfiles);
+        args.deploymentProfilePath, mutableProfile.deploymentProfiles,
+        strictDeviceUuid);
     success = deploymentProfileWritten && success;
   }
 

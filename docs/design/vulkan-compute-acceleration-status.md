@@ -1967,8 +1967,8 @@ differential cases before the strict GPU profile is selected automatically.
 
 ### P5-K1: strict-FP32 numerical evidence profile and routing gate
 
-- Status: accepted locally as a persistence and policy seam; no numerical
-  smoke runner or production strict route is enabled by this slice
+- Status: accepted locally as the persistence and policy seam; P5-K2 below
+  supplies its isolated numerical-smoke producer
 - Date: 2026-08-02
 
 The capability profile schema is now version 3. Its Vulkan numerical-smoke
@@ -1996,7 +1996,47 @@ evidence diagnostic when that evidence is absent or incompatible.
 | Parser boundary | unknown/duplicate fields and uint64 overflow are rejected, including nested hardware and strict-smoke objects |
 | Policy boundary | Auto fails closed before a valid strict smoke; normal Manual Vulkan retains an explicit non-strict override; strict Manual Vulkan fails until the evidence passes |
 | Focused validation | `backendPolicy`, `capabilityProfileIO`, and `probeProfileAdapter` compile and pass under the MSVC C++20 test harness |
-| Scope boundary | no process-isolated watchdog executable, no device numerical suite execution, no static float-control promotion, and no automatic production strict route |
+| Scope boundary | P5-K1 itself owns no watchdog executable or device numerical suite; P5-K2 supplies that producer without static float-control promotion or an automatic production Process route |
+
+### P5-K2: isolated strict-FP32 deployment smoke
+
+- Status: accepted locally as a deployment-profile producer; it is not a
+  production Process route
+- Date: 2026-08-02
+
+`viennaps-device-probe --strict-fp32-smoke` starts an isolated child of the
+same executable and applies the fixed 60-second watchdog. The child executes a
+dedicated, non-experimental Vulkan shader and returns raw FP32 words, rather
+than relying on advertised float-control properties or requesting float-control
+execution modes. Its 18 bitwise cases comprise the CPU oracle's signed-zero and
+ordered-cancellation checks plus 16 GPU results, including signed zero and the
+same ordered cancellation expression. The parent accepts only well-formed PASS
+evidence with the exact contract id, zero mismatches and ULP distance, the fixed
+watchdog, a non-timeout elapsed value, and an empty diagnostic.
+
+The child result is written with OS-level exclusive creation (`CREATE_NEW` on
+Windows and `O_EXCL | O_NOFOLLOW` on POSIX), so it cannot truncate an existing
+path. Failed children remove their own result; successful results are consumed
+and removed by the parent, which also best-effort removes its candidate path
+on every abnormal child exit. Launch, wait, timeout, nonzero child exit,
+malformed evidence, contract-invariant violation, and UUID ambiguity all fail
+closed. The parent applies evidence only to exactly one deployment record whose
+Vulkan device UUID equals the child UUID, preventing a smoke from one adapter
+from authorizing another.
+
+The CMake shader target discovers `glslc`/`glslangValidator` normally through
+the environment or toolchain; no local SDK path is committed. It is independent
+of the general smoke target, and the optional ViennaLS suite is feature-checked
+so the strict probe itself remains buildable when the Vulkan SDK is present but
+the complete level-set dependency set is absent.
+
+| Gate | Result |
+|---|---|
+| Actual GPU differential | Intel Arc executes all 18 cases with bitwise match, zero ULP, and a PASS result persisted under the matching profile record |
+| Isolation and cleanup | a deliberately forced child failure returns failure to the parent and leaves no child-result file behind |
+| Artifact validity | the generated strict shader passes `spirv-val --target-env vulkan1.2` |
+| No-SDK behavior | a fresh configure with `VULKAN_SDK` unset builds the diagnostic probe stub; the strict smoke returns FAIL and exit code 1 |
+| Scope boundary | this creates validated deployment evidence only; Process routing, general automatic backend enablement, dynamic intermediate-status propagation, BVH, and particle transport remain separate work |
 
 ### P5-JD: device-resident ray-flux composition baseline
 
@@ -2070,9 +2110,9 @@ their full `RayRecord` bit contract, and device-local count storage. P5-JE
 then records those stages with explicit barriers into one compute submission.
 The next path must add a device-visible status and fail-closed policy for
 non-finite or out-of-domain intermediate FP32 sums before claiming full
-`reduceCpu` rejection equivalence. The strict FP32 deployment profile
-additionally needs P5-K2's isolated watchdog probe to populate P5-K1's
-evidence; HostVisible radix helpers cannot be reused.
+`reduceCpu` rejection equivalence. P5-K2 now populates P5-K1's evidence with
+an isolated watchdog probe; its dedicated raw-word shader and process boundary
+cannot reuse the HostVisible radix helpers.
 CPU differential checking remains an explicit validation gate, not a
 production per-call guard. Coverage reaction is a capability-gated FP64
 candidate, without weakening the current fail-closed gate.

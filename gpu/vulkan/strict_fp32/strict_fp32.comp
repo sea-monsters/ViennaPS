@@ -1,0 +1,29 @@
+#version 450
+
+layout(local_size_x = 16, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer Input {
+  float inputData[];
+};
+
+layout(std430, binding = 1) writeonly buffer Output {
+  uint outputData[];
+};
+
+void main() {
+  const uint idx = gl_GlobalInvocationID.x;
+  if (idx >= 16u) {
+    return;
+  }
+  if (idx == 0u) {
+    // Preserve the input signed-zero word without an execution-mode request.
+    outputData[idx] = floatBitsToUint(inputData[idx]);
+  } else if (idx == 1u) {
+    // Ordered, cancellation-sensitive FP32 addition.
+    precise float first = inputData[1u] + inputData[2u];
+    outputData[idx] = floatBitsToUint(first + inputData[3u]);
+  } else {
+    precise float value = inputData[idx] * 2.0f + 1.0f;
+    outputData[idx] = floatBitsToUint(value);
+  }
+}

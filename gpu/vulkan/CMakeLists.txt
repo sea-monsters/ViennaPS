@@ -201,6 +201,27 @@ if(VIENNAPS_BUILD_VULKAN_PROBE)
     if(TARGET viennaps_vulkan_hrle_compaction AND
        TARGET viennaps_vulkan_levelset_update AND
        TARGET viennaps_vulkan_reduction_scan_primitives)
+      # The device probe is also a standalone deployment utility.  Its strict
+      # FP32 path must remain buildable when the optional ViennaLS headers are
+      # not installed, even though the shader-only level-set targets exist.
+      include(CheckIncludeFileCXX)
+      set(_VIENNAPS_PROBE_SAVED_REQUIRED_INCLUDES
+          "${CMAKE_REQUIRED_INCLUDES}")
+      set(_VIENNAPS_PROBE_VIENNAPS_INCLUDES)
+      if(TARGET ViennaPS)
+        get_target_property(_VIENNAPS_PROBE_VIENNAPS_INCLUDES ViennaPS
+                            INTERFACE_INCLUDE_DIRECTORIES)
+      endif()
+      set(CMAKE_REQUIRED_INCLUDES
+          "${_VIENNAPS_PROBE_VIENNAPS_INCLUDES};${CMAKE_CURRENT_LIST_DIR}/../../include/viennaps")
+      check_include_file_cxx("hrleDomain.hpp"
+                             _VIENNAPS_PROBE_HAS_HRLE_DOMAIN)
+      check_include_file_cxx("hrleSparseStarIterator.hpp"
+                             _VIENNAPS_PROBE_HAS_HRLE_ITERATOR)
+      check_include_file_cxx("lsDomain.hpp"
+                             _VIENNAPS_PROBE_HAS_LS_DOMAIN)
+      set(CMAKE_REQUIRED_INCLUDES
+          "${_VIENNAPS_PROBE_SAVED_REQUIRED_INCLUDES}")
       get_property(_VIENNAPS_PROBE_UPDATE_SPV
                    TARGET viennaps_vulkan_levelset_update
                    PROPERTY VIENNAPS_LEVELSET_UPDATE_SPV)
@@ -216,7 +237,10 @@ if(VIENNAPS_BUILD_VULKAN_PROBE)
       get_property(_VIENNAPS_PROBE_COMPACT_SPV
                    TARGET viennaps_vulkan_hrle_compaction
                    PROPERTY VIENNAPS_HRLE_COMPACT_SPV)
-      if(_VIENNAPS_PROBE_UPDATE_SPV AND _VIENNAPS_PROBE_CLASSIFICATION_SPV AND
+      if(_VIENNAPS_PROBE_HAS_HRLE_DOMAIN AND
+         _VIENNAPS_PROBE_HAS_HRLE_ITERATOR AND
+         _VIENNAPS_PROBE_HAS_LS_DOMAIN AND
+         _VIENNAPS_PROBE_UPDATE_SPV AND _VIENNAPS_PROBE_CLASSIFICATION_SPV AND
          _VIENNAPS_PROBE_REDUCTION_SPV AND _VIENNAPS_PROBE_ACTION_FLAGS_SPV AND
          _VIENNAPS_PROBE_COMPACT_SPV)
         foreach(_VIENNAPS_PROBE_PATH IN ITEMS
@@ -243,6 +267,9 @@ if(VIENNAPS_BUILD_VULKAN_PROBE)
         target_link_libraries(viennaps-device-probe PRIVATE
           ViennaPS viennaps_vulkan_levelset_update
           viennaps_vulkan_hrle_compaction)
+      else()
+        message(STATUS
+                "[ViennaPS Vulkan Probe] Optional ViennaLS level-set suite is unavailable; building strict probe only.")
       endif()
     endif()
     message(STATUS "[ViennaPS Vulkan Probe] Vulkan SDK detected; building full probe.")
@@ -323,4 +350,65 @@ if(VIENNAPS_BUILD_VULKAN_SMOKE)
 else()
   message(STATUS "[ViennaPS Vulkan Smoke] VIENNAPS_BUILD_VULKAN_SMOKE is OFF. "
                  "Enable with -DVIENNAPS_BUILD_VULKAN_SMOKE=ON.")
+endif()
+
+# The strict-FP32 child uses a dedicated non-experimental FP32 numerical
+# shader. This target is wired after the probe target is declared.
+if(VIENNAPS_BUILD_VULKAN_PROBE AND TARGET viennaps-device-probe)
+  find_program(_VIENNAPS_STRICT_FP32_COMPILER NAMES glslc glslangValidator)
+  if(NOT _VIENNAPS_STRICT_FP32_COMPILER)
+    if(DEFINED VIENNAPS_VULKAN_SDK_PATH)
+      set(_VIENNAPS_STRICT_SDK "${VIENNAPS_VULKAN_SDK_PATH}")
+    elseif(DEFINED ENV{VULKAN_SDK})
+      file(TO_CMAKE_PATH "$ENV{VULKAN_SDK}" _VIENNAPS_STRICT_SDK)
+    endif()
+    if(WIN32)
+      if(EXISTS "${_VIENNAPS_STRICT_SDK}/Bin/glslangValidator.exe")
+        set(_VIENNAPS_STRICT_FP32_COMPILER
+            "${_VIENNAPS_STRICT_SDK}/Bin/glslangValidator.exe" CACHE FILEPATH
+            "Strict FP32 shader compiler" FORCE)
+      elseif(EXISTS "${_VIENNAPS_STRICT_SDK}/Bin/glslc.exe")
+        set(_VIENNAPS_STRICT_FP32_COMPILER
+            "${_VIENNAPS_STRICT_SDK}/Bin/glslc.exe" CACHE FILEPATH
+            "Strict FP32 shader compiler" FORCE)
+      endif()
+      if(NOT _VIENNAPS_STRICT_FP32_COMPILER)
+        find_program(_VIENNAPS_STRICT_FP32_COMPILER NAMES glslc glslangValidator
+                     PATHS "${_VIENNAPS_STRICT_SDK}/Bin")
+      endif()
+    else()
+      find_program(_VIENNAPS_STRICT_FP32_COMPILER NAMES glslc glslangValidator
+                   PATHS "${_VIENNAPS_STRICT_SDK}/bin")
+    endif()
+  endif()
+  if(_VIENNAPS_STRICT_FP32_COMPILER)
+    set(_VIENNAPS_STRICT_FP32_SHADER
+        "${CMAKE_CURRENT_SOURCE_DIR}/strict_fp32/strict_fp32.comp")
+    set(_VIENNAPS_STRICT_FP32_SPV
+        "${CMAKE_CURRENT_BINARY_DIR}/strict_fp32.comp.spv")
+    if("${_VIENNAPS_STRICT_FP32_COMPILER}" MATCHES ".*glslangValidator.*")
+      add_custom_command(
+        OUTPUT ${_VIENNAPS_STRICT_FP32_SPV}
+        COMMAND ${_VIENNAPS_STRICT_FP32_COMPILER} -V
+                ${_VIENNAPS_STRICT_FP32_SHADER}
+                -o ${_VIENNAPS_STRICT_FP32_SPV}
+        DEPENDS ${_VIENNAPS_STRICT_FP32_SHADER})
+    else()
+      add_custom_command(
+        OUTPUT ${_VIENNAPS_STRICT_FP32_SPV}
+        COMMAND ${_VIENNAPS_STRICT_FP32_COMPILER}
+                -o ${_VIENNAPS_STRICT_FP32_SPV}
+                ${_VIENNAPS_STRICT_FP32_SHADER}
+        DEPENDS ${_VIENNAPS_STRICT_FP32_SHADER})
+    endif()
+    add_custom_target(viennaps-strict-fp32-spv
+                      DEPENDS ${_VIENNAPS_STRICT_FP32_SPV})
+    add_dependencies(viennaps-device-probe viennaps-strict-fp32-spv)
+    string(REPLACE "\\" "/" _VIENNAPS_PROBE_FP32_SPV_PATH
+                   "${_VIENNAPS_STRICT_FP32_SPV}")
+    target_compile_definitions(viennaps-device-probe PRIVATE
+      "VIENNAPS_VULKAN_FP32_BASELINE_SPV_PATH=\"${_VIENNAPS_PROBE_FP32_SPV_PATH}\"")
+  else()
+    message(STATUS "[ViennaPS strict FP32] No glslc/glslangValidator; strict smoke disabled.")
+  endif()
 endif()

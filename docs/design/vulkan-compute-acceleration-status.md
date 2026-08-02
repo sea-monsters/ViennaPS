@@ -2487,8 +2487,51 @@ remain environment/cache supplied.
 | Registration | runtime, primitives, and level-set smoke tests use the same test-enable condition as ray/surface |
 | Compatibility | standalone `gpu/vulkan` defaults and existing target names are unchanged |
 | Validation | temporary CMake configure and target-graph checks are run outside the repository; no full build or CUDA path is required |
-| Residual gate | a dependency-complete root configure/CTest run remains a long-running follow-up; this slice does not fetch CPM/VTK dependencies |
+| Residual gate | root CPU-only configure and the two new executor CTests now pass through a temporary patched ViennaLS override; full VTK/Vulkan smoke coverage remains a separate follow-up |
 | Scope boundary | only CMake option/probe propagation, smoke test registration, and this status record changed |
+
+### P6-D: verified offline CPM bootstrap
+
+- Status: accepted locally as a build-bootstrap reliability repair; simulation
+  behavior and dependency versions are unchanged
+- Date: 2026-08-03
+
+`cmake/cpm.cmake` now hashes an existing `CPM_DOWNLOAD_LOCATION` before doing
+anything else. A cache file matching the pinned `CPM_HASH_SUM` is included
+directly; a missing or mismatched file follows the original pinned release URL
+and `EXPECTED_HASH` download path, and is re-hashed before inclusion. This
+preserves `CPM_SOURCE_CACHE` precedence while allowing an already-verified
+deployment cache to configure without a GitHub release-asset request.
+
+| Gate | Result |
+|---|---|
+| Valid-cache offline fixture | A temporary CMake fixture configured successfully using the workspace `CPM_0.42.0.cmake` cache, without a download path. |
+| Invalid-cache rejection | A zero-byte cache with its URL replaced by a nonexistent `file://` resource entered the download path and failed with `CPM download failed (37)`; it was never included. |
+| Root configure | A CPU-only root configure reused cached PackageProject, ViennaCore, ViennaRay, ViennaHRLE, ViennaLS, and ViennaCS, generated the complete solution, and registered the two new focused tests. |
+| Residual build gate | The subsequent focused build reaches `coverageDeltaExecutor.cpp` but fails before test code because the local ViennaLS cache lacks the pre-existing `Advect::LevelSetUpdateExecutor` and `LevelSetRebuildExecutor` aliases expected by `psProcessContext.hpp`. |
+| Temp hygiene | All nine CPM/root fixture directories and their idle MSBuild node-reuse processes were removed; the repository `build` directory remains. |
+| Scope boundary | Only CPM bootstrap control flow is changed; no pinned version, URL, hash, package declaration, SDK path, or simulation backend policy changes. |
+
+### P6-E: patch-addressed ViennaLS CPM cache key
+
+- Status: accepted as a stale-source-cache prevention repair; the patched
+  dependency API and simulation algorithms are unchanged
+- Date: 2026-08-03
+
+The ViennaLS `CUSTOM_CACHE_KEY` now contains the first sixteen hexadecimal
+characters of the SHA-256 of the checked-in `lsAdvect` executor patch. Changing
+that patch therefore selects a new source-cache directory instead of silently
+reusing a source tree generated before the patch existed. Existing caches are
+not edited. Offline deployments can pre-populate the matching patched cache or
+use the existing `VIENNAPS_VIENNALS_SOURCE_DIR` environment/cache override.
+
+| Gate | Result |
+|---|---|
+| Root cause | The former `v5.8.5-levelset-update-v2` cache was a clean upstream `v5.8.5` tree; CPM cache hits bypass its `PATCH_COMMAND`, leaving the two executor aliases absent. |
+| Isolated patched source | A temporary copy of that cache accepted the existing patch with `git apply --check`, then exposed both executor aliases and setters without modifying the original cache. |
+| Root CPU acceptance | With the temporary source override, CPU-only root configure and build produced both new executor tests; `ctest -C Debug -R '^(coverageDeltaExecutor|surfaceDiffusionExecutor)$'` passed 2/2. |
+| Residual fresh-cache gate | A network-backed first population of the new hash-addressed CPM entry was not run; the key derivation is deterministic and the source override provides the documented offline route. |
+| Scope boundary | Only the CPM cache identity of the existing ViennaLS patch is changed; no ViennaLS cache contents, pinned tag, patch content, SDK path, or runtime backend policy changes. |
 
 ### P5-N2: explicit neutral-transport velocity bridge
 
@@ -2520,3 +2563,50 @@ IEEE-754 bits. Only an all-element match commits `output`, `writtenCount`, and
 | Model integration | the root-level actual N1 model plus bridge composition remains a CPM-dependent residual integration gate; it is not required to accept the standalone primitive bridge |
 | Hardware acceptance | fresh standalone MSVC 19.44.35223 build succeeded; local Intel Arc focused CTest passed 1/1 |
 | Scope boundary | only bridge files, surface CMake/smoke wiring, and this status entry changed; existing primitives/shader, Process/Flux/Context, B2A, CPM, and backend policy remain untouched |
+
+### P5-COV1: CoverageManager delta executor seam
+
+- Status: accepted locally as an ABI-neutral, transaction-based CoverageManager
+  seam; no Vulkan or automatic backend selection is enabled
+- Date: 2026-08-03
+
+`CoverageDeltaWork<NumericType>` exposes channel-major scalar spans and channel
+offsets without leaking PointData or a backend type. `CoverageManager` keeps
+the canonical CPU metric as the fallback, offers an explicit executor setter,
+and only publishes an executor candidate when it reports success, completion,
+and the exact channel count. Exceptions, false returns, mismatched channel
+lengths detected while preparing backend work, and incomplete/partial writes
+retain the CPU result. The contract is
+available for both float and double; P5-COV2 will add the Vulkan bridge and
+raw-bit oracle against this canonical result.
+
+| Gate | Result |
+|---|---|
+| Contract surface | New header-only `CoverageDeltaWork`/`CoverageDeltaExecutor` is independent of Vulkan, CUDA, SDK, and fixed local paths. |
+| Transaction boundary | Focused test covers CPU default, successful replacement, false/throw, invalid written count, and incomplete output for float and double. |
+| Actual manager integration | Root CMake configures and registers the test through the verified CPM cache. With the documented temporary patched ViennaLS override, the actual `CoverageManager::saveCoverages` / `checkCoveragesConvergence` CTest passes in Debug. |
+| Scope boundary | Only CoverageManager, the new executor contract/test, and this status record are changed; Process/ProcessContext, B2A, CMake dependency logic, and Vulkan primitives remain untouched. |
+
+### P5-B2A: Surface-diffusion executor seam
+
+- Status: accepted locally as an explicit Process executor seam; no Vulkan
+  bridge or automatic backend selection is enabled
+- Date: 2026-08-03
+
+`SurfaceDiffusionWork<NumericType>` carries the existing explicit-step CSR
+matrix, current field, private output candidate, and a completion/count
+acknowledgement. `Process` exposes explicit set/get/clear methods and the Flux
+strategy builds CSR only when an executor is installed. The historical CPU path
+is unchanged otherwise. An executor candidate is published only after
+`SUCCESS`, `complete`, and `writtenCount == output.size()`; failures,
+incomplete output, and exceptions return the existing Process failure result
+without moving the prior field or target. P5-B2B will provide the explicit FP32
+Vulkan bridge and CPU differential gate.
+
+| Gate | Result |
+|---|---|
+| ABI and transaction | Work spans do not leak Vulkan/CUDA types; float and double retain their native precision and incomplete successful callbacks cannot publish a partial field. |
+| Focused contract | The focused test covers default CPU mode, full completion, partial/incomplete rejection, exceptions, and set/get/clear behavior for float and double. |
+| Direct compilation | An MSVC C++20 header-only contract compile passed; `git diff --check` passed. |
+| Root CPU acceptance | Root CMake registers the focused test. With the documented temporary patched ViennaLS override, the Debug CTest passes after the actual Flux/Process headers compile. |
+| Scope boundary | This adds only the Process-level ABI seam and CSR conversion; no Vulkan dispatch, shader, controller, profile selection, B2A-to-COV coupling, or CPU algorithm replacement is enabled. |

@@ -1663,6 +1663,11 @@ CPU and Vulkan rejection paths preserve caller IDs, weights, and count.
 | Build and test | a local-cache, ray-only configuration builds the Intel Arc smoke and its focused CTest passes |
 | Scope boundary | this is an O(N²), one-invocation correctness baseline; it does not trace rays, intersect geometry, sample particles, or route production fluxes |
 
+Post-acceptance correction: the shader seeds each surface accumulator from its
+first sorted input record instead of `+0.0`. This preserves a singleton
+negative-zero weight exactly, matching the CPU oracle; the real-device smoke
+now asserts the sign bit explicitly.
+
 ### P5-D: exact FP32 ray-triangle hit primitive
 
 - Status: accepted locally as a bounded correctness primitive; ray-batch and

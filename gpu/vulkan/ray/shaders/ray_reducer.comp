@@ -47,7 +47,10 @@ void main() {
       count = constants.outputCapacity + 1u;
       return;
     }
-    precise float sum = 0.0;
+    // Match the CPU oracle: the first record is the accumulator seed, so a
+    // one-record surface preserves an input negative-zero bit pattern.
+    precise float sum = weight[selected];
+    used[selected] = 1u;
     for (uint i = 0u; i < constants.rayCount; ++i) {
       if (used[i] == 0u && surfaceId[i] == selectedSurface &&
           rayId[i] == selectedRay) {

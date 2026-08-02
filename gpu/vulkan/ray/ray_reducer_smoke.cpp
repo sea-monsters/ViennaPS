@@ -143,6 +143,46 @@ int main() {
              std::bit_cast<std::uint32_t>(gpuWeights[1]) ==
                  std::bit_cast<std::uint32_t>(outputWeights[1]) &&
              gpuWeights[2] == -99.0F);
+      const auto multiSurfaceCount = outputCount;
+
+      // A one-record surface must preserve the input negative-zero bit
+      // pattern; adding it to a +0 seed would incorrectly canonicalize it.
+      const std::vector<std::uint32_t> negativeZeroRay{7U};
+      const std::vector<std::uint32_t> negativeZeroSurface{5U};
+      const std::vector<float> negativeZeroWeight{-0.0F};
+      std::vector<std::uint32_t> negativeZeroCpuSurface(1U, 0U);
+      std::vector<float> negativeZeroCpuWeight(1U, 0.0F);
+      RayReduction negativeZeroCpu{negativeZeroCpuSurface,
+                                   negativeZeroCpuWeight, 0U};
+      assert(viennaps::vulkan::ray::reduceCpu(
+          RayRecordSoA{
+              negativeZeroRay, negativeZeroSurface, negativeZeroWeight, {}},
+          8U, negativeZeroCpu, error));
+      assert(negativeZeroCpu.count == 1U && negativeZeroCpuSurface[0] == 5U &&
+             std::bit_cast<std::uint32_t>(negativeZeroCpuWeight[0]) ==
+                 std::bit_cast<std::uint32_t>(-0.0F));
+      assert(idsBuffer.write(negativeZeroRay.data(),
+                             negativeZeroRay.size() * sizeof(std::uint32_t), 0U,
+                             error));
+      assert(surfacesBuffer.write(
+          negativeZeroSurface.data(),
+          negativeZeroSurface.size() * sizeof(std::uint32_t), 0U, error));
+      assert(weightsBuffer.write(negativeZeroWeight.data(),
+                                 negativeZeroWeight.size() * sizeof(float), 0U,
+                                 error));
+      assert(reducer.reduce(idsBuffer, surfacesBuffer, weightsBuffer, 1U, 8U,
+                            outputSurfaceBuffer, outputWeightBuffer, 3U,
+                            outputCount, error));
+      std::vector<std::uint32_t> negativeZeroGpuSurface(1U, 0U);
+      std::vector<float> negativeZeroGpuWeight(1U, 0.0F);
+      assert(outputSurfaceBuffer.read(negativeZeroGpuSurface.data(),
+                                      sizeof(std::uint32_t), 0U, error));
+      assert(outputWeightBuffer.read(negativeZeroGpuWeight.data(),
+                                     sizeof(float), 0U, error));
+      assert(outputCount == negativeZeroCpu.count &&
+             negativeZeroGpuSurface == negativeZeroCpuSurface &&
+             std::bit_cast<std::uint32_t>(negativeZeroGpuWeight[0]) ==
+                 std::bit_cast<std::uint32_t>(negativeZeroCpuWeight[0]));
 
       // Re-run with a shuffled order and require bit-exact, deterministic
       // output.
@@ -158,11 +198,10 @@ int main() {
       assert(weightsBuffer.write(shuffledWeight.data(),
                                  shuffledWeight.size() * sizeof(float), 0U,
                                  error));
-      const auto priorCount = outputCount;
       assert(reducer.reduce(idsBuffer, surfacesBuffer, weightsBuffer,
                             shuffledRay.size(), 8U, outputSurfaceBuffer,
                             outputWeightBuffer, 3U, outputCount, error));
-      assert(outputCount == priorCount);
+      assert(outputCount == multiSurfaceCount);
       std::vector<float> shuffledOutput(3U, -99.0F);
       assert(outputWeightBuffer.read(shuffledOutput.data(),
                                      shuffledOutput.size() * sizeof(float), 0U,

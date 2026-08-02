@@ -998,11 +998,63 @@ evidence that automatic production routing is complete.
 | Integration boundary | traversal, compaction, sparse rebuild, and ViennaLS routing remain pending |
 | Path policy | SDK and dependency discovery remain environment/cache supplied; tracked inputs contain no resolved local path |
 
+## P4B-HRLE-compaction: stable Vulkan selection stream
+
+- Status: accepted locally
+- Date: 2026-08-02
+- Scope: preserve the complete HRLE rebuild action stream while moving stable
+  defined-point selection and exclusive offsets to existing Vulkan
+  reduction/scan primitives
+
+The CPU oracle records one action for every sparse-star candidate, a
+`uint32_t` defined mask, an exclusive-offset stream with `N + 1` entries, and
+the stable subset of defined point payloads. Keeping all positive and negative
+undefined actions is required because ViennaLS inserts every candidate during
+the final sparse-domain rebuild; the compact defined stream alone cannot
+reconstruct the domain. Invalid actions, non-finite values, and defined entries
+without a source point ID fail transactionally.
+
+The Vulkan adapter reuses the existing normalized-mask, exclusive-scan, count,
+and stable `uint32_t` compaction kernels. It compacts original candidate
+indices, reads back the `N` offsets and selected count, validates offset/count
+agreement, index range, strict stable order, and defined-only selection, then
+gathers the defined payloads without changing their FP32 bits. Buffer,
+dispatch, and readback failures leave the caller's previous result unchanged.
+No new general-purpose shader was required.
+
+The integration smoke uses the same real two-dimensional ViennaHRLE
+sparse-star traversal of the small sphere as P4A. Its 183 candidates and 68
+defined points match the CPU oracle exactly across the complete action stream,
+mask, exclusive offsets, compacted candidate indices, source point IDs, and
+FP32 bit patterns. Empty input and invalid action/source/value transaction
+cases are also covered.
+
+This is an independently accepted compute slice, not the production HRLE
+rebuild route. `ReductionScanPrimitives` currently owns a separate Vulkan
+instance/device, so classified decisions are host-visible inputs and payload
+assembly remains a CPU gather. The next integration must compose
+classification and compaction on one selected `ComputeSession`, keep the
+intermediate arrays device-resident, and feed the complete action/defined
+streams into transactional sparse HRLE insertion. Deployment capability and
+safe-working-set gates remain unchanged until that end-to-end primitive suite
+is wired and persisted.
+
+| Gate | Result |
+|---|---|
+| No-SDK CPU contract | mixed, all-defined, all-undefined, empty, validation, and transactional cases pass |
+| Real Vulkan oracle | 183 candidate actions and 68 stable defined payloads match CPU exactly |
+| Stable compaction | existing exclusive scan and `uint32_t` compaction kernels are reused |
+| Result validation | offsets, count, index range, stable order, and defined-only selection are checked |
+| Output transaction | validation and Vulkan failures preserve the caller output |
+| Production boundary | same-session device residency, sparse insertion, routing, and persisted deployment smoke remain pending |
+| Path policy | SDK discovery is environment supplied; tracked inputs contain no resolved local SDK or dependency path |
+
 ## Next slice
 
-Advance to stable HRLE decision compaction and sparse reconstruction, then wire
-the complete classification/rebuild path into the ViennaLS executor and the
-deployment-time primitive suite. Direct negative/non-finite time injection
+Refactor classification and compaction to share one selected compute session,
+keep their intermediate buffers device-resident, and add transactional sparse
+HRLE reconstruction. Then wire the complete path into the ViennaLS executor
+and deployment-time primitive suite. Direct negative/non-finite time injection
 also remains a defensive-branch coverage gap. The optional VTK-enabled
 install/export conflict should be isolated from the compute backend before
 packaging validation.

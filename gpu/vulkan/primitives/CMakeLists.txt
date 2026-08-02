@@ -335,6 +335,9 @@ add_custom_target(viennaps-vulkan-reduction-scan-smoke-spv
 
 add_library(viennaps_vulkan_reduction_scan_primitives
   reduction_scan_primitives.cpp)
+set_property(TARGET viennaps_vulkan_reduction_scan_primitives
+  PROPERTY VIENNAPS_REDUCTION_SCAN_SPV
+           "${VULKAN_PRIMITIVES_REDUCTION_SCAN_SPV}")
 target_link_libraries(viennaps_vulkan_reduction_scan_primitives
   PUBLIC viennaps_vulkan_compute_runtime Vulkan::Vulkan)
 target_include_directories(viennaps_vulkan_reduction_scan_primitives

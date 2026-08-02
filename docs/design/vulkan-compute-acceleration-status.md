@@ -2170,3 +2170,35 @@ configuration still completes before worker callbacks are installed.
 | Cache boundary | resolved-decision configure path does not call profile I/O or a deployment probe; legacy configure remains source-compatible and performs its established profile resolution |
 | Hardware binding | a Vulkan-selected resolved plan is rejected unless the decision is VALID, has a profile, and its complete fingerprint matches current hardware; the selected session also matches every Vulkan-observable identity field (UUIDs, vendor/device IDs, name, driver version), with a focused driver-version mismatch rejection; driver date remains a deployment-time stale-gate field |
 | Scope boundary | only the Level Set controller seam, its focused smoke, the runtime context preparation overload, and this status entry are changed; generic Process, CUDA, FluxEngine, ray, fixed SDK/VTK paths, and profile persistence remain untouched |
+
+### P5-K3C: isolated strict-probe deployment adapter
+
+- Status: implemented as a reusable synchronous `DeploymentProfileProbe`
+  factory; it is intended for install/configuration hosts and is never called
+  from Process/controller apply paths
+- Date: 2026-08-02
+
+`makeVulkanDeploymentProfileProbe` builds the exact argv for one
+`viennaps-device-probe --strict-fp32-smoke --write-deployment-profile <path>
+--validate-profile` invocation. The default launcher uses tokenized
+`fork`/`exec` (or `CreateProcess` on Windows), with a parent watchdog; tests
+can inject a launcher without requiring a Vulkan device. The adapter accepts
+only a caller-selected, non-existing absolute output path inside a canonical
+directory, rejects traversal, symlink, or non-regular output, preserves an
+already-existing target, and removes a generated output on every post-launch
+exit path.
+
+Before returning a candidate record it requires schema version 3, all seven
+hardware identity fields, an exact identity match with the current deployment
+fingerprint, and PASS strict-FP32 evidence with the versioned contract,
+nonzero case count, zero mismatches/ULP, the required watchdog, and bounded
+elapsed time. Launch, timeout, malformed-output, schema, identity, and evidence
+failures are diagnostic and fail closed; no candidate record is trusted on
+failure.
+
+| Gate | Result |
+|---|---|
+| CPU-only handoff | injectable fake launcher test covers one-call success and profile handoff to `provisionDeploymentProfile` without a Vulkan device |
+| Fail closed | focused test covers nonzero/timeout, malformed output, mismatched identity, and invalid strict evidence; generated outputs are removed |
+| Process isolation | default path passes a vector of argv tokens to shell-free process creation and retains the existing strict child watchdog boundary; no SDK path is introduced |
+| Scope boundary | only the public adapter header, focused CPU test, and this design section are changed; Process/controller, CUDA/OptiX, shaders, and profile persistence are untouched |

@@ -2587,6 +2587,32 @@ raw-bit oracle against this canonical result.
 | Actual manager integration | Root CMake configures and registers the test through the verified CPM cache. With the documented temporary patched ViennaLS override, the actual `CoverageManager::saveCoverages` / `checkCoveragesConvergence` CTest passes in Debug. |
 | Scope boundary | Only CoverageManager, the new executor contract/test, and this status record are changed; Process/ProcessContext, B2A, CMake dependency logic, and Vulkan primitives remain untouched. |
 
+### P5-COV2: Vulkan coverage-delta executor bridge
+
+- Status: accepted locally as an explicit FP32 Vulkan bridge; no automatic
+  CoverageManager/Process installation or backend selection is enabled
+- Date: 2026-08-03
+
+`VulkanCoverageDeltaExecutor` owns a reusable `CoverageDeltaMetricFp32` and
+three host-visible buffers behind a mutex-protected shared state. Its callback
+accepts only channel-major, equal-width nonzero point ranges with checked
+offsets, sizes, byte counts, and Vulkan `uint32` dimensions. Inputs and all
+intermediate CPU operations are restricted to finite normal-or-zero FP32. The
+bridge computes the legacy `sum += (updated - previous)^2; sum /= N` result,
+dispatches the Vulkan metric into a private candidate, and compares every
+channel by raw IEEE-754 bits. Only an all-channel match commits caller output,
+`writtenCount`, and `complete`; validation, device, reset, or comparison
+failures leave all caller-owned output and metadata unchanged. The returned
+executor retains state after bridge destruction, while `reset()` makes that
+callback fail closed.
+
+| Gate | Result |
+|---|---|
+| Standalone contract smoke | Covers N=1/16/257, three channels, malformed offsets/length, NaN/subnormal inputs, reset, callback lifetime, output sentinels, and CPU raw-bit oracle. |
+| Hardware acceptance | Fresh MSVC 19.44.35223 + `VULKAN_SDK` build on the local Intel Arc; focused CTest `viennaps-vulkan-coverage-delta-executor-smoke` passed 1/1 in 0.26 s. |
+| Root manager integration | Not run for COV2: the actual bridge installation into CoverageManager remains a residual gate for the next deployment-profile phase. The CPU-only CoverageManager seam has already passed its separate root Debug acceptance. |
+| Scope boundary | Only the COV2 bridge files, surface CMake wiring, and this status entry changed; no public Vulkan header, shader/primitive, Process/ProcessContext, policy, or CPM logic changed. |
+
 ### P5-B2A: Surface-diffusion executor seam
 
 - Status: accepted locally as an explicit Process executor seam; no Vulkan

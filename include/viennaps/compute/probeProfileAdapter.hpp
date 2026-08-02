@@ -25,6 +25,18 @@ constexpr std::uint64_t kVulkanSafeBudgetMaxBytes =
 constexpr std::string_view kVulkanProbeUnknownDriverDate = "unknown";
 } // namespace detail
 
+enum class VulkanProbeSuiteStatus {
+  NOT_RUN = 0,
+  PASS,
+  FAIL,
+};
+
+struct VulkanProbeValidationEvidence {
+  VulkanProbeSuiteStatus primitiveSuite = VulkanProbeSuiteStatus::NOT_RUN;
+  VulkanProbeSuiteStatus fp32Suite = VulkanProbeSuiteStatus::NOT_RUN;
+  VulkanProbeSuiteStatus fp64Suite = VulkanProbeSuiteStatus::NOT_RUN;
+};
+
 struct VulkanProbeDeviceFacts {
   HardwareFingerprint hardware{};
   bool supportsVulkan = false;
@@ -37,6 +49,7 @@ struct VulkanProbeDeviceFacts {
   std::uint64_t deviceLocalBytes = 0;
   std::uint64_t hostVisibleBytes = 0;
   std::vector<std::uint64_t> memoryBudgetBytes{};
+  VulkanProbeValidationEvidence validationEvidence{};
 };
 
 struct VulkanProfileAdapterResult {
@@ -140,8 +153,12 @@ adaptVulkanProbeFactsToCapabilityProfile(const VulkanProbeDeviceFacts &facts,
   auto &profile = result.record.capabilityProfile;
   profile.cpuAvailable = true;
   profile.vulkanAvailable = facts.supportsComputeQueue;
-  profile.vulkanPrimitiveSuitePass = false;
-  profile.vulkanFp64SuitePass = false;
+  profile.vulkanPrimitiveSuitePass =
+      facts.validationEvidence.primitiveSuite == VulkanProbeSuiteStatus::PASS &&
+      facts.validationEvidence.fp32Suite == VulkanProbeSuiteStatus::PASS;
+  profile.vulkanFp64SuitePass =
+      facts.supportsShaderFloat64 &&
+      facts.validationEvidence.fp64Suite == VulkanProbeSuiteStatus::PASS;
   profile.vulkanCompute = facts.supportsComputeQueue;
   profile.vulkanRayQuery = facts.supportsRayQuery;
   profile.vulkanRayTracingPipeline = facts.supportsRayTracingPipeline;

@@ -91,6 +91,97 @@ void TestAdapterDefaultsKeepSuiteFlagsFalse() {
   VC_TEST_ASSERT(result.record.capabilityProfile.vulkanCompute);
 }
 
+void TestAdapterValidationEvidenceFailsClosed() {
+  auto facts = defaultFacts();
+  facts.validationEvidence.primitiveSuite = VulkanProbeSuiteStatus::NOT_RUN;
+  facts.validationEvidence.fp32Suite = VulkanProbeSuiteStatus::FAIL;
+  facts.validationEvidence.fp64Suite = VulkanProbeSuiteStatus::FAIL;
+  const auto result =
+      adaptVulkanProbeFactsToCapabilityProfile(facts, "2026-01-01T00:00:00Z");
+  VC_TEST_ASSERT(result.ok);
+  VC_TEST_ASSERT(!result.record.capabilityProfile.vulkanPrimitiveSuitePass);
+  VC_TEST_ASSERT(!result.record.capabilityProfile.vulkanFp64SuitePass);
+}
+
+void TestAdapterExplicitPrimitiveSuitePassEnablesPrimitiveCapability() {
+  auto facts = defaultFacts();
+  facts.validationEvidence.primitiveSuite = VulkanProbeSuiteStatus::PASS;
+  facts.validationEvidence.fp32Suite = VulkanProbeSuiteStatus::PASS;
+  const auto result =
+      adaptVulkanProbeFactsToCapabilityProfile(facts, "2026-01-01T00:00:00Z");
+  VC_TEST_ASSERT(result.ok);
+  VC_TEST_ASSERT(result.record.capabilityProfile.vulkanPrimitiveSuitePass);
+  VC_TEST_ASSERT(!result.record.capabilityProfile.vulkanFp64SuitePass);
+}
+
+void TestAdapterFailedPrimitiveSuiteKeepsPrimitiveCapabilityDisabled() {
+  auto facts = defaultFacts();
+  facts.validationEvidence.primitiveSuite = VulkanProbeSuiteStatus::FAIL;
+  const auto result =
+      adaptVulkanProbeFactsToCapabilityProfile(facts, "2026-01-01T00:00:00Z");
+  VC_TEST_ASSERT(result.ok);
+  VC_TEST_ASSERT(!result.record.capabilityProfile.vulkanPrimitiveSuitePass);
+}
+
+void TestAdapterPrimitiveSuiteRequiresFp32SuitePass() {
+  auto facts = defaultFacts();
+  facts.validationEvidence.primitiveSuite = VulkanProbeSuiteStatus::PASS;
+  facts.validationEvidence.fp32Suite = VulkanProbeSuiteStatus::FAIL;
+  const auto result =
+      adaptVulkanProbeFactsToCapabilityProfile(facts, "2026-01-01T00:00:00Z");
+  VC_TEST_ASSERT(result.ok);
+  VC_TEST_ASSERT(!result.record.capabilityProfile.vulkanPrimitiveSuitePass);
+}
+
+void TestAdapterInvalidValidationStatusFailsClosed() {
+  auto facts = defaultFacts();
+  facts.validationEvidence.primitiveSuite =
+      static_cast<VulkanProbeSuiteStatus>(99);
+  facts.validationEvidence.fp64Suite = static_cast<VulkanProbeSuiteStatus>(99);
+  const auto result =
+      adaptVulkanProbeFactsToCapabilityProfile(facts, "2026-01-01T00:00:00Z");
+  VC_TEST_ASSERT(result.ok);
+  VC_TEST_ASSERT(!result.record.capabilityProfile.vulkanPrimitiveSuitePass);
+  VC_TEST_ASSERT(!result.record.capabilityProfile.vulkanFp64SuitePass);
+}
+
+void TestAdapterFp64SuiteRequiresShaderFloat64Feature() {
+  auto facts = defaultFacts();
+  facts.supportsShaderFloat64 = false;
+  facts.validationEvidence.fp64Suite = VulkanProbeSuiteStatus::PASS;
+  const auto result =
+      adaptVulkanProbeFactsToCapabilityProfile(facts, "2026-01-01T00:00:00Z");
+  VC_TEST_ASSERT(result.ok);
+  VC_TEST_ASSERT(!result.record.capabilityProfile.vulkanFp64SuitePass);
+}
+
+void TestAdapterFp64SuitePassWithShaderFloat64EnablesCapability() {
+  auto facts = defaultFacts();
+  facts.supportsShaderFloat64 = true;
+  facts.validationEvidence.fp64Suite = VulkanProbeSuiteStatus::PASS;
+  const auto result =
+      adaptVulkanProbeFactsToCapabilityProfile(facts, "2026-01-01T00:00:00Z");
+  VC_TEST_ASSERT(result.ok);
+  VC_TEST_ASSERT(result.record.capabilityProfile.vulkanFp64SuitePass);
+}
+
+void TestAdapterValidationEvidenceDoesNotChangeSafeBudget() {
+  auto facts = defaultFacts();
+  facts.memoryBudgetExtensionAvailable = true;
+  facts.memoryBudgetBytes = {miB(2048)};
+  const auto baseline =
+      adaptVulkanProbeFactsToCapabilityProfile(facts, "2026-01-01T00:00:00Z");
+  facts.validationEvidence.primitiveSuite = VulkanProbeSuiteStatus::PASS;
+  facts.validationEvidence.fp32Suite = VulkanProbeSuiteStatus::PASS;
+  facts.validationEvidence.fp64Suite = VulkanProbeSuiteStatus::PASS;
+  const auto validated =
+      adaptVulkanProbeFactsToCapabilityProfile(facts, "2026-01-01T00:00:00Z");
+  VC_TEST_ASSERT(baseline.ok);
+  VC_TEST_ASSERT(validated.ok);
+  VC_TEST_ASSERT(validated.record.capabilityProfile.safeVulkanWorkingSetBytes ==
+                 baseline.record.capabilityProfile.safeVulkanWorkingSetBytes);
+}
+
 void TestAdapterRejectsIncompleteHardwareFingerprint() {
   auto facts = defaultFacts();
   facts.hardware.driverVersion.clear();
@@ -191,6 +282,16 @@ int main() {
     viennacore::TestSafeBudgetCapsToMaxBytes();
     viennacore::TestSafeBudgetOverflowIsClamped();
     viennacore::TestAdapterDefaultsKeepSuiteFlagsFalse();
+    viennacore::TestAdapterValidationEvidenceFailsClosed();
+    viennacore::
+        TestAdapterExplicitPrimitiveSuitePassEnablesPrimitiveCapability();
+    viennacore::
+        TestAdapterFailedPrimitiveSuiteKeepsPrimitiveCapabilityDisabled();
+    viennacore::TestAdapterPrimitiveSuiteRequiresFp32SuitePass();
+    viennacore::TestAdapterInvalidValidationStatusFailsClosed();
+    viennacore::TestAdapterFp64SuiteRequiresShaderFloat64Feature();
+    viennacore::TestAdapterFp64SuitePassWithShaderFloat64EnablesCapability();
+    viennacore::TestAdapterValidationEvidenceDoesNotChangeSafeBudget();
     viennacore::TestAdapterRejectsIncompleteHardwareFingerprint();
     viennacore::TestAdapterWithoutBudgetExtensionReportsZeroBytes();
     viennacore::TestAdapterWithoutComputeQueueCannotEnableVulkan();

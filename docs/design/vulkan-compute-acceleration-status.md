@@ -1384,6 +1384,26 @@ session, executes deterministic small oracles including the N=183/K=68 HRLE
 transaction, and atomically persists versioned suite evidence. Missing SDK or
 shader payloads must leave Vulkan disabled without writing a false pass.
 
+### P4D1 validation-evidence adapter
+
+- Status: accepted locally
+- Date: 2026-08-02
+
+`VulkanProbeDeviceFacts` now carries explicit `NOT_RUN`, `PASS`, or `FAIL`
+evidence for the primitive, FP32, and FP64 suites. The capability adapter
+enables `vulkanPrimitiveSuitePass` only when both the primitive and FP32 suites
+explicitly pass. It enables `vulkanFp64SuitePass` only when the device exposes
+`shaderFloat64` and the FP64 suite explicitly passes. Defaults, failures,
+unknown enum values, missing FP32 evidence, and unsupported FP64 remain
+fail-closed. The budget and fingerprint contracts are unchanged.
+
+This interface does not pretend that the current probe executes validation:
+`VulkanProbe.cpp` supplies the default `NOT_RUN` evidence, so generated profiles
+remain ineligible until the real suite runner is connected. The focused
+no-SDK adapter test passes 1/1 and covers default, pass, fail, unknown,
+precision-feature, and safe-budget invariants without changing profile schema
+version 2.
+
 ## Next slice
 
 Add a dedicated optional HRLE rebuild executor seam to the patched ViennaLS

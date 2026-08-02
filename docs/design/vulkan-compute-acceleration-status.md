@@ -1643,6 +1643,34 @@ successful no-op.
 | Device empty graph | a valid zero-node DeviceBuffer graph preserves its tail sentinel; aliased empty buffers are rejected before the no-op |
 | Scope boundary | this is a reusable CSR primitive only; `psSurfaceDiffusion` and coverage/process/controller routing remain CPU |
 
+### P5-B3: independent FP32 coverage convergence delta metric
+
+- Status: accepted locally as a bounded correctness primitive; no production
+  route is enabled
+- Date: 2026-08-03
+
+`CoverageDeltaMetricFp32` is an independent surface primitive for the
+channel-major coverage convergence delta. One invocation owns one channel and
+walks the original point order; no cross-thread or atomic reduction is used.
+The strict FP32 host oracle rejects non-normal values, empty point domains,
+intermediate overflow/underflow, malformed dimensions, aliases, and capacity
+errors before dispatch. GPU results are first written to a private scratch
+buffer so rejected calls do not publish caller output.
+
+This primitive deliberately does not change `psCoverageManager`,
+`psFluxProcessStrategy`, `Process`, backend policy, or any production route.
+The production tolerance remains a double-valued gate, and any future bridge
+must first satisfy the P5-B2 surface-diffusion integration prerequisite before
+this metric can be considered for controller use.
+
+| Gate | Result |
+|---|---|
+| CPU differential | MSVC and local Intel Arc Vulkan smoke passed 1/1. It covers three channels at N=1, 16, and 257 with bitwise FP32 comparison, output-tail sentinels, and both host-visible and device-resident entry points |
+| Fail-closed input | Invalid shape, N=0, NaN, FP32 overflow, aliases, and insufficient capacity are rejected before publication |
+| Dispatch shape | One work item per channel; channel-major contiguous input and one FP32 output per channel |
+| Production boundary | No `CoverageManager`/`Process`/backend routing change; production convergence tolerance remains double |
+| Bridge prerequisite | P5-B2 surface-diffusion integration is required before any production bridge is considered |
+
 ### P5-C: deterministic FP32 ray-record reducer
 
 - Status: accepted locally as a bounded correctness primitive; traversal and

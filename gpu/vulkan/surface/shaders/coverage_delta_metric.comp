@@ -1,0 +1,28 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Updated { float values[]; } updated;
+layout(set = 0, binding = 1, std430) readonly buffer Previous { float values[]; } previous;
+layout(set = 0, binding = 2, std430) writeonly buffer Output { float values[]; } outputValues;
+
+layout(push_constant) uniform Params {
+  uint channelCount;
+  uint pointCount;
+} params;
+
+void main() {
+  const uint channel = gl_GlobalInvocationID.x;
+  if (channel >= params.channelCount)
+    return;
+
+  const uint base = channel * params.pointCount;
+  precise float sum = 0.0;
+  for (uint point = 0u; point < params.pointCount; ++point) {
+    precise float difference = updated.values[base + point] - previous.values[base + point];
+    precise float square = difference * difference;
+    sum = sum + square;
+  }
+  precise float mean = sum / float(params.pointCount);
+  outputValues.values[channel] = mean;
+}

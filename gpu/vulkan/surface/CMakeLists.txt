@@ -12,6 +12,10 @@ set(VIENNAPS_VULKAN_GRAPH_DIFFUSION_SHADER
     "${CMAKE_CURRENT_SOURCE_DIR}/shaders/graph_diffusion.comp")
 set(VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV
     "${CMAKE_CURRENT_BINARY_DIR}/graph_diffusion.comp.spv")
+set(VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/coverage_delta_metric.comp")
+set(VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/coverage_delta_metric.comp.spv")
 
 find_program(VIENNAPS_VULKAN_SURFACE_SHADER_COMPILER
              NAMES glslc glslangValidator
@@ -34,6 +38,29 @@ if(NOT VIENNAPS_VULKAN_SURFACE_SHADER_COMPILER)
           "[ViennaPS Vulkan Surface] Vulkan SDK detected but no shader compiler found; skipping surface module.")
   return()
 endif()
+
+if("${VIENNAPS_VULKAN_SURFACE_SHADER_COMPILER}" MATCHES ".*glslangValidator.*")
+  add_custom_command(
+    OUTPUT ${VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV}
+    COMMAND ${VIENNAPS_VULKAN_SURFACE_SHADER_COMPILER} -V
+            ${VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SHADER} -o
+            ${VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV}
+    DEPENDS ${VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Generating Vulkan coverage delta metric SPIR-V shader.")
+else()
+  add_custom_command(
+    OUTPUT ${VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV}
+    COMMAND ${VIENNAPS_VULKAN_SURFACE_SHADER_COMPILER}
+            -o ${VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV}
+            ${VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SHADER}
+    DEPENDS ${VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Generating Vulkan coverage delta metric SPIR-V shader.")
+endif()
+
+add_custom_target(viennaps-vulkan-coverage-delta-metric-spv
+  DEPENDS ${VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV})
 
 if("${VIENNAPS_VULKAN_SURFACE_SHADER_COMPILER}" MATCHES ".*glslangValidator.*")
   add_custom_command(
@@ -109,6 +136,21 @@ else()
                          PRIVATE -Wall -Wextra -Wpedantic -Werror)
 endif()
 
+add_library(viennaps_vulkan_coverage_delta_metric coverage_delta_metric.cpp)
+add_dependencies(viennaps_vulkan_coverage_delta_metric
+                 viennaps-vulkan-coverage-delta-metric-spv)
+target_link_libraries(viennaps_vulkan_coverage_delta_metric
+                      PUBLIC viennaps_vulkan_compute_runtime Vulkan::Vulkan)
+target_include_directories(viennaps_vulkan_coverage_delta_metric
+                           PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(viennaps_vulkan_coverage_delta_metric PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps_vulkan_coverage_delta_metric PRIVATE /W4 /WX)
+else()
+  target_compile_options(viennaps_vulkan_coverage_delta_metric
+                         PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
 string(REPLACE "\\" "/" VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH
                "${VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV}")
 add_executable(viennaps-vulkan-graph-diffusion-smoke
@@ -126,6 +168,25 @@ if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
    VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE)
   add_test(NAME viennaps-vulkan-graph-diffusion-smoke
            COMMAND viennaps-vulkan-graph-diffusion-smoke)
+endif()
+
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV_PATH
+               "${VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV}")
+add_executable(viennaps-vulkan-coverage-delta-metric-smoke
+               coverage_delta_metric_smoke.cpp)
+add_dependencies(viennaps-vulkan-coverage-delta-metric-smoke
+                 viennaps-vulkan-coverage-delta-metric-spv)
+target_compile_features(viennaps-vulkan-coverage-delta-metric-smoke PRIVATE cxx_std_20)
+target_compile_definitions(
+  viennaps-vulkan-coverage-delta-metric-smoke PRIVATE
+  "VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV_PATH=\"${VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-coverage-delta-metric-smoke
+                      PRIVATE viennaps_vulkan_coverage_delta_metric Vulkan::Vulkan)
+
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
+   VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE)
+  add_test(NAME viennaps-vulkan-coverage-delta-metric-smoke
+           COMMAND viennaps-vulkan-coverage-delta-metric-smoke)
 endif()
 
 string(REPLACE "\\" "/" VIENNAPS_VULKAN_NEUTRAL_TRANSPORT_SPV_PATH

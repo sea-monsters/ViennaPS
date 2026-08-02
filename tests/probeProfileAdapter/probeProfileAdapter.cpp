@@ -91,6 +91,26 @@ void TestAdapterDefaultsKeepSuiteFlagsFalse() {
   VC_TEST_ASSERT(result.record.capabilityProfile.vulkanCompute);
 }
 
+void TestAdapterPropagatesNumericalSmokeEvidence() {
+  auto facts = defaultFacts();
+  facts.validationEvidence.fp32NumericalSmoke.status =
+      VulkanNumericalSmokeStatus::PASS;
+  facts.validationEvidence.fp32NumericalSmoke.contractId =
+      std::string(kVulkanFp32NumericalSmokeContract);
+  facts.validationEvidence.fp32NumericalSmoke.caseCount = 1U;
+  facts.validationEvidence.fp32NumericalSmoke.maxUlp = 0U;
+  facts.validationEvidence.fp32NumericalSmoke.watchdogMs =
+      kVulkanFp32NumericalSmokeWatchdogMs;
+  const auto result =
+      adaptVulkanProbeFactsToCapabilityProfile(facts, "2026-01-01T00:00:00Z");
+  VC_TEST_ASSERT(result.ok);
+  VC_TEST_ASSERT(
+      result.record.capabilityProfile.vulkanFp32NumericalSmoke.status ==
+      VulkanNumericalSmokeStatus::PASS);
+  VC_TEST_ASSERT(
+      result.record.capabilityProfile.vulkanFp32NumericalSmoke.maxUlp == 0U);
+}
+
 void TestAdapterValidationEvidenceFailsClosed() {
   auto facts = defaultFacts();
   facts.validationEvidence.primitiveSuite = VulkanProbeSuiteStatus::NOT_RUN;
@@ -282,6 +302,7 @@ int main() {
     viennacore::TestSafeBudgetCapsToMaxBytes();
     viennacore::TestSafeBudgetOverflowIsClamped();
     viennacore::TestAdapterDefaultsKeepSuiteFlagsFalse();
+    viennacore::TestAdapterPropagatesNumericalSmokeEvidence();
     viennacore::TestAdapterValidationEvidenceFailsClosed();
     viennacore::
         TestAdapterExplicitPrimitiveSuitePassEnablesPrimitiveCapability();

@@ -1965,6 +1965,39 @@ must treat the static float-control properties as a candidate only: a
 process-isolated, watchdog-bounded numerical smoke must pass bitwise CPU
 differential cases before the strict GPU profile is selected automatically.
 
+### P5-K1: strict-FP32 numerical evidence profile and routing gate
+
+- Status: accepted locally as a persistence and policy seam; no numerical
+  smoke runner or production strict route is enabled by this slice
+- Date: 2026-08-02
+
+The capability profile schema is now version 3. Its Vulkan numerical-smoke
+evidence records `NOT_RUN`/`PASS`/`FAIL`, the fixed contract id, CPU case and
+bitwise mismatch counts, max ULP, elapsed and watchdog milliseconds, and a
+failure diagnostic. The parser is strict about types, required fields, unknown
+or duplicate members, and integer overflow, including nested hardware and
+evidence objects. Schema 1 and 2 records remain readable but default this
+evidence to `NOT_RUN`, so older deployments fail closed for strict Auto
+selection rather than accidentally receiving a new guarantee.
+
+The probe-to-profile adapter transports the evidence but does not manufacture
+it from advertised float-control features. Auto Vulkan selection now requires
+an exact strict contract, nonzero case count, zero bitwise mismatches and ULP,
+the configured watchdog, a non-timeout elapsed value, and no failure
+diagnostic. A normal Manual Vulkan selection can still override Auto after the
+existing availability, primitive-suite, budget, precision, and ray-mode gates;
+its plan explicitly says that no strict FP32 guarantee is present. A caller
+that explicitly requests strict Manual Vulkan is rejected with the same clear
+evidence diagnostic when that evidence is absent or incompatible.
+
+| Gate | Result |
+|---|---|
+| Schema compatibility | focused profile-I/O tests round-trip schema 3 and load schema 1/2 with `NOT_RUN` defaults |
+| Parser boundary | unknown/duplicate fields and uint64 overflow are rejected, including nested hardware and strict-smoke objects |
+| Policy boundary | Auto fails closed before a valid strict smoke; normal Manual Vulkan retains an explicit non-strict override; strict Manual Vulkan fails until the evidence passes |
+| Focused validation | `backendPolicy`, `capabilityProfileIO`, and `probeProfileAdapter` compile and pass under the MSVC C++20 test harness |
+| Scope boundary | no process-isolated watchdog executable, no device numerical suite execution, no static float-control promotion, and no automatic production strict route |
+
 ### P5-JD: device-resident ray-flux composition baseline
 
 - Status: accepted locally as an ordered multi-submit composition baseline;
@@ -2038,8 +2071,8 @@ then records those stages with explicit barriers into one compute submission.
 The next path must add a device-visible status and fail-closed policy for
 non-finite or out-of-domain intermediate FP32 sums before claiming full
 `reduceCpu` rejection equivalence. The strict FP32 deployment profile
-additionally needs the isolated watchdog probe described above; HostVisible
-radix helpers cannot be reused.
+additionally needs P5-K2's isolated watchdog probe to populate P5-K1's
+evidence; HostVisible radix helpers cannot be reused.
 CPU differential checking remains an explicit validation gate, not a
 production per-call guard. Coverage reaction is a capability-gated FP64
 candidate, without weakening the current fail-closed gate.

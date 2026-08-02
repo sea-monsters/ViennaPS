@@ -12,6 +12,16 @@ namespace viennacore {
 
 using namespace viennaps::compute;
 
+void enableValidatedFp32Smoke(CapabilityProfile &profile) {
+  profile.vulkanFp32NumericalSmoke.status = VulkanNumericalSmokeStatus::PASS;
+  profile.vulkanFp32NumericalSmoke.contractId =
+      std::string(kVulkanFp32NumericalSmokeContract);
+  profile.vulkanFp32NumericalSmoke.caseCount = 1U;
+  profile.vulkanFp32NumericalSmoke.maxUlp = 0U;
+  profile.vulkanFp32NumericalSmoke.watchdogMs =
+      kVulkanFp32NumericalSmokeWatchdogMs;
+}
+
 void TestManualOverrideCanForceCPU() {
   CapabilityProfile profile{};
   profile.cpuAvailable = true;
@@ -113,6 +123,7 @@ void TestAutoPrefersVulkanWhenCapabilitiesPass() {
   profile.vulkanRayTracingPipeline = true;
   profile.shaderFloat64 = true;
   profile.safeVulkanWorkingSetBytes = 1024 * 1024 * 1024ULL;
+  enableValidatedFp32Smoke(profile);
 
   std::vector<StageWorkload> workloads = {{Stage::RAY_TRACING, Precision::FP32,
                                            1024 * 1024ULL, false, RayMode::NONE,
@@ -137,6 +148,7 @@ void TestAutoUsesTheLowestValidatedRayTier() {
   profile.vulkanRayTracingPipeline = false;
   profile.shaderFloat64 = true;
   profile.safeVulkanWorkingSetBytes = 1024 * 1024 * 1024ULL;
+  enableValidatedFp32Smoke(profile);
 
   ManualSelectionConfig config{};
   std::vector<StageWorkload> workloads = {{Stage::RAY_TRACING, Precision::FP32,
@@ -159,6 +171,7 @@ void TestVulkanRejectsFP64WithoutSupportThenFallsBackCPU() {
   profile.vulkanCompute = true;
   profile.shaderFloat64 = false;
   profile.safeVulkanWorkingSetBytes = 1024ULL * 1024ULL * 1024ULL;
+  enableValidatedFp32Smoke(profile);
 
   std::vector<StageWorkload> workloads = {{Stage::OXIDATION_LINEAR_SOLVE,
                                            Precision::FP64, 1ULL << 12, false,
@@ -181,6 +194,7 @@ void TestAutoRejectsVulkanWhenMemoryBudgetIsUnknown() {
   profile.vulkanPrimitiveSuitePass = true;
   profile.vulkanCompute = true;
   profile.safeVulkanWorkingSetBytes = 0;
+  enableValidatedFp32Smoke(profile);
 
   const std::vector<StageWorkload> workloads = {
       {Stage::LEVEL_SET, Precision::FP32, 4096, false, RayMode::NONE, true}};
@@ -197,6 +211,7 @@ void TestVulkanRejectsWorkloadAboveSafeMemoryBudget() {
   profile.vulkanPrimitiveSuitePass = true;
   profile.vulkanCompute = true;
   profile.safeVulkanWorkingSetBytes = 4096;
+  enableValidatedFp32Smoke(profile);
 
   const std::vector<StageWorkload> workloads = {
       {Stage::LEVEL_SET, Precision::FP32, 4097, false, RayMode::NONE, false}};
@@ -228,6 +243,7 @@ void TestManualRayTierCannotSilentlyDowngrade() {
   profile.vulkanPrimitiveSuitePass = true;
   profile.vulkanCompute = true;
   profile.safeVulkanWorkingSetBytes = 1024 * 1024;
+  enableValidatedFp32Smoke(profile);
 
   ManualSelectionConfig config{};
   config.selectionMode = SelectionMode::MANUAL;
@@ -256,6 +272,7 @@ void TestManualOverrideAlwaysWinsOverAutoRanking() {
   profile.vulkanRayTracingPipeline = true;
   profile.shaderFloat64 = true;
   profile.safeVulkanWorkingSetBytes = 1024ULL * 1024ULL * 1024ULL;
+  enableValidatedFp32Smoke(profile);
 
   ManualSelectionConfig config{};
   config.selectionMode = SelectionMode::MANUAL;
@@ -300,6 +317,62 @@ void TestCapabilityProfileFingerprintMismatchInvalidatesCache() {
       cachedProfile, runtimeFingerprint));
 }
 
+void TestAutoRequiresStrictFp32NumericalSmoke() {
+  CapabilityProfile profile{};
+  profile.cpuAvailable = true;
+  profile.vulkanAvailable = true;
+  profile.vulkanCompute = true;
+  profile.vulkanPrimitiveSuitePass = true;
+  profile.safeVulkanWorkingSetBytes = 1024ULL * 1024ULL * 1024ULL;
+
+  const std::vector<StageWorkload> workloads = {
+      {Stage::LEVEL_SET, Precision::FP32, 1024ULL, false, RayMode::NONE, true}};
+  auto plan = buildSelectionPlan(profile, workloads);
+  VC_TEST_ASSERT(plan.ok);
+  VC_TEST_ASSERT(plan.stages[0].selectedBackend == ComputeBackend::CPU);
+
+  profile.vulkanFp32NumericalSmoke.status = VulkanNumericalSmokeStatus::PASS;
+  profile.vulkanFp32NumericalSmoke.contractId =
+      std::string(kVulkanFp32NumericalSmokeContract);
+  profile.vulkanFp32NumericalSmoke.caseCount = 1U;
+  profile.vulkanFp32NumericalSmoke.maxUlp = 0U;
+  profile.vulkanFp32NumericalSmoke.watchdogMs =
+      kVulkanFp32NumericalSmokeWatchdogMs;
+  plan = buildSelectionPlan(profile, workloads);
+  VC_TEST_ASSERT(plan.stages[0].selectedBackend == ComputeBackend::VULKAN);
+}
+
+void TestManualVulkanCanSelectNonStrictRoute() {
+  CapabilityProfile profile{};
+  profile.cpuAvailable = true;
+  profile.vulkanAvailable = true;
+  profile.vulkanCompute = true;
+  profile.vulkanPrimitiveSuitePass = true;
+  profile.safeVulkanWorkingSetBytes = 1024ULL * 1024ULL * 1024ULL;
+
+  ManualSelectionConfig config{};
+  config.selectionMode = SelectionMode::MANUAL;
+  config.globalBackend = ComputeBackend::VULKAN;
+  config.allowStageFallback = false;
+  const std::vector<StageWorkload> workloads = {
+      {Stage::LEVEL_SET, Precision::FP32, 1024ULL, false, RayMode::NONE, true}};
+  const auto plan = buildSelectionPlan(profile, workloads, config);
+  VC_TEST_ASSERT(plan.ok);
+  VC_TEST_ASSERT(plan.stages[0].selected);
+  VC_TEST_ASSERT(plan.stages[0].selectedBackend == ComputeBackend::VULKAN);
+  VC_TEST_ASSERT(plan.stages[0].selectedReasons.back() ==
+                 "Manual Vulkan selected without strict FP32 numerical "
+                 "guarantee.");
+
+  config.requireStrictFp32NumericalSmoke = true;
+  const auto strictPlan = buildSelectionPlan(profile, workloads, config);
+  VC_TEST_ASSERT(!strictPlan.ok);
+  VC_TEST_ASSERT(!strictPlan.stages[0].selected);
+  VC_TEST_ASSERT(strictPlan.stages[0].rejectionReasons.front() ==
+                 "Manual backend blocked: Vulkan strict FP32 numerical smoke "
+                 "did not pass.");
+}
+
 } // namespace viennacore
 
 int main() {
@@ -327,6 +400,10 @@ int main() {
   viennacore::TestManualOverrideAlwaysWinsOverAutoRanking();
   std::cerr << "TestCapabilityProfileFingerprintMismatchInvalidatesCache\n";
   viennacore::TestCapabilityProfileFingerprintMismatchInvalidatesCache();
+  std::cerr << "TestAutoRequiresStrictFp32NumericalSmoke\n";
+  viennacore::TestAutoRequiresStrictFp32NumericalSmoke();
+  std::cerr << "TestManualVulkanCanSelectNonStrictRoute\n";
+  viennacore::TestManualVulkanCanSelectNonStrictRoute();
 
   return 0;
 }

@@ -35,6 +35,7 @@ struct VulkanProbeValidationEvidence {
   VulkanProbeSuiteStatus primitiveSuite = VulkanProbeSuiteStatus::NOT_RUN;
   VulkanProbeSuiteStatus fp32Suite = VulkanProbeSuiteStatus::NOT_RUN;
   VulkanProbeSuiteStatus fp64Suite = VulkanProbeSuiteStatus::NOT_RUN;
+  VulkanFp32NumericalSmokeEvidence fp32NumericalSmoke{};
 };
 
 struct VulkanProbeDeviceFacts {
@@ -163,6 +164,8 @@ adaptVulkanProbeFactsToCapabilityProfile(const VulkanProbeDeviceFacts &facts,
   profile.vulkanRayQuery = facts.supportsRayQuery;
   profile.vulkanRayTracingPipeline = facts.supportsRayTracingPipeline;
   profile.shaderFloat64 = facts.supportsShaderFloat64;
+  profile.vulkanFp32NumericalSmoke =
+      facts.validationEvidence.fp32NumericalSmoke;
   profile.safeVulkanWorkingSetBytes = deriveSafeVulkanWorkingSetBytes(
       facts.memoryBudgetBytes, facts.memoryBudgetExtensionAvailable,
       &result.message);

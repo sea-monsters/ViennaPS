@@ -46,6 +46,18 @@ void assertProfileEqual(const CapabilityProfileRecord &left,
                  right.capabilityProfile.vulkanRayTracingPipeline);
   VC_TEST_ASSERT(left.capabilityProfile.shaderFloat64 ==
                  right.capabilityProfile.shaderFloat64);
+  VC_TEST_ASSERT(left.capabilityProfile.vulkanFp32NumericalSmoke.status ==
+                 right.capabilityProfile.vulkanFp32NumericalSmoke.status);
+  VC_TEST_ASSERT(left.capabilityProfile.vulkanFp32NumericalSmoke.contractId ==
+                 right.capabilityProfile.vulkanFp32NumericalSmoke.contractId);
+  VC_TEST_ASSERT(left.capabilityProfile.vulkanFp32NumericalSmoke.caseCount ==
+                 right.capabilityProfile.vulkanFp32NumericalSmoke.caseCount);
+  VC_TEST_ASSERT(left.capabilityProfile.vulkanFp32NumericalSmoke.maxUlp ==
+                 right.capabilityProfile.vulkanFp32NumericalSmoke.maxUlp);
+  VC_TEST_ASSERT(left.capabilityProfile.vulkanFp32NumericalSmoke.watchdogMs ==
+                 right.capabilityProfile.vulkanFp32NumericalSmoke.watchdogMs);
+  VC_TEST_ASSERT(left.capabilityProfile.vulkanFp32NumericalSmoke.elapsedMs ==
+                 right.capabilityProfile.vulkanFp32NumericalSmoke.elapsedMs);
   VC_TEST_ASSERT(left.capabilityProfile.safeVulkanWorkingSetBytes ==
                  right.capabilityProfile.safeVulkanWorkingSetBytes);
 }
@@ -58,8 +70,19 @@ void writeRecordToTempDir(const HardwareFingerprint &hardware,
       std::filesystem::path(std::filesystem::temp_directory_path()) / dirName;
   std::filesystem::create_directories(dir);
   const auto filePath = dir / (hardware.deviceUuid + suffix + ".json");
-  VC_TEST_ASSERT(
-      writeCapabilityProfileRecordToFile(filePath.string(), record, nullptr));
+  auto persisted = record;
+  if (persisted.capabilityProfile.vulkanPrimitiveSuitePass) {
+    persisted.capabilityProfile.vulkanFp32NumericalSmoke.status =
+        VulkanNumericalSmokeStatus::PASS;
+    persisted.capabilityProfile.vulkanFp32NumericalSmoke.contractId =
+        std::string(kVulkanFp32NumericalSmokeContract);
+    persisted.capabilityProfile.vulkanFp32NumericalSmoke.caseCount = 1U;
+    persisted.capabilityProfile.vulkanFp32NumericalSmoke.maxUlp = 0U;
+    persisted.capabilityProfile.vulkanFp32NumericalSmoke.watchdogMs =
+        kVulkanFp32NumericalSmokeWatchdogMs;
+  }
+  VC_TEST_ASSERT(writeCapabilityProfileRecordToFile(filePath.string(),
+                                                    persisted, nullptr));
 }
 
 void cleanTempProfileIfExists(const HardwareFingerprint &hardware,
@@ -147,9 +170,39 @@ void TestRoundTrip() {
   std::filesystem::remove(tempPath, removeError);
 }
 
+void TestNumericalSmokeEvidenceRoundTrips() {
+  CapabilityProfileRecord record;
+  record.recordedAt = "2026-01-01T00:00:00Z";
+  record.hardware.deviceUuid = "DEV";
+  record.hardware.driverUuid = "DRV";
+  record.hardware.deviceName = "fixture";
+  record.hardware.driverVersion = "1";
+  record.hardware.driverDate = "2026-01-01";
+  record.capabilityProfile.vulkanFp32NumericalSmoke.status =
+      VulkanNumericalSmokeStatus::FAIL;
+  record.capabilityProfile.vulkanFp32NumericalSmoke.contractId =
+      std::string(kVulkanFp32NumericalSmokeContract);
+  record.capabilityProfile.vulkanFp32NumericalSmoke.maxUlp = 3U;
+  record.capabilityProfile.vulkanFp32NumericalSmoke.watchdogMs =
+      kVulkanFp32NumericalSmokeWatchdogMs;
+  const auto path = (std::filesystem::temp_directory_path() /
+                     "viennaps-profile-numerical-smoke.json")
+                        .string();
+  VC_TEST_ASSERT(writeCapabilityProfileRecordToFile(path, record, nullptr));
+  const auto loaded = loadCapabilityProfileRecordFromFile(path);
+  VC_TEST_ASSERT(loaded.ok);
+  VC_TEST_ASSERT(
+      loaded.record.capabilityProfile.vulkanFp32NumericalSmoke.status ==
+      VulkanNumericalSmokeStatus::FAIL);
+  VC_TEST_ASSERT(
+      loaded.record.capabilityProfile.vulkanFp32NumericalSmoke.maxUlp == 3U);
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
 void TestUnknownFieldsIgnored() {
   const std::string payload = R"({
-    "schemaVersion": 2,
+    "schemaVersion": 3,
     "recordedAt": "2026-08-01T00:00:00Z",
     "hardwareFingerprint": {
       "deviceUuid": "DEV-DUMMY-001",
@@ -172,18 +225,81 @@ void TestUnknownFieldsIgnored() {
       "vulkanRayQuery": false,
       "vulkanRayTracingPipeline": false,
       "shaderFloat64": false,
+      "vulkanFp32NumericalSmoke": {
+        "status": "NOT_RUN",
+        "contractId": "",
+        "caseCount": 0,
+        "mismatchCount": 0,
+        "maxUlp": 0,
+        "watchdogMs": 0,
+        "elapsedMs": 0,
+        "failureDiagnostic": ""
+      },
       "safeVulkanWorkingSetBytes": 0,
       "extraProfileField": true
     }
   })";
   const auto loaded = parseCapabilityProfileRecord(payload);
-  VC_TEST_ASSERT(loaded.ok);
-  VC_TEST_ASSERT(loaded.record.capabilityProfile.cpuAvailable);
+  VC_TEST_ASSERT(!loaded.ok);
+  VC_TEST_ASSERT(loaded.error == CapabilityProfileIOError::SCHEMA_MISMATCH);
+}
+
+void TestLegacySchemaLoadsWithDefaultNumericalEvidence() {
+  CapabilityProfileRecord legacy;
+  legacy.recordedAt = "2026-01-01T00:00:00Z";
+  legacy.hardware.deviceUuid = "DEV-LEGACY";
+  legacy.hardware.driverUuid = "DRV-LEGACY";
+  legacy.hardware.deviceName = "legacy";
+  legacy.hardware.driverVersion = "1";
+  legacy.hardware.driverDate = "2026-01-01";
+  legacy.capabilityProfile.vulkanAvailable = true;
+  legacy.capabilityProfile.vulkanCompute = true;
+  legacy.capabilityProfile.vulkanPrimitiveSuitePass = true;
+  for (const auto schemaVersion : {1U, 2U}) {
+    legacy.schemaVersion = schemaVersion;
+    const auto loaded = parseCapabilityProfileRecord(toJson(legacy));
+    VC_TEST_ASSERT(loaded.ok);
+    VC_TEST_ASSERT(loaded.record.schemaVersion == schemaVersion);
+    VC_TEST_ASSERT(
+        loaded.record.capabilityProfile.vulkanFp32NumericalSmoke.status ==
+        VulkanNumericalSmokeStatus::NOT_RUN);
+    VC_TEST_ASSERT(
+        !viennaps::compute::detail::profileHasStrictFp32NumericalSmoke(
+            loaded.record.capabilityProfile));
+  }
+}
+
+void TestDuplicateAndOverflowFieldsAreRejected() {
+  const std::string duplicate = R"({
+    "schemaVersion":3,"recordedAt":"x",
+    "hardwareFingerprint":{"deviceUuid":"d","driverUuid":"r","vendorId":1,"deviceId":2,"deviceName":"n","driverVersion":"1","driverDate":"d"},
+    "capabilityProfile":{"cpuAvailable":true,"cpuAvailable":true}
+  })";
+  const auto duplicateResult = parseCapabilityProfileRecord(duplicate);
+  VC_TEST_ASSERT(!duplicateResult.ok);
+  VC_TEST_ASSERT(duplicateResult.error ==
+                 CapabilityProfileIOError::SCHEMA_MISMATCH);
+
+  const std::string duplicateHardware = R"({
+    "schemaVersion":3,"recordedAt":"x",
+    "hardwareFingerprint":{"deviceUuid":"d","deviceUuid":"d"}
+  })";
+  const auto duplicateHardwareResult =
+      parseCapabilityProfileRecord(duplicateHardware);
+  VC_TEST_ASSERT(!duplicateHardwareResult.ok);
+  VC_TEST_ASSERT(duplicateHardwareResult.error ==
+                 CapabilityProfileIOError::SCHEMA_MISMATCH);
+
+  const std::string overflow = R"({"schemaVersion":18446744073709551616})";
+  const auto overflowResult = parseCapabilityProfileRecord(overflow);
+  VC_TEST_ASSERT(!overflowResult.ok);
+  VC_TEST_ASSERT(overflowResult.error ==
+                 CapabilityProfileIOError::JSON_SYNTAX_ERROR);
 }
 
 void TestBadSchemaTypeIsRejected() {
   const std::string payload = R"({
-    "schemaVersion": "2",
+    "schemaVersion": "3",
     "capabilityProfile": {
       "cpuAvailable": true,
       "cudaAvailable": false,
@@ -204,7 +320,7 @@ void TestBadSchemaTypeIsRejected() {
 
 void TestMissingRequiredFieldIsRejected() {
   const std::string payload = R"({
-    "schemaVersion": 2,
+    "schemaVersion": 3,
     "recordedAt": "2026-08-01T00:00:00Z",
     "hardwareFingerprint": {
       "deviceUuid": "DEV-MISSING-001",
@@ -495,6 +611,9 @@ void TestDeploymentProfileDirectoryFallsBackToDefaultWhenEnvEmpty() {
 
 int main() {
   viennacore::TestRoundTrip();
+  viennacore::TestNumericalSmokeEvidenceRoundTrips();
+  viennacore::TestLegacySchemaLoadsWithDefaultNumericalEvidence();
+  viennacore::TestDuplicateAndOverflowFieldsAreRejected();
   viennacore::TestUnknownFieldsIgnored();
   viennacore::TestBadSchemaTypeIsRejected();
   viennacore::TestMissingRequiredFieldIsRejected();

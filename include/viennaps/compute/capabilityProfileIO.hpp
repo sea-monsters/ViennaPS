@@ -6,6 +6,8 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <initializer_list>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -17,7 +19,7 @@
 
 namespace viennaps::compute {
 
-constexpr std::uint32_t kCapabilityProfileSchemaVersion = 2U;
+constexpr std::uint32_t kCapabilityProfileSchemaVersion = 3U;
 
 struct HardwareFingerprint {
   std::string deviceUuid;
@@ -301,7 +303,10 @@ private:
       if (!std::isdigit(static_cast<unsigned char>(c))) {
         break;
       }
-      value = value * 10 + static_cast<std::uint64_t>(c - '0');
+      const auto digit = static_cast<std::uint64_t>(c - '0');
+      if (value > (std::numeric_limits<std::uint64_t>::max() - digit) / 10ULL)
+        return setError("Number exceeds uint64 range.");
+      value = value * 10ULL + digit;
       ++pos_;
     }
     return true;
@@ -325,6 +330,37 @@ private:
     }
   }
   return false;
+}
+
+[[nodiscard]] inline bool
+validateObjectMembers(const JsonValue &object,
+                      std::initializer_list<std::string_view> allowed,
+                      std::string &error) {
+  if (object.type != JsonValueType::OBJECT) {
+    error = "Expected JSON object.";
+    return false;
+  }
+  for (std::size_t i = 0U; i < object.objectMembers.size(); ++i) {
+    const auto &name = object.objectMembers[i].first;
+    bool known = false;
+    for (const auto candidate : allowed) {
+      if (name == candidate) {
+        known = true;
+        break;
+      }
+    }
+    if (!known) {
+      error = "Unknown JSON field: " + name;
+      return false;
+    }
+    for (std::size_t j = 0U; j < i; ++j) {
+      if (object.objectMembers[j].first == name) {
+        error = "Duplicate JSON field: " + name;
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 [[nodiscard]] inline bool jsonToUint64(const JsonValue *member,
@@ -429,6 +465,41 @@ private:
       << (profile.vulkanRayTracingPipeline ? "true" : "false") << ",\n";
   out << "    \"shaderFloat64\": " << (profile.shaderFloat64 ? "true" : "false")
       << ",\n";
+  const auto smokeStatus = [](const VulkanNumericalSmokeStatus status) {
+    switch (status) {
+    case VulkanNumericalSmokeStatus::PASS:
+      return "PASS";
+    case VulkanNumericalSmokeStatus::FAIL:
+      return "FAIL";
+    case VulkanNumericalSmokeStatus::NOT_RUN:
+    default:
+      return "NOT_RUN";
+    }
+  };
+  if (record.schemaVersion >= 3U)
+    out << "    \"vulkanFp32NumericalSmoke\": {\n";
+  if (record.schemaVersion >= 3U) {
+    out << "      \"status\": \""
+        << smokeStatus(profile.vulkanFp32NumericalSmoke.status) << "\",\n";
+    out << "      \"contractId\": \""
+        << detail::jsonEscape(profile.vulkanFp32NumericalSmoke.contractId)
+        << "\",\n";
+    out << "      \"caseCount\": " << profile.vulkanFp32NumericalSmoke.caseCount
+        << ",\n";
+    out << "      \"mismatchCount\": "
+        << profile.vulkanFp32NumericalSmoke.mismatchCount << ",\n";
+    out << "      \"maxUlp\": " << profile.vulkanFp32NumericalSmoke.maxUlp
+        << ",\n";
+    out << "      \"watchdogMs\": "
+        << profile.vulkanFp32NumericalSmoke.watchdogMs << ",\n";
+    out << "      \"elapsedMs\": " << profile.vulkanFp32NumericalSmoke.elapsedMs
+        << ",\n";
+    out << "      \"failureDiagnostic\": \""
+        << detail::jsonEscape(
+               profile.vulkanFp32NumericalSmoke.failureDiagnostic)
+        << "\"\n";
+    out << "    },\n";
+  }
   out << "    \"safeVulkanWorkingSetBytes\": "
       << profile.safeVulkanWorkingSetBytes << "\n";
   out << "  }\n";
@@ -561,6 +632,17 @@ parseCapabilityProfileRecord(std::string_view jsonText) {
     out.message = "Top-level JSON value must be an object.";
     return out;
   }
+  std::string memberError;
+  if (!detail::validateObjectMembers(root,
+                                     {"schemaVersion", "recordedAt",
+                                      "hardwareFingerprint",
+                                      "capabilityProfile"},
+                                     memberError)) {
+    out.ok = false;
+    out.error = CapabilityProfileIOError::SCHEMA_MISMATCH;
+    out.message = memberError;
+    return out;
+  }
 
   const detail::JsonValue *member = nullptr;
   std::uint64_t schemaVersion = 0;
@@ -576,7 +658,7 @@ parseCapabilityProfileRecord(std::string_view jsonText) {
     out.message = "schemaVersion must be a number.";
     return out;
   }
-  if (schemaVersion != kCapabilityProfileSchemaVersion) {
+  if (schemaVersion == 0U || schemaVersion > kCapabilityProfileSchemaVersion) {
     out.ok = false;
     out.error = CapabilityProfileIOError::SCHEMA_MISMATCH;
     out.message = "Unsupported schemaVersion: " + std::to_string(schemaVersion);
@@ -603,6 +685,16 @@ parseCapabilityProfileRecord(std::string_view jsonText) {
     out.ok = false;
     out.error = CapabilityProfileIOError::MISSING_FIELD;
     out.message = "Missing required object: hardwareFingerprint.";
+    return out;
+  }
+  if (!detail::validateObjectMembers(*member,
+                                     {"deviceUuid", "driverUuid", "vendorId",
+                                      "deviceId", "deviceName", "driverVersion",
+                                      "driverDate"},
+                                     memberError)) {
+    out.ok = false;
+    out.error = CapabilityProfileIOError::SCHEMA_MISMATCH;
+    out.message = memberError;
     return out;
   }
 
@@ -664,6 +756,34 @@ parseCapabilityProfileRecord(std::string_view jsonText) {
     out.message = "Missing required object: capabilityProfile.";
     return out;
   }
+  if (!detail::validateObjectMembers(
+          *profileMember,
+          schemaVersion >= 3U
+              ? std::initializer_list<
+                    std::string_view>{"cpuAvailable", "cudaAvailable",
+                                      "vulkanAvailable",
+                                      "vulkanPrimitiveSuitePass",
+                                      "vulkanFp64SuitePass", "vulkanCompute",
+                                      "vulkanRayQuery",
+                                      "vulkanRayTracingPipeline",
+                                      "shaderFloat64",
+                                      "vulkanFp32NumericalSmoke",
+                                      "safeVulkanWorkingSetBytes"}
+              : std::initializer_list<
+                    std::string_view>{"cpuAvailable", "cudaAvailable",
+                                      "vulkanAvailable",
+                                      "vulkanPrimitiveSuitePass",
+                                      "vulkanFp64SuitePass", "vulkanCompute",
+                                      "vulkanRayQuery",
+                                      "vulkanRayTracingPipeline",
+                                      "shaderFloat64",
+                                      "safeVulkanWorkingSetBytes"},
+          memberError)) {
+    out.ok = false;
+    out.error = CapabilityProfileIOError::SCHEMA_MISMATCH;
+    out.message = memberError;
+    return out;
+  }
 
   auto &profile = out.record.capabilityProfile;
   const detail::JsonValue *field = nullptr;
@@ -698,6 +818,125 @@ parseCapabilityProfileRecord(std::string_view jsonText) {
                    profile.vulkanRayTracingPipeline) ||
       !requireBool("shaderFloat64", profile.shaderFloat64)) {
     return out;
+  }
+
+  const detail::JsonValue *smokeMember = nullptr;
+  if (schemaVersion >= 3U &&
+      (!detail::jsonObjectGet(*profileMember, "vulkanFp32NumericalSmoke",
+                              smokeMember) ||
+       smokeMember->type != detail::JsonValueType::OBJECT)) {
+    out.ok = false;
+    out.error = CapabilityProfileIOError::MISSING_FIELD;
+    out.message =
+        "Missing required object: capabilityProfile.vulkanFp32NumericalSmoke.";
+    return out;
+  }
+  if (schemaVersion >= 3U &&
+      !detail::validateObjectMembers(*smokeMember,
+                                     {"status", "contractId", "caseCount",
+                                      "mismatchCount", "maxUlp", "watchdogMs",
+                                      "elapsedMs", "failureDiagnostic"},
+                                     memberError)) {
+    out.ok = false;
+    out.error = CapabilityProfileIOError::SCHEMA_MISMATCH;
+    out.message = memberError;
+    return out;
+  }
+  if (schemaVersion >= 3U) {
+    auto &smoke = profile.vulkanFp32NumericalSmoke;
+    const auto requireSmokeUint = [&](const char *name,
+                                      std::uint64_t &target) -> bool {
+      if (!detail::jsonObjectGet(*smokeMember, name, field)) {
+        out.ok = false;
+        out.error = CapabilityProfileIOError::MISSING_FIELD;
+        out.message = std::string("Missing required field: ") +
+                      "capabilityProfile.vulkanFp32NumericalSmoke." + name +
+                      ".";
+        return false;
+      }
+      if (!detail::jsonToUint64(field, target)) {
+        out.ok = false;
+        out.error = CapabilityProfileIOError::TYPE_MISMATCH;
+        out.message =
+            std::string("capabilityProfile.vulkanFp32NumericalSmoke.") + name +
+            " must be an unsigned number.";
+        return false;
+      }
+      return true;
+    };
+    std::string smokeStatus;
+    if (!detail::jsonObjectGet(*smokeMember, "status", field) ||
+        !detail::jsonToString(field, smokeStatus)) {
+      out.ok = false;
+      out.error = CapabilityProfileIOError::TYPE_MISMATCH;
+      out.message =
+          "capabilityProfile.vulkanFp32NumericalSmoke.status must be a string.";
+      return out;
+    }
+    if (smokeStatus == "NOT_RUN")
+      smoke.status = VulkanNumericalSmokeStatus::NOT_RUN;
+    else if (smokeStatus == "PASS")
+      smoke.status = VulkanNumericalSmokeStatus::PASS;
+    else if (smokeStatus == "FAIL")
+      smoke.status = VulkanNumericalSmokeStatus::FAIL;
+    else {
+      out.ok = false;
+      out.error = CapabilityProfileIOError::TYPE_MISMATCH;
+      out.message =
+          "capabilityProfile.vulkanFp32NumericalSmoke.status is invalid.";
+      return out;
+    }
+    if (!detail::jsonObjectGet(*smokeMember, "contractId", field) ||
+        !detail::jsonToString(field, smoke.contractId)) {
+      out.ok = false;
+      out.error = CapabilityProfileIOError::TYPE_MISMATCH;
+      out.message = "capabilityProfile.vulkanFp32NumericalSmoke.contractId "
+                    "must be a string.";
+      return out;
+    }
+    std::uint64_t smokeValue = 0;
+    if (!requireSmokeUint("caseCount", smokeValue))
+      return out;
+    if (smokeValue > std::numeric_limits<std::uint32_t>::max()) {
+      out.ok = false;
+      out.error = CapabilityProfileIOError::TYPE_MISMATCH;
+      out.message =
+          "capabilityProfile.vulkanFp32NumericalSmoke.caseCount is too large.";
+      return out;
+    }
+    smoke.caseCount = static_cast<std::uint32_t>(smokeValue);
+    if (!requireSmokeUint("mismatchCount", smokeValue))
+      return out;
+    if (smokeValue > std::numeric_limits<std::uint32_t>::max()) {
+      out.ok = false;
+      out.error = CapabilityProfileIOError::TYPE_MISMATCH;
+      out.message = "capabilityProfile.vulkanFp32NumericalSmoke.mismatchCount "
+                    "is too large.";
+      return out;
+    }
+    smoke.mismatchCount = static_cast<std::uint32_t>(smokeValue);
+    if (!requireSmokeUint("maxUlp", smokeValue))
+      return out;
+    if (smokeValue > std::numeric_limits<std::uint32_t>::max()) {
+      out.ok = false;
+      out.error = CapabilityProfileIOError::TYPE_MISMATCH;
+      out.message =
+          "capabilityProfile.vulkanFp32NumericalSmoke.maxUlp is too large.";
+      return out;
+    }
+    smoke.maxUlp = static_cast<std::uint32_t>(smokeValue);
+    if (!requireSmokeUint("watchdogMs", smoke.watchdogMs) ||
+        !requireSmokeUint("elapsedMs", smoke.elapsedMs))
+      return out;
+    if (!detail::jsonObjectGet(*smokeMember, "failureDiagnostic", field) ||
+        !detail::jsonToString(field, smoke.failureDiagnostic)) {
+      out.ok = false;
+      out.error = CapabilityProfileIOError::TYPE_MISMATCH;
+      out.message =
+          "capabilityProfile.vulkanFp32NumericalSmoke.failureDiagnostic "
+          "must be a string.";
+      return out;
+    }
   }
 
   if (!detail::jsonObjectGet(*profileMember, "safeVulkanWorkingSetBytes",

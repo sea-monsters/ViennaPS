@@ -12,6 +12,22 @@ namespace viennaps::compute {
 
 enum class ComputeBackend { AUTO, CPU, CUDA, VULKAN };
 enum class SelectionMode { AUTO, MANUAL };
+enum class VulkanNumericalSmokeStatus { NOT_RUN, PASS, FAIL };
+
+inline constexpr std::string_view kVulkanFp32NumericalSmokeContract =
+    "fp32-bitwise-watchdog-v1";
+inline constexpr std::uint64_t kVulkanFp32NumericalSmokeWatchdogMs = 60'000ULL;
+
+struct VulkanFp32NumericalSmokeEvidence {
+  VulkanNumericalSmokeStatus status = VulkanNumericalSmokeStatus::NOT_RUN;
+  std::string contractId;
+  std::uint32_t caseCount = 0U;
+  std::uint32_t mismatchCount = 0U;
+  std::uint32_t maxUlp = 0U;
+  std::uint64_t watchdogMs = 0ULL;
+  std::uint64_t elapsedMs = 0ULL;
+  std::string failureDiagnostic;
+};
 enum class Stage {
   GEOMETRY_EXTRACTION,
   LEVEL_SET,
@@ -135,6 +151,8 @@ struct CapabilityProfile {
   bool vulkanRayTracingPipeline = false;
   bool shaderFloat64 = false;
 
+  VulkanFp32NumericalSmokeEvidence vulkanFp32NumericalSmoke{};
+
   std::uint64_t safeVulkanWorkingSetBytes = 0;
 };
 
@@ -154,6 +172,10 @@ struct ManualSelectionConfig {
   Precision precision = Precision::MIXED;
   RayMode rayMode = RayMode::NONE;
   bool allowStageFallback = false;
+  // Auto always requires the validated strict-FP32 contract before it selects
+  // Vulkan. A manual Vulkan selection can intentionally use a non-strict
+  // route; set this only when the caller explicitly requires that guarantee.
+  bool requireStrictFp32NumericalSmoke = false;
 };
 
 struct StageEligibility {
@@ -193,9 +215,25 @@ struct SelectionPlan {
 
 namespace detail {
 
-inline bool profileHasVulkanSuite(const CapabilityProfile &profile) {
+inline bool profileHasBaseVulkanSuite(const CapabilityProfile &profile) {
   return profile.vulkanAvailable && profile.vulkanCompute &&
          profile.vulkanPrimitiveSuitePass;
+}
+
+inline bool
+profileHasStrictFp32NumericalSmoke(const CapabilityProfile &profile) {
+  return profile.vulkanFp32NumericalSmoke.status ==
+             VulkanNumericalSmokeStatus::PASS &&
+         profile.vulkanFp32NumericalSmoke.contractId ==
+             kVulkanFp32NumericalSmokeContract &&
+         profile.vulkanFp32NumericalSmoke.caseCount != 0U &&
+         profile.vulkanFp32NumericalSmoke.mismatchCount == 0U &&
+         profile.vulkanFp32NumericalSmoke.maxUlp == 0U &&
+         profile.vulkanFp32NumericalSmoke.watchdogMs ==
+             kVulkanFp32NumericalSmokeWatchdogMs &&
+         profile.vulkanFp32NumericalSmoke.elapsedMs <=
+             profile.vulkanFp32NumericalSmoke.watchdogMs &&
+         profile.vulkanFp32NumericalSmoke.failureDiagnostic.empty();
 }
 
 inline bool rayModeMeetsMinimum(const RayMode required,
@@ -233,6 +271,7 @@ inline bool passesHardThresholds(const CapabilityProfile &profile,
                                  const StageWorkload &workload,
                                  const ComputeBackend backend,
                                  const RayMode requestedRayMode,
+                                 const bool requireStrictFp32NumericalSmoke,
                                  StageEligibility &eligibility) {
   if (backend == ComputeBackend::AUTO)
     return false;
@@ -257,8 +296,20 @@ inline bool passesHardThresholds(const CapabilityProfile &profile,
     return true;
   }
 
-  if (!profileHasVulkanSuite(profile)) {
+  if (!profileHasBaseVulkanSuite(profile)) {
     eligibility.reasons.emplace_back("Vulkan compute suite failed.");
+    return false;
+  }
+  if (requireStrictFp32NumericalSmoke &&
+      !profileHasStrictFp32NumericalSmoke(profile)) {
+    if (profile.vulkanFp32NumericalSmoke.status !=
+        VulkanNumericalSmokeStatus::PASS) {
+      eligibility.reasons.emplace_back(
+          "Vulkan strict FP32 numerical smoke did not pass.");
+    } else {
+      eligibility.reasons.emplace_back(
+          "Vulkan strict FP32 numerical smoke evidence is incompatible.");
+    }
     return false;
   }
   if (workload.estimatedBytes > 0 && profile.safeVulkanWorkingSetBytes > 0 &&
@@ -343,8 +394,9 @@ inline StageSelection selectStage(const CapabilityProfile &profile,
       return selection;
     }
 
-    if (passesHardThresholds(profile, stageWorkload, requestedBackend,
-                             config.rayMode, manualEligibility)) {
+    if (passesHardThresholds(
+            profile, stageWorkload, requestedBackend, config.rayMode,
+            config.requireStrictFp32NumericalSmoke, manualEligibility)) {
       selection.selected = true;
       selection.selectedBackend = requestedBackend;
       selection.selectedRayMode = manualEligibility.resolvedRayMode;
@@ -352,6 +404,12 @@ inline StageSelection selectStage(const CapabilityProfile &profile,
       selection.selectedReasons.emplace_back(
           std::string("Manual backend accepted: ") +
           std::string(toString(requestedBackend)));
+      if (requestedBackend == ComputeBackend::VULKAN &&
+          !config.requireStrictFp32NumericalSmoke &&
+          !profileHasStrictFp32NumericalSmoke(profile)) {
+        selection.selectedReasons.emplace_back(
+            "Manual Vulkan selected without strict FP32 numerical guarantee.");
+      }
       if (requestedBackend == ComputeBackend::VULKAN &&
           config.rayMode != RayMode::NONE) {
         selection.selectedReasons.emplace_back(
@@ -385,7 +443,7 @@ inline StageSelection selectStage(const CapabilityProfile &profile,
     candidate.backend = candidateBackend;
     candidate.precision = stageWorkload.precision;
     passesHardThresholds(profile, stageWorkload, candidateBackend,
-                         candidateRayMode, candidate);
+                         candidateRayMode, true, candidate);
     candidates.push_back(candidate);
   };
 

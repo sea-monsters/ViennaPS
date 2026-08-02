@@ -1,0 +1,27 @@
+#version 450
+
+struct RayRecord { uint rayId; uint surfaceId; uint weightBits; uint reserved; };
+layout(std430, binding = 0) readonly buffer InputRecords { RayRecord records[]; };
+layout(std430, binding = 1) readonly buffer InputCount { uint count; };
+layout(std430, binding = 2) buffer OutputRecords { RayRecord sorted[]; };
+layout(push_constant) uniform Params { uint inputCapacity; } params;
+layout(local_size_x = 64) in;
+
+bool lessKey(RayRecord a, RayRecord b) {
+  return a.surfaceId < b.surfaceId ||
+         (a.surfaceId == b.surfaceId && a.rayId < b.rayId);
+}
+
+void main() {
+  uint outIndex = gl_GlobalInvocationID.x;
+  uint n = min(count, params.inputCapacity);
+  if (outIndex >= n) return;
+  RayRecord candidate = records[outIndex];
+  uint rank = 0u;
+  for (uint j = 0u; j < n; ++j) {
+    RayRecord other = records[j];
+    if (lessKey(other, candidate) ||
+        (!lessKey(candidate, other) && j < outIndex)) ++rank;
+  }
+  sorted[rank] = candidate;
+}

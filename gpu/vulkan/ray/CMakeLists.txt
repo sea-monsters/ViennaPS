@@ -413,3 +413,77 @@ if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
   add_test(NAME viennaps-vulkan-ray-record-compaction-smoke
            COMMAND viennaps-vulkan-ray-record-compaction-smoke)
 endif()
+
+# P5-JB device-only stable ray-record ordering baseline.  It intentionally
+# keeps count and all records device-local; the shader documents its O(N^2)
+# correctness-first ranking algorithm pending a tiled radix implementation.
+set(VIENNAPS_VULKAN_RAY_RECORD_SORT_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/ray_record_sort.comp")
+set(VIENNAPS_VULKAN_RAY_RECORD_SORT_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/ray_record_sort.comp.spv")
+if("${VIENNAPS_VULKAN_RAY_SHADER_COMPILER}" MATCHES ".*glslangValidator.*")
+  add_custom_command(OUTPUT ${VIENNAPS_VULKAN_RAY_RECORD_SORT_SPV}
+    COMMAND ${VIENNAPS_VULKAN_RAY_SHADER_COMPILER} -V
+            ${VIENNAPS_VULKAN_RAY_RECORD_SORT_SHADER} -o
+            ${VIENNAPS_VULKAN_RAY_RECORD_SORT_SPV}
+    DEPENDS ${VIENNAPS_VULKAN_RAY_RECORD_SORT_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+else()
+  add_custom_command(OUTPUT ${VIENNAPS_VULKAN_RAY_RECORD_SORT_SPV}
+    COMMAND ${VIENNAPS_VULKAN_RAY_SHADER_COMPILER} -o
+            ${VIENNAPS_VULKAN_RAY_RECORD_SORT_SPV}
+            ${VIENNAPS_VULKAN_RAY_RECORD_SORT_SHADER}
+    DEPENDS ${VIENNAPS_VULKAN_RAY_RECORD_SORT_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+endif()
+find_program(VIENNAPS_VULKAN_RAY_RECORD_SORT_SPIRV_VAL NAMES spirv-val)
+if(VIENNAPS_VULKAN_RAY_RECORD_SORT_SPIRV_VAL)
+  add_custom_command(OUTPUT ${VIENNAPS_VULKAN_RAY_RECORD_SORT_SPV}.validated
+    COMMAND ${VIENNAPS_VULKAN_RAY_RECORD_SORT_SPIRV_VAL}
+            ${VIENNAPS_VULKAN_RAY_RECORD_SORT_SPV}
+    COMMAND ${CMAKE_COMMAND} -E touch
+            ${VIENNAPS_VULKAN_RAY_RECORD_SORT_SPV}.validated
+    DEPENDS ${VIENNAPS_VULKAN_RAY_RECORD_SORT_SPV})
+  add_custom_target(viennaps-vulkan-ray-record-sort-spv
+                    DEPENDS ${VIENNAPS_VULKAN_RAY_RECORD_SORT_SPV}.validated)
+else()
+  add_custom_target(viennaps-vulkan-ray-record-sort-spv
+                    DEPENDS ${VIENNAPS_VULKAN_RAY_RECORD_SORT_SPV})
+endif()
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_RAY_RECORD_SORT_SPV_PATH
+               "${VIENNAPS_VULKAN_RAY_RECORD_SORT_SPV}")
+add_library(viennaps_vulkan_ray_record_sort ray_record_sort.cpp)
+add_dependencies(viennaps_vulkan_ray_record_sort
+                 viennaps-vulkan-ray-record-sort-spv)
+target_link_libraries(viennaps_vulkan_ray_record_sort PUBLIC
+                      viennaps_vulkan_compute_runtime Vulkan::Vulkan)
+target_include_directories(viennaps_vulkan_ray_record_sort PUBLIC
+                           "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(viennaps_vulkan_ray_record_sort PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps_vulkan_ray_record_sort PRIVATE /W4 /WX)
+else()
+  target_compile_options(viennaps_vulkan_ray_record_sort PRIVATE
+                         -Wall -Wextra -Wpedantic -Werror)
+endif()
+add_executable(viennaps-vulkan-ray-record-sort-smoke ray_record_sort_smoke.cpp)
+add_dependencies(viennaps-vulkan-ray-record-sort-smoke
+                 viennaps-vulkan-ray-record-sort-spv
+                 viennaps-vulkan-ray-record-compaction-spv
+                 viennaps-vulkan-triangle-hit-device-spv
+                 viennaps-vulkan-reduction-scan-smoke-spv)
+target_compile_features(viennaps-vulkan-ray-record-sort-smoke PRIVATE cxx_std_20)
+target_compile_definitions(viennaps-vulkan-ray-record-sort-smoke PRIVATE
+  "VIENNAPS_VULKAN_RAY_RECORD_SORT_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_SORT_SPV_PATH}\""
+  "VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV_PATH}\""
+  "VIENNAPS_VULKAN_REDUCTION_SCAN_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_REDUCTION_SCAN_SPV_PATH}\""
+  "VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-ray-record-sort-smoke PRIVATE
+                      viennaps_vulkan_ray_record_sort
+                      viennaps_vulkan_ray_record_compaction
+                      viennaps_vulkan_triangle_hit_device
+                      viennaps_vulkan_ray_hit_batch Vulkan::Vulkan)
+if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+  add_test(NAME viennaps-vulkan-ray-record-sort-smoke
+           COMMAND viennaps-vulkan-ray-record-sort-smoke)
+endif()

@@ -1849,6 +1849,29 @@ arithmetic, so a singleton negative zero cannot be canonicalized.
 | Build and test | MSVC builds `viennaps-vulkan-ray-record-compaction-smoke`; direct Intel Arc execution prints `ray record compaction Vulkan dispatch PASS` and focused CTest passes 1/1 |
 | Scope boundary | scan/count and scatter are currently ordered through multiple submissions from the reusable scan primitive, rather than P5-J's final one-command submission; no device radix sort, segment reduction, exact dynamic capacity admission, BVH, particle transport, or Process route is included |
 
+### P5-JB: device-resident stable ray-record rank-sort baseline
+
+- Status: accepted locally as a composable correctness baseline; it is not a
+  production acceleration route
+- Date: 2026-08-02
+
+`DeviceRayRecordSort` consumes the P5-JA record and count buffers directly in
+the same `ComputeSession` and writes one sorted `RayRecord` per accepted
+input. Each invocation computes its output rank by comparing
+`(surfaceId, rayId, originalIndex)`, establishing the required stable order
+without downloading the device count or records during `sort()`. The shader
+uses only integer words, so `weightBits`, `reserved`, and a negative-zero
+weight are copied byte-exactly.
+
+| Gate | Result |
+|---|---|
+| Exact GPU work | a real P5-I hit buffer feeds P5-JA flags/scan/scatter and then P5-JB; the terminal download matches `compactCpu` plus host `stable_sort` record-for-record, including `weightBits`, `reserved`, repeated surfaces, and `-0` |
+| Device contract | records and count stay device-resident; nonempty buffers must be non-aliased, valid, sufficiently sized, and owned by the active device and session generation; a compute/transfer barrier makes the result reusable by a following stage |
+| Capacity and transaction | because the dynamic device count is intentionally not read back, P5-JB conservatively requires `outputCapacity >= inputCapacity`; invalid capacity, record aliases, a foreign session, and `N=0` preserve caller sentinels |
+| Numeric and shader gate | generated SPIR-V passes `spirv-val`; the rank shader has no floating-point arithmetic and needs no `NoContraction` decoration |
+| Build and test | MSVC builds `viennaps-vulkan-ray-record-sort-smoke`; two direct Intel Arc runs print `ray record sort Vulkan dispatch PASS` and focused CTest passes 1/1 |
+| Scope boundary | this is deliberately an O(N^2) rank-sort correctness baseline, not the planned scalable route; it does not implement the required device radix scratch/ping-pong pipeline, segment reduction, dynamic exact capacity admission, BVH, particle transport, or Process routing |
+
 ## Next slice
 
 The segmented rebuild adapter is installed by the level-set controller, the
@@ -1858,14 +1881,17 @@ RK2/RK3 remain deliberately CPU-only until a multi-stage device state machine
 is proven. The first surface velocity formula is now exact but intentionally
 unwired to process selection. Direct negative/non-finite time injection and
 the optional VTK-enabled install/export conflict remain validation gaps. The
-the next ray slice is P5-JB: stable device-resident radix sorting of P5-JA
-`RayRecord` values by `rayId` and then `surfaceId`. It must use device-local
-histogram, prefix, ping-pong, and count scratch storage; the existing
-HostVisible radix helpers cannot be reused. P5-JC will construct surface
-segments and reduce each segment in sorted ray order, seeding from the first
-`weightBits` value rather than `+0`, so singleton negative zero and all
-accepted CPU FP32 ordering remain exact. The final P5-J composition must
-replace P5-JA's multiple submissions with one ordered command submission.
+next ray slice is mandatory P5-JB2: replace the accepted rank-sort baseline
+with a scalable device-resident stable radix sort of P5-JA `RayRecord` values,
+sorting `rayId` first and then `surfaceId`. It must perform sixteen stable
+4-bit LSD passes with device-local per-workgroup histograms, device prefix
+storage, ping-pong record buffers, and the existing device count; the
+HostVisible radix helpers cannot be reused. P5-JC may construct surface
+segments and reduce each segment in sorted ray order only after P5-JB2 proves
+the scalable ordering contract, seeding from the first `weightBits` value
+rather than `+0`, so singleton negative zero and all accepted CPU FP32
+ordering remain exact. The final P5-J composition must replace P5-JA's
+multiple submissions with one ordered command submission.
 CPU differential checking remains an explicit validation gate, not a
 production per-call guard. Coverage reaction is a capability-gated FP64
 candidate, without weakening the current fail-closed gate.

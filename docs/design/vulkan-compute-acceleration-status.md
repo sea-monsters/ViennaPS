@@ -1802,6 +1802,29 @@ every FP32 word compare bit-for-bit.
 | Build and test | MSVC builds `viennaps-vulkan-ray-flux-fused-smoke`; direct Intel Arc execution prints `fused ray flux Vulkan dispatch PASS` and focused CTest passes 1/1 |
 | Scope boundary | the one-invocation `O(rays * triangles * rays)` shader and mandatory CPU integrity guard are intentionally too slow for production; no BVH, scalable sort/reduce, particle transport, reflection, material/coverage coupling, flux normalization, Process route, or automatic backend selection uses it |
 
+### P5-I: parallel device-buffer triangle-hit producer
+
+- Status: accepted locally as the composable D-stage for the next ray
+  pipeline; no production Process route
+- Date: 2026-08-02
+
+`DeviceTriangleHitPrimitive` dispatches one Vulkan invocation per ray and
+writes the existing 16-byte `TriangleHit` ABI directly to caller-owned
+`DeviceBuffer` storage. It supports an owned or external `ComputeSession`, so
+a subsequent device stage can consume origin, direction, triangle, and hit
+buffers without a host round trip. Its upload/download helpers are explicit
+boundary operations for setup and tests; `dispatch()` itself neither reads
+back results nor runs a CPU fallback.
+
+| Gate | Result |
+|---|---|
+| Exact GPU work | Intel Arc runs a 64-lane ray dispatch; triangle selection, translated near/far limits, miss, and equal-distance first-triangle handling match `intersectCpu` bit-for-bit for `t`, index, `u`, and `v` |
+| Device contract | every buffer must be valid, non-aliased, large enough, and owned by the primitive session's Vulkan device and generation; the output remains a reusable device buffer after the dispatch |
+| Numeric contract | the shader uses precise scalar subtract/cross/dot operations, finite checks, and strict nearest-hit comparison; generated SPIR-V validates and contains `NoContraction` decorations |
+| Transaction boundary | invalid capacity, alias, foreign session/device, and `N=0` are rejected or accepted before dispatch without changing the caller's hit-buffer sentinel data |
+| Build and test | MSVC builds `viennaps-vulkan-triangle-hit-device-smoke`; direct Intel Arc execution prints `triangle hit device Vulkan dispatch PASS` and focused CTest passes 1/1 |
+| Scope boundary | this is intersection only: it does not compact hits, sort records, reduce flux, maintain a BVH, perform a per-call CPU integrity check, or route particle/process work |
+
 ## Next slice
 
 The segmented rebuild adapter is installed by the level-set controller, the
@@ -1811,12 +1834,17 @@ RK2/RK3 remain deliberately CPU-only until a multi-stage device state machine
 is proven. The first surface velocity formula is now exact but intentionally
 unwired to process selection. Direct negative/non-finite time injection and
 the optional VTK-enabled install/export conflict remain validation gaps. The
-next ray slice replaces P5-H's single-invocation baseline with scalable
-device-resident hit compaction and deterministic sort/reduce while preserving
-the accepted CPU/FP32 order; only then can the mandatory per-call CPU
-integrity guard become an opt-in validation path. Coverage reaction is a
-capability-gated FP64 candidate, without weakening the current fail-closed
-gate.
+next ray slice is P5-J: a GPU-only pipeline over P5-I hit buffers. It will
+create stable `RayRecord` values containing `rayId`, `surfaceId`, and
+`weightBits`, compact them with a device scan, then stably radix-sort by
+`rayId` and `surfaceId` before segment reduction. The reduction must seed from
+the first `weightBits` value rather than `+0`, so singleton negative zero and
+all accepted CPU FP32 ordering remain exact. Histogram, prefix, ping-pong,
+segment, and count scratch buffers must stay device-resident in one ordered
+submission; current HostVisible radix helpers cannot be reused. CPU
+differential checking will be an explicit validation gate, not a production
+per-call guard. Coverage reaction is a capability-gated FP64 candidate,
+without weakening the current fail-closed gate.
 
 After those production-seam gates, the Level Set work advances to HRLE
 sparse rebuild integration, followed by particle/ray and surface/oxidation

@@ -287,3 +287,55 @@ if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
   add_test(NAME viennaps-vulkan-ray-flux-fused-smoke
            COMMAND viennaps-vulkan-ray-flux-fused-smoke)
 endif()
+
+set(VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle_hit_device.comp")
+set(VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/triangle_hit_device.comp.spv")
+if("${VIENNAPS_VULKAN_RAY_SHADER_COMPILER}" MATCHES ".*glslangValidator.*")
+  add_custom_command(OUTPUT ${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV}
+    COMMAND ${VIENNAPS_VULKAN_RAY_SHADER_COMPILER} -V
+            ${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SHADER} -o
+            ${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV}
+    DEPENDS ${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+else()
+  add_custom_command(OUTPUT ${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV}
+    COMMAND ${VIENNAPS_VULKAN_RAY_SHADER_COMPILER} -o
+            ${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV}
+            ${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SHADER}
+    DEPENDS ${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+endif()
+add_custom_target(viennaps-vulkan-triangle-hit-device-spv
+                  DEPENDS ${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV})
+add_library(viennaps_vulkan_triangle_hit_device triangle_hit_device.cpp)
+add_dependencies(viennaps_vulkan_triangle_hit_device
+                 viennaps-vulkan-triangle-hit-device-spv)
+target_link_libraries(viennaps_vulkan_triangle_hit_device PUBLIC
+                      viennaps_vulkan_compute_runtime
+                      viennaps_vulkan_triangle_hit Vulkan::Vulkan)
+target_include_directories(viennaps_vulkan_triangle_hit_device PUBLIC
+                           "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(viennaps_vulkan_triangle_hit_device PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps_vulkan_triangle_hit_device PRIVATE /W4 /WX)
+else()
+  target_compile_options(viennaps_vulkan_triangle_hit_device PRIVATE
+                         -Wall -Wextra -Wpedantic -Werror)
+endif()
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH
+       "${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV}")
+add_executable(viennaps-vulkan-triangle-hit-device-smoke
+               triangle_hit_device_smoke.cpp)
+add_dependencies(viennaps-vulkan-triangle-hit-device-smoke
+                 viennaps-vulkan-triangle-hit-device-spv)
+target_compile_features(viennaps-vulkan-triangle-hit-device-smoke PRIVATE cxx_std_20)
+target_compile_definitions(viennaps-vulkan-triangle-hit-device-smoke PRIVATE
+  "VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-triangle-hit-device-smoke PRIVATE
+                      viennaps_vulkan_triangle_hit_device Vulkan::Vulkan)
+if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+  add_test(NAME viennaps-vulkan-triangle-hit-device-smoke
+           COMMAND viennaps-vulkan-triangle-hit-device-smoke)
+endif()

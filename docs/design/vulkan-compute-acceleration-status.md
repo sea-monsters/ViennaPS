@@ -1755,6 +1755,28 @@ are published.
 | Build and test | a clean-first local ray-only build prints `ray hit batch Vulkan dispatch PASS`; the focused CTest passes 1/1 |
 | Scope boundary | this is one-invocation stable compaction only; it does not run P5-C reduction, use device-resident chaining, sample particle physics, trace reflections, map materials, normalize flux, or route a Process |
 
+### P5-G: staged ray-flux pipeline
+
+- Status: accepted locally as an end-to-end staged composition baseline; no
+  production ray/process routing
+- Date: 2026-08-02
+
+`RayFluxPipeline` composes P5-D triangle intersection, P5-F hit compaction,
+and P5-C deterministic reduction through one shared `ComputeSession`. The CPU
+oracle applies the same three accepted CPU primitives in sequence. On the GPU
+path, each component retains its independently validated host-visible staging
+and readback boundary; this is deliberately a staged pipeline, not a claim of
+device-resident dispatch fusion.
+
+| Gate | Result |
+|---|---|
+| CPU/GPU differential | Intel Arc executes a 5-ray/3-triangle fixture with hits, misses, same-surface accumulation, and a singleton negative-zero weight; output count, surface IDs, and all output FP32 words are exact (0 ULP) |
+| Shared-session composition | P5-D, P5-F, and P5-C initialize against the same `ComputeSession`; the GPU result is produced by their actual dispatches, not by a CPU fallback |
+| Transaction boundary | malformed weight and insufficient final capacity preserve all caller result slots and count; `N=0` is a success no-op for both CPU and GPU APIs |
+| Lifetime boundary | the aggregate is intentionally non-movable because each primitive stores a pointer to the shared session; `device()` follows the primitive convention and returns an empty device when uninitialized |
+| Build and test | the local ray-only target prints `ray flux pipeline Vulkan dispatch PASS`; its focused CTest passes 1/1 |
+| Scope boundary | no BVH, device-resident intermediate buffers, ray generation/reflection, particle sampling, material/coverage coupling, flux normalization, Process routing, or production backend selection is implemented |
+
 ## Next slice
 
 The segmented rebuild adapter is installed by the level-set controller, the
@@ -1764,7 +1786,8 @@ RK2/RK3 remain deliberately CPU-only until a multi-stage device state machine
 is proven. The first surface velocity formula is now exact but intentionally
 unwired to process selection. Direct negative/non-finite time injection and
 the optional VTK-enabled install/export conflict remain validation gaps. The
-next implementation slice is a residency-aware P5-D to P5-F to P5-C chain,
+next implementation slice is a device-residency design that removes the
+intermediate host staging only while preserving the accepted CPU/FP32 order,
 followed by a scalable deterministic sort/reduce design. Coverage reaction is
 a capability-gated FP64 candidate, without weakening the current fail-closed
 gate.

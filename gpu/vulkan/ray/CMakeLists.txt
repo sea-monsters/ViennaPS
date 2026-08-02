@@ -188,3 +188,46 @@ if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
   add_test(NAME viennaps-vulkan-ray-hit-batch-smoke
            COMMAND viennaps-vulkan-ray-hit-batch-smoke)
 endif()
+
+add_library(viennaps_vulkan_ray_flux_pipeline ray_flux_pipeline.cpp)
+add_dependencies(viennaps_vulkan_ray_flux_pipeline
+                 viennaps-vulkan-triangle-hit-spv
+                 viennaps-vulkan-ray-hit-batch-spv
+                 viennaps-vulkan-ray-reducer-spv)
+target_link_libraries(viennaps_vulkan_ray_flux_pipeline PUBLIC
+                      viennaps_vulkan_triangle_hit
+                      viennaps_vulkan_ray_hit_batch
+                      viennaps_vulkan_ray_reducer Vulkan::Vulkan)
+target_include_directories(viennaps_vulkan_ray_flux_pipeline PUBLIC
+                           "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(viennaps_vulkan_ray_flux_pipeline PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps_vulkan_ray_flux_pipeline PRIVATE /W4 /WX)
+else()
+  target_compile_options(viennaps_vulkan_ray_flux_pipeline PRIVATE
+                         -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_RAY_FLUX_TRIANGLE_HIT_SPV_PATH
+       "${VIENNAPS_VULKAN_TRIANGLE_HIT_SPV}")
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_RAY_FLUX_BATCH_SPV_PATH
+       "${VIENNAPS_VULKAN_RAY_HIT_BATCH_SPV}")
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_RAY_FLUX_REDUCER_SPV_PATH
+       "${VIENNAPS_VULKAN_RAY_SPV}")
+add_executable(viennaps-vulkan-ray-flux-pipeline-smoke
+               ray_flux_pipeline_smoke.cpp)
+add_dependencies(viennaps-vulkan-ray-flux-pipeline-smoke
+                 viennaps-vulkan-triangle-hit-spv
+                 viennaps-vulkan-ray-hit-batch-spv
+                 viennaps-vulkan-ray-reducer-spv)
+target_compile_features(viennaps-vulkan-ray-flux-pipeline-smoke PRIVATE cxx_std_20)
+target_compile_definitions(viennaps-vulkan-ray-flux-pipeline-smoke PRIVATE
+  "VIENNAPS_VULKAN_TRIANGLE_HIT_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_FLUX_TRIANGLE_HIT_SPV_PATH}\""
+  "VIENNAPS_VULKAN_RAY_HIT_BATCH_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_FLUX_BATCH_SPV_PATH}\""
+  "VIENNAPS_VULKAN_RAY_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_FLUX_REDUCER_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-ray-flux-pipeline-smoke PRIVATE
+                      viennaps_vulkan_ray_flux_pipeline Vulkan::Vulkan)
+if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+  add_test(NAME viennaps-vulkan-ray-flux-pipeline-smoke
+           COMMAND viennaps-vulkan-ray-flux-pipeline-smoke)
+endif()

@@ -1,12 +1,19 @@
 #pragma once
 
+#include "psCoverageDeltaExecutor.hpp"
 #include "psProcessContext.hpp"
+
+#include <cstddef>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace viennaps {
 
 VIENNAPS_TEMPLATE_ND(NumericType, D) class CoverageManager {
   std::ofstream covMetricFile_;
   SmartPointer<PointData<NumericType>> previousCoverages_;
+  CoverageDeltaExecutor<NumericType> coverageDeltaExecutor_;
 
 public:
   CoverageManager() = default;
@@ -33,13 +40,26 @@ public:
         *context.model->getSurfaceModel()->getCoverages());
   }
 
+  void setCoverageDeltaExecutor(CoverageDeltaExecutor<NumericType> executor) {
+    coverageDeltaExecutor_ = std::move(executor);
+  }
+
+  [[nodiscard]] CoverageDeltaExecutor<NumericType>
+  getCoverageDeltaExecutor() const {
+    return coverageDeltaExecutor_;
+  }
+
+  void clearCoverageDeltaExecutor() { coverageDeltaExecutor_ = {}; }
+
   bool
   checkCoveragesConvergence(ProcessContext<NumericType, D> const &context) {
 
     auto coverages = context.model->getSurfaceModel()->getCoverages();
     assert(previousCoverages_ != nullptr);
-    auto deltaMetric =
+    const auto cpuMetric =
         calculateCoverageDeltaMetric(coverages, previousCoverages_);
+    auto deltaMetric = runCoverageDeltaExecutor(coverages, previousCoverages_,
+                                                cpuMetric);
     assert(
         deltaMetric.size() ==
         context.model->getSurfaceModel()->getCoverages()->getScalarDataSize());
@@ -64,6 +84,48 @@ public:
   }
 
 private:
+  std::vector<NumericType> runCoverageDeltaExecutor(
+      SmartPointer<PointData<NumericType>> updated,
+      SmartPointer<PointData<NumericType>> previous,
+      const std::vector<NumericType> &cpuMetric) const {
+    if (!coverageDeltaExecutor_)
+      return cpuMetric;
+
+    std::vector<NumericType> updatedValues;
+    std::vector<NumericType> previousValues;
+    std::vector<std::size_t> channelOffsets{0U};
+    const auto channelCount = updated->getScalarDataSize();
+    for (int i = 0; i < channelCount; ++i) {
+      const auto label = updated->getScalarDataLabel(i);
+      const auto updatedData = updated->getScalarData(label);
+      const auto previousData = previous->getScalarData(label);
+      if (updatedData->size() != previousData->size())
+        return cpuMetric;
+      updatedValues.insert(updatedValues.end(), updatedData->begin(),
+                           updatedData->end());
+      previousValues.insert(previousValues.end(), previousData->begin(),
+                            previousData->end());
+      channelOffsets.push_back(updatedValues.size());
+    }
+
+    std::vector<NumericType> candidate(channelCount, NumericType(0));
+    CoverageDeltaWork<NumericType> work{
+        std::span<const NumericType>(updatedValues),
+        std::span<const NumericType>(previousValues),
+        std::span<const std::size_t>(channelOffsets),
+        std::span<NumericType>(candidate),
+        static_cast<std::size_t>(channelCount), 0U, false};
+    std::string error;
+    try {
+      if (coverageDeltaExecutor_(work, error) && work.complete &&
+          work.writtenCount == work.channelCount)
+        return candidate;
+    } catch (...) {
+      // Optional backends are fail-closed; preserve the canonical CPU result.
+    }
+    return cpuMetric;
+  }
+
   static std::vector<NumericType>
   calculateCoverageDeltaMetric(SmartPointer<PointData<NumericType>> updated,
                                SmartPointer<PointData<NumericType>> previous) {

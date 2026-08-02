@@ -219,11 +219,16 @@ endif()
 
 set(_VIENNAPS_VIENNALS_PATCH_ARGS "")
 if(NOT CPM_ViennaLS_SOURCE)
+  set(_VIENNAPS_VIENNALS_PATCH
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/patches/viennals-v5.8.5-levelset-update-v2.patch")
+  file(SHA256 "${_VIENNAPS_VIENNALS_PATCH}" _VIENNAPS_VIENNALS_PATCH_HASH)
+  string(SUBSTRING "${_VIENNAPS_VIENNALS_PATCH_HASH}" 0 16
+                   _VIENNAPS_VIENNALS_PATCH_CACHE_KEY)
   list(APPEND _VIENNAPS_VIENNALS_PATCH_ARGS
        PATCHES
-       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/patches/viennals-v5.8.5-levelset-update-v2.patch"
+       "${_VIENNAPS_VIENNALS_PATCH}"
        CUSTOM_CACHE_KEY
-       "v5.8.5-levelset-update-v2")
+       "v5.8.5-levelset-update-${_VIENNAPS_VIENNALS_PATCH_CACHE_KEY}")
 endif()
 
 CPMAddPackage(
@@ -243,6 +248,9 @@ else()
 endif()
 unset(_VIENNAPS_HAD_CMAKE_SKIP_INSTALL_RULES)
 unset(_VIENNAPS_PREVIOUS_CMAKE_SKIP_INSTALL_RULES)
+unset(_VIENNAPS_VIENNALS_PATCH)
+unset(_VIENNAPS_VIENNALS_PATCH_HASH)
+unset(_VIENNAPS_VIENNALS_PATCH_CACHE_KEY)
 
 CPMAddPackage(
   NAME ViennaCS

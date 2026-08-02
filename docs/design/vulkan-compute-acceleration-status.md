@@ -1267,19 +1267,54 @@ action range, and finite values, and preserves the caller's output on failure.
 | Empty stream | N=0 performs no allocation or dispatch and returns invalid empty buffers |
 | Compatibility | the legacy host classifier is implemented through device classification plus materialization |
 | No-SDK behavior | the three CPU HRLE classification, compaction, and reconstruction contracts pass |
-| Residual boundary | device action flags, scan/count, stable scatter, and final compaction materialization are not yet integrated |
+| Residual boundary | resident compaction is covered below; sparse HRLE insertion and production routing remain pending |
 | Path policy | no SDK, dependency, source checkout, or build-cache path is tracked |
+
+## P4C3-device-compaction: resident stable HRLE selection
+
+- Status: accepted locally
+- Date: 2026-08-02
+- Scope: compose device classification, action flags, exclusive scan, selected
+  count, and stable 16-byte scatter before one explicit terminal materialization
+
+The complete compaction chain now keeps the `N` classification decisions,
+defined mask, exclusive offsets, selected count, and compact records on the
+same generation-aware `ComputeSession`. The action-flags shader maps only
+`DEFINED` decisions to one, the shared primitive suite computes offsets and
+`K`, and the scatter shader writes stable records containing candidate index,
+FP32 value bits, source point ID, and action. No intermediate host vector is
+used between classification and scatter.
+
+Terminal materialization downloads shader status, `K`, the `N` decisions and
+offsets, and only the `K` compact records. It validates session generation,
+buffer ownership and capacity, action/value/source invariants, every prefix
+offset, count agreement, strictly increasing candidate indices, stable scatter
+positions, and payload bit equality before transactionally publishing the CPU
+result. N=0 returns `{0}` offsets without allocation or dispatch; K=0 remains a
+valid all-undefined result. The conservative working-set gate remains at least
+`120N + 8` bytes in 2D and `152N + 8` bytes in 3D, plus recursive scan scratch
+and allocation alignment.
+
+| Gate | Result |
+|---|---|
+| Exact geometry oracle | the 2D sphere produces N=183 and K=68; all actions, offsets, indices, source IDs, and FP32 bits match CPU |
+| Empty selection | an all-positive one-candidate stream produces K=0 and exact CPU output |
+| Metadata fault | a tampered candidate count is rejected while preserving the caller sentinel |
+| Device residency | classification through stable scatter remains device-local; host transfer occurs only in the explicit materializer |
+| Session and limits | session generation, primitive binding, workgroup, descriptor, push-constant, buffer-range, and capacity checks fail before dispatch |
+| No-SDK behavior | focused CPU HRLE classification, compaction, and sparse reconstruction pass 3/3 |
+| Working-set policy | existing primitive-suite and safe-working-set deployment gates remain sufficient; no schema or fixed local path is added |
+| Residual boundary | feed the validated stream to CPU sparse reconstruction, then wire the full transaction into the ViennaLS executor and deployment probe |
 
 ## Next slice
 
-Connect the resident decisions to the action-flags shader, exclusive scan and
-selected count, then perform the stable 16-byte scatter and one terminal
-materialization. Feed that validated result into the P4C2 CPU insertion oracle.
-Wire the complete path into the ViennaLS executor and deployment-time primitive
-suite only after those gates pass. Direct negative/non-finite time injection
-also remains a defensive-branch coverage gap. The optional VTK-enabled
-install/export conflict should be isolated from the compute backend before
-packaging validation.
+Feed the resident compaction materializer into the P4C2 CPU insertion oracle
+and compare the reconstructed sparse structure with the CPU-only transaction.
+Then expose one classification-to-reconstruction orchestration API and wire it
+into the ViennaLS executor and deployment-time primitive suite. Direct
+negative/non-finite time injection also remains a defensive-branch coverage
+gap. The optional VTK-enabled install/export conflict should be isolated from
+the compute backend before packaging validation.
 
 After those production-seam gates, the Level Set work advances to HRLE
 sparse rebuild integration, followed by particle/ray and surface/oxidation

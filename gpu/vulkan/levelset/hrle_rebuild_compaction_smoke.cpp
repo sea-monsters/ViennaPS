@@ -15,6 +15,7 @@
 #include <vcTestAsserts.hpp>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -146,6 +147,12 @@ int main() try {
   runtime::SpirvProgram classificationProgram;
   VC_TEST_ASSERT(runtime::readSpirv(VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH,
                                     classificationProgram, error));
+  runtime::SpirvProgram actionFlagsProgram;
+  VC_TEST_ASSERT(runtime::readSpirv(VIENNAPS_HRLE_ACTION_FLAGS_SPV_PATH,
+                                    actionFlagsProgram, error));
+  runtime::SpirvProgram compactProgram;
+  VC_TEST_ASSERT(runtime::readSpirv(VIENNAPS_HRLE_COMPACT_SPV_PATH,
+                                    compactProgram, error));
   std::vector<Decision> vulkanDecisions;
   VC_TEST_ASSERT(vkLevelSet::classifyHrleRebuildFp32(
       session, classificationProgram, candidates, 2U, 1.0F, vulkanDecisions,
@@ -160,6 +167,58 @@ int main() try {
       compactionPrimitives, vulkanDecisions, vulkanResult, error));
   VC_TEST_ASSERT(error.empty());
   assertExactResult(vulkanResult, cpuResult);
+
+  vkLevelSet::HrleRebuildClassificationDeviceFp32 deviceClassification;
+  VC_TEST_ASSERT(vkLevelSet::classifyHrleRebuildFp32Device(
+      session, classificationProgram, candidates, 2U, 1.0F,
+      deviceClassification, error));
+  vkLevelSet::HrleRebuildCompactionDeviceFp32 deviceCompaction;
+  VC_TEST_ASSERT(vkLevelSet::compactHrleRebuildDecisionsFp32Device(
+      session, actionFlagsProgram, compactProgram, compactionPrimitives,
+      deviceClassification, deviceCompaction, error));
+  CompactResult materializedResult;
+  VC_TEST_ASSERT(vkLevelSet::materializeHrleRebuildCompactionFp32Device(
+      session, deviceClassification, deviceCompaction, materializedResult,
+      error));
+  VC_TEST_ASSERT(error.empty());
+  assertExactResult(materializedResult, cpuResult);
+
+  const auto savedCandidateCount = deviceCompaction.candidateCount;
+  deviceCompaction.candidateCount += 1U;
+  CompactResult sentinelResult = materializedResult;
+  VC_TEST_ASSERT(!vkLevelSet::materializeHrleRebuildCompactionFp32Device(
+      session, deviceClassification, deviceCompaction, sentinelResult, error));
+  assertExactResult(sentinelResult, materializedResult);
+  deviceCompaction.candidateCount = savedCandidateCount;
+
+  Candidate allPositive{};
+  allPositive.centerValue = 2.0F;
+  allPositive.centerDefinedValue = 2.0F;
+  allPositive.centerPointId = classification::kInvalidHrlePointId;
+  allPositive.neighborValues.fill(2.0F);
+  allPositive.neighborDefinedValues.fill(2.0F);
+  allPositive.neighborPointIds.fill(classification::kInvalidHrlePointId);
+  std::array<Candidate, 1U> positiveCandidates = {allPositive};
+  vkLevelSet::HrleRebuildClassificationDeviceFp32 positiveClassification;
+  VC_TEST_ASSERT(vkLevelSet::classifyHrleRebuildFp32Device(
+      session, classificationProgram, positiveCandidates, 2U, 1.0F,
+      positiveClassification, error));
+  vkLevelSet::HrleRebuildCompactionDeviceFp32 positiveCompaction;
+  VC_TEST_ASSERT(vkLevelSet::compactHrleRebuildDecisionsFp32Device(
+      session, actionFlagsProgram, compactProgram, compactionPrimitives,
+      positiveClassification, positiveCompaction, error));
+  CompactResult positiveResult;
+  VC_TEST_ASSERT(vkLevelSet::materializeHrleRebuildCompactionFp32Device(
+      session, positiveClassification, positiveCompaction, positiveResult,
+      error));
+  CompactResult positiveExpected;
+  std::vector<Decision> positiveCpuDecisions;
+  VC_TEST_ASSERT(classification::classifyHrleRebuildCpu(
+      positiveCandidates, 2U, 1.0F, positiveCpuDecisions, error));
+  VC_TEST_ASSERT(classification::compactHrleRebuildDecisionsCpu(
+      positiveCpuDecisions, positiveExpected, error));
+  VC_TEST_ASSERT(positiveExpected.definedPoints.empty());
+  assertExactResult(positiveResult, positiveExpected);
 
   runtime::ComputeSession differentSession;
   VC_TEST_ASSERT(differentSession.initialize(error));

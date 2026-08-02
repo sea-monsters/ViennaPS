@@ -215,6 +215,10 @@ if(TARGET viennaps_vulkan_reduction_scan_primitives)
 
   string(REPLACE "\\" "/" _VIENNAPS_REDUCTION_SCAN_SPV_PATH
                  "${_VIENNAPS_REDUCTION_SCAN_SPV}")
+  string(REPLACE "\\" "/" _VIENNAPS_HRLE_ACTION_FLAGS_SPV_PATH
+                 "${VIENNAPS_HRLE_ACTION_FLAGS_SPV}")
+  string(REPLACE "\\" "/" _VIENNAPS_HRLE_COMPACT_SPV_PATH
+                 "${VIENNAPS_HRLE_COMPACT_SPV}")
   add_executable(viennaps-vulkan-hrle-compaction-smoke
                  hrle_rebuild_compaction_smoke.cpp)
   add_dependencies(viennaps-vulkan-hrle-compaction-smoke
@@ -223,7 +227,9 @@ if(TARGET viennaps_vulkan_reduction_scan_primitives)
                    viennaps-vulkan-hrle-compaction-spv)
   target_compile_definitions(viennaps-vulkan-hrle-compaction-smoke PRIVATE
     "VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH=\"${_VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH}\""
-    "VIENNAPS_REDUCTION_SCAN_SPV_PATH=\"${_VIENNAPS_REDUCTION_SCAN_SPV_PATH}\"")
+    "VIENNAPS_REDUCTION_SCAN_SPV_PATH=\"${_VIENNAPS_REDUCTION_SCAN_SPV_PATH}\""
+    "VIENNAPS_HRLE_ACTION_FLAGS_SPV_PATH=\"${_VIENNAPS_HRLE_ACTION_FLAGS_SPV_PATH}\""
+    "VIENNAPS_HRLE_COMPACT_SPV_PATH=\"${_VIENNAPS_HRLE_COMPACT_SPV_PATH}\"")
   target_link_libraries(viennaps-vulkan-hrle-compaction-smoke
     PRIVATE ViennaPS viennaps_vulkan_levelset_update
             viennaps_vulkan_hrle_compaction)

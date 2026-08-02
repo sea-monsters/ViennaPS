@@ -231,3 +231,59 @@ if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
   add_test(NAME viennaps-vulkan-ray-flux-pipeline-smoke
            COMMAND viennaps-vulkan-ray-flux-pipeline-smoke)
 endif()
+
+set(VIENNAPS_VULKAN_RAY_FLUX_FUSED_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/ray_flux_fused.comp")
+set(VIENNAPS_VULKAN_RAY_FLUX_FUSED_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/ray_flux_fused.comp.spv")
+if("${VIENNAPS_VULKAN_RAY_SHADER_COMPILER}" MATCHES ".*glslangValidator.*")
+  add_custom_command(
+    OUTPUT ${VIENNAPS_VULKAN_RAY_FLUX_FUSED_SPV}
+    COMMAND ${VIENNAPS_VULKAN_RAY_SHADER_COMPILER} -V
+            ${VIENNAPS_VULKAN_RAY_FLUX_FUSED_SHADER} -o
+            ${VIENNAPS_VULKAN_RAY_FLUX_FUSED_SPV}
+    DEPENDS ${VIENNAPS_VULKAN_RAY_FLUX_FUSED_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Generating fused Vulkan ray-flux SPIR-V shader.")
+else()
+  add_custom_command(
+    OUTPUT ${VIENNAPS_VULKAN_RAY_FLUX_FUSED_SPV}
+    COMMAND ${VIENNAPS_VULKAN_RAY_SHADER_COMPILER} -o
+            ${VIENNAPS_VULKAN_RAY_FLUX_FUSED_SPV}
+            ${VIENNAPS_VULKAN_RAY_FLUX_FUSED_SHADER}
+    DEPENDS ${VIENNAPS_VULKAN_RAY_FLUX_FUSED_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Generating fused Vulkan ray-flux SPIR-V shader.")
+endif()
+add_custom_target(viennaps-vulkan-ray-flux-fused-spv
+                  DEPENDS ${VIENNAPS_VULKAN_RAY_FLUX_FUSED_SPV})
+add_library(viennaps_vulkan_ray_flux_fused ray_flux_fused.cpp)
+add_dependencies(viennaps_vulkan_ray_flux_fused
+                 viennaps-vulkan-ray-flux-fused-spv)
+target_link_libraries(viennaps_vulkan_ray_flux_fused
+                      PUBLIC viennaps_vulkan_triangle_hit
+                             viennaps_vulkan_ray_hit_batch
+                             viennaps_vulkan_ray_reducer Vulkan::Vulkan)
+target_include_directories(viennaps_vulkan_ray_flux_fused PUBLIC
+                           "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(viennaps_vulkan_ray_flux_fused PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps_vulkan_ray_flux_fused PRIVATE /W4 /WX)
+else()
+  target_compile_options(viennaps_vulkan_ray_flux_fused PRIVATE
+                         -Wall -Wextra -Wpedantic -Werror)
+endif()
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_RAY_FLUX_FUSED_SPV_PATH
+       "${VIENNAPS_VULKAN_RAY_FLUX_FUSED_SPV}")
+add_executable(viennaps-vulkan-ray-flux-fused-smoke ray_flux_fused_smoke.cpp)
+add_dependencies(viennaps-vulkan-ray-flux-fused-smoke
+                 viennaps-vulkan-ray-flux-fused-spv)
+target_compile_features(viennaps-vulkan-ray-flux-fused-smoke PRIVATE cxx_std_20)
+target_compile_definitions(viennaps-vulkan-ray-flux-fused-smoke PRIVATE
+  "VIENNAPS_VULKAN_RAY_FLUX_FUSED_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_FLUX_FUSED_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-ray-flux-fused-smoke PRIVATE
+                      viennaps_vulkan_ray_flux_fused Vulkan::Vulkan)
+if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+  add_test(NAME viennaps-vulkan-ray-flux-fused-smoke
+           COMMAND viennaps-vulkan-ray-flux-fused-smoke)
+endif()

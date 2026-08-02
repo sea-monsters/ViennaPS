@@ -1777,6 +1777,31 @@ device-resident dispatch fusion.
 | Build and test | the local ray-only target prints `ray flux pipeline Vulkan dispatch PASS`; its focused CTest passes 1/1 |
 | Scope boundary | no BVH, device-resident intermediate buffers, ray generation/reflection, particle sampling, material/coverage coupling, flux normalization, Process routing, or production backend selection is implemented |
 
+### P5-H: fused device-resident ray-flux correctness baseline
+
+- Status: accepted locally as a one-dispatch device-resident correctness
+  baseline; not a performance or Process-routing backend
+- Date: 2026-08-02
+
+`FusedRayFluxPrimitive` performs triangle intersection, hit selection, and
+deterministic per-surface reduction in one `local_size_x=1` dispatch. Its
+input, used-mask scratch, and output buffers are `DeviceBuffer` instances:
+the host uploads inputs before dispatch and reads only the final count and
+reduced columns after it completes. It neither reads back P5-D hits nor
+materializes P5-F records on the host between those stages. A CPU evaluation
+using the accepted P5-D/P5-F/P5-C helpers is deliberately retained as an
+integrity guard; caller storage is committed only after GPU count, IDs, and
+every FP32 word compare bit-for-bit.
+
+| Gate | Result |
+|---|---|
+| GPU work and residency | Intel Arc executes actual Vulkan work over device-local inputs, `used` scratch, and result buffers; the fused shader, rather than a CPU fallback, computes the returned candidate result |
+| Exactness contract | Moller-Trumbore tracing keeps the first equal-distance triangle; reduction selects ascending `(surfaceId, rayId)` order and seeds from the first selected weight, preserving singleton `-0`; generated SPIR-V validates and contains `NoContraction` decorations |
+| CPU/GPU differential | the 5-ray/3-triangle fixture covers hit, miss, repeated surface accumulation, and singleton negative zero; count, IDs, and all weights are exact (0 ULP) before caller output changes |
+| Transaction boundary | malformed weight, insufficient output capacity, and the existing nonzero-surface-domain rejection preserve result slots and count; `N=0` remains a success no-op |
+| Build and test | MSVC builds `viennaps-vulkan-ray-flux-fused-smoke`; direct Intel Arc execution prints `fused ray flux Vulkan dispatch PASS` and focused CTest passes 1/1 |
+| Scope boundary | the one-invocation `O(rays * triangles * rays)` shader and mandatory CPU integrity guard are intentionally too slow for production; no BVH, scalable sort/reduce, particle transport, reflection, material/coverage coupling, flux normalization, Process route, or automatic backend selection uses it |
+
 ## Next slice
 
 The segmented rebuild adapter is installed by the level-set controller, the
@@ -1786,10 +1811,11 @@ RK2/RK3 remain deliberately CPU-only until a multi-stage device state machine
 is proven. The first surface velocity formula is now exact but intentionally
 unwired to process selection. Direct negative/non-finite time injection and
 the optional VTK-enabled install/export conflict remain validation gaps. The
-next implementation slice is a device-residency design that removes the
-intermediate host staging only while preserving the accepted CPU/FP32 order,
-followed by a scalable deterministic sort/reduce design. Coverage reaction is
-a capability-gated FP64 candidate, without weakening the current fail-closed
+next ray slice replaces P5-H's single-invocation baseline with scalable
+device-resident hit compaction and deterministic sort/reduce while preserving
+the accepted CPU/FP32 order; only then can the mandatory per-call CPU
+integrity guard become an opt-in validation path. Coverage reaction is a
+capability-gated FP64 candidate, without weakening the current fail-closed
 gate.
 
 After those production-seam gates, the Level Set work advances to HRLE

@@ -1,0 +1,141 @@
+#version 450
+
+layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer Origins { vec4 origin[]; };
+layout(std430, binding = 1) readonly buffer Directions { vec4 direction[]; };
+layout(std430, binding = 2) readonly buffer Triangles { vec4 vertex[]; };
+layout(std430, binding = 3) readonly buffer Weights { float weight[]; };
+layout(std430, binding = 4) buffer Used { uint used[]; };
+layout(std430, binding = 5) buffer OutputSurface { uint surfaceId[]; };
+layout(std430, binding = 6) buffer OutputWeight { float outputWeight[]; };
+layout(std430, binding = 7) buffer OutputCount { uint count[]; };
+
+layout(push_constant) uniform Params {
+  uint rayCount;
+  uint triangleCount;
+  uint outputCapacity;
+  uint reserved;
+} params;
+
+const uint MISS = 0xffffffffu;
+const float EPSILON = 1.0e-7;
+
+struct Hit {
+  float t;
+  uint triangleIndex;
+  float u;
+  float v;
+};
+
+Hit missHit() {
+  Hit h;
+  h.t = uintBitsToFloat(0x7f7fffffu);
+  h.triangleIndex = MISS;
+  h.u = 0.0;
+  h.v = 0.0;
+  return h;
+}
+
+precise vec3 sub3(precise vec3 a, precise vec3 b) {
+  precise vec3 r;
+  r.x = a.x - b.x;
+  r.y = a.y - b.y;
+  r.z = a.z - b.z;
+  return r;
+}
+
+precise vec3 cross3(precise vec3 a, precise vec3 b) {
+  precise vec3 r;
+  r.x = a.y * b.z - a.z * b.y;
+  r.y = a.z * b.x - a.x * b.z;
+  r.z = a.x * b.y - a.y * b.x;
+  return r;
+}
+
+precise float dot3(precise vec3 a, precise vec3 b) {
+  precise float s = a.x * b.x;
+  s = s + a.y * b.y;
+  s = s + a.z * b.z;
+  return s;
+}
+
+Hit traceRay(uint rayId) {
+  Hit best = missHit();
+  precise vec3 ro = origin[rayId].xyz;
+  precise vec3 rd = direction[rayId].xyz;
+  precise float tMin = origin[rayId].w;
+  precise float tMax = direction[rayId].w;
+  for (uint tri = 0u; tri < params.triangleCount; ++tri) {
+    precise vec3 a = vertex[3u * tri + 0u].xyz;
+    precise vec3 b = vertex[3u * tri + 1u].xyz;
+    precise vec3 c = vertex[3u * tri + 2u].xyz;
+    precise vec3 edge1 = sub3(b, a);
+    precise vec3 edge2 = sub3(c, a);
+    precise vec3 pvec = cross3(rd, edge2);
+    precise float determinant = dot3(edge1, pvec);
+    if (isnan(determinant) || isinf(determinant) ||
+        abs(determinant) <= EPSILON) continue;
+    precise float inverseDeterminant = 1.0 / determinant;
+    precise vec3 tvec = sub3(ro, a);
+    precise float u = dot3(tvec, pvec) * inverseDeterminant;
+    if (isnan(u) || isinf(u) || u < 0.0 || u > 1.0) continue;
+    precise vec3 qvec = cross3(tvec, edge1);
+    precise float v = dot3(rd, qvec) * inverseDeterminant;
+    if (isnan(v) || isinf(v) || v < 0.0 || v > 1.0 || u + v > 1.0) continue;
+    precise float t = dot3(edge2, qvec) * inverseDeterminant;
+    if (isnan(t) || isinf(t) || t < tMin || t > tMax) continue;
+    if (best.triangleIndex == MISS || t < best.t) {
+      best.t = t;
+      best.triangleIndex = tri;
+      best.u = u;
+      best.v = v;
+    }
+  }
+  return best;
+}
+
+void main() {
+  // Correctness baseline: one invocation intentionally performs the full
+  // O(rayCount*triangleCount*rayCount) search; later milestones scale this.
+  if (gl_GlobalInvocationID.x != 0u) return;
+  count[0] = 0u;
+  for (uint i = 0u; i < params.rayCount; ++i) used[i] = 0u;
+
+  uint written = 0u;
+  for (;;) {
+    uint selectedRay = MISS;
+    uint selectedSurface = MISS;
+    for (uint ray = 0u; ray < params.rayCount; ++ray) {
+      if (used[ray] != 0u) continue;
+      Hit h = traceRay(ray);
+      if (h.triangleIndex == MISS) continue;
+      if (selectedRay == MISS || h.triangleIndex < selectedSurface ||
+          (h.triangleIndex == selectedSurface && ray < selectedRay)) {
+        selectedRay = ray;
+        selectedSurface = h.triangleIndex;
+      }
+    }
+    if (selectedRay == MISS) break;
+    precise float sum = 0.0;
+    bool seeded = false;
+    for (uint ray = 0u; ray < params.rayCount; ++ray) {
+      if (used[ray] != 0u) continue;
+      Hit h = traceRay(ray);
+      if (h.triangleIndex != selectedSurface) continue;
+      if (!seeded) {
+        sum = weight[ray];
+        seeded = true;
+      } else {
+        sum = sum + weight[ray];
+      }
+      used[ray] = 1u;
+    }
+    if (written < params.outputCapacity) {
+      surfaceId[written] = selectedSurface;
+      outputWeight[written] = sum;
+      ++written;
+    }
+  }
+  count[0] = written;
+}

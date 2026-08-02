@@ -4,6 +4,13 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   include(CTest)
 endif()
 
+# The parent project adds this directory before its general test block.  Enable
+# the local CTest registry early so Vulkan smoke tests are still registered in
+# an integrated build.
+if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+  enable_testing()
+endif()
+
 set(VULKAN_PROBE_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/VulkanProbe.cpp")
 
 if(NOT DEFINED VIENNAPS_ENABLE_VULKAN)
@@ -45,6 +52,15 @@ if(NOT DEFINED VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE)
         "Build the Vulkan Level Set update differential smoke utility.")
   else()
     set(VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE OFF)
+  endif()
+endif()
+
+if(NOT DEFINED VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE)
+  if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    set(VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE OFF CACHE BOOL
+        "Build the Vulkan surface-model differential smoke utility.")
+  else()
+    set(VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE OFF)
   endif()
 endif()
 
@@ -134,6 +150,15 @@ if(VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE OR VIENNAPS_BUILD_VULKAN_PROBE)
   else()
     message(STATUS
             "[ViennaPS Vulkan Level Set] Vulkan SDK unavailable; skipping smoke.")
+  endif()
+endif()
+
+if(VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE OR VIENNAPS_BUILD_VULKAN_PROBE)
+  if(VIENNAPS_VULKAN_SDK_AVAILABLE)
+    add_subdirectory(surface)
+  else()
+    message(STATUS
+            "[ViennaPS Vulkan Surface] Vulkan SDK unavailable; skipping smoke.")
   endif()
 endif()
 

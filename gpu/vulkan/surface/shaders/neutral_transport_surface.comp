@@ -1,0 +1,113 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer CoverageBuffer {
+  float values[];
+} coverage;
+
+layout(set = 0, binding = 1, std430) readonly buffer MaterialBuffer {
+  float values[];
+} materialIds;
+
+layout(set = 0, binding = 2, std430) buffer VelocityBuffer {
+  float values[];
+} velocity;
+
+layout(push_constant) uniform Params {
+  uint elementCount;
+  uint etchFrontMaterialId;
+  float kEtch;
+  float surfaceSiteDensity;
+  float siliconDensity;
+  float timeToSecond;
+  float lengthToMeter;
+} params;
+
+// Vulkan implementations are allowed to round FP32 division differently from
+// the host implementation.  This helper performs the normal-finite path with
+// integer mantissas and an explicit nearest-even step.  It deliberately avoids
+// shaderInt64 so that the contract also works on devices exposing only the
+// baseline Vulkan 1.0 integer set.
+float divideNormalNearestEven(float numerator, float denominator) {
+  const uint numeratorBits = floatBitsToUint(numerator);
+  const uint denominatorBits = floatBitsToUint(denominator);
+  const uint sign = (numeratorBits ^ denominatorBits) & 0x80000000u;
+  const uint numeratorExponent = (numeratorBits >> 23u) & 0xffu;
+  const uint denominatorExponent = (denominatorBits >> 23u) & 0xffu;
+  const uint numeratorMantissa = (numeratorBits & 0x7fffffu) | 0x800000u;
+  const uint denominatorMantissa = (denominatorBits & 0x7fffffu) | 0x800000u;
+
+  if ((numeratorBits & 0x7fffffffu) == 0u) {
+    return uintBitsToFloat(sign);
+  }
+
+  int outputExponent = int(numeratorExponent) - int(denominatorExponent);
+  uint scaledNumerator = numeratorMantissa;
+  if (scaledNumerator < denominatorMantissa) {
+    scaledNumerator <<= 1u;
+    --outputExponent;
+  }
+
+  uint remainder = scaledNumerator - denominatorMantissa;
+  uint quotient = 1u;
+  for (uint bit = 0u; bit < 23u; ++bit) {
+    const uint doubled = remainder << 1u;
+    if (doubled >= denominatorMantissa) {
+      remainder = doubled - denominatorMantissa;
+      quotient = (quotient << 1u) | 1u;
+    } else {
+      remainder = doubled;
+      quotient <<= 1u;
+    }
+  }
+
+  const uint guardValue = remainder << 1u;
+  const bool guard = guardValue >= denominatorMantissa;
+  if (guard) {
+    remainder = guardValue - denominatorMantissa;
+  } else {
+    remainder = guardValue;
+  }
+  if (guard && (remainder != 0u || (quotient & 1u) != 0u)) {
+    ++quotient;
+  }
+  if (quotient >= 0x1000000u) {
+    quotient >>= 1u;
+    ++outputExponent;
+  }
+
+  // The surface contract rejects non-normal parameter/input values; the
+  // normal result path therefore covers the supported domain.  Preserve zero
+  // and clamp an underflowing result to the IEEE zero boundary rather than
+  // invoking implementation-defined floating-point division.
+  if (outputExponent < -126) {
+    return uintBitsToFloat(sign);
+  }
+  if (outputExponent > 127) {
+    return uintBitsToFloat(sign | 0x7f800000u);
+  }
+  const uint exponentBits = uint(outputExponent + 127);
+  return uintBitsToFloat(sign | (exponentBits << 23u) |
+                         (quotient & 0x7fffffu));
+}
+
+void main() {
+  const uint index = gl_GlobalInvocationID.x;
+  if (index >= params.elementCount) {
+    return;
+  }
+
+  precise float result = 0.0;
+  if (materialIds.values[index] == float(params.etchFrontMaterialId)) {
+    precise const float product =
+        params.kEtch * params.surfaceSiteDensity * coverage.values[index];
+    precise const float etchVelocity =
+        params.siliconDensity > 0.0
+            ? divideNormalNearestEven(product, params.siliconDensity)
+            : 0.0;
+    precise const float signedVelocity = -etchVelocity * params.timeToSecond;
+    result = divideNormalNearestEven(signedVelocity, params.lengthToMeter);
+  }
+  velocity.values[index] = result;
+}

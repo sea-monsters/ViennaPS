@@ -2,6 +2,7 @@
 
 #include "../materials/psMaterialMap.hpp"
 #include "../process/psProcessModel.hpp"
+#include "psNeutralTransportVelocityExecutor.hpp"
 #include "../psConstants.hpp"
 #include "../psUnits.hpp"
 
@@ -97,10 +98,18 @@ class NeutralTransportSurfaceModel : public SurfaceModel<NumericType> {
 public:
   using SurfaceModel<NumericType>::coverages;
   using SurfaceModel<NumericType>::surfaceData;
+  using VelocityExecutor =
+      NeutralTransportVelocityExecutor<NumericType>;
 
   explicit NeutralTransportSurfaceModel(
       const NeutralTransportParameters<NumericType> &pParams)
       : params(pParams) {}
+
+  void setVelocityExecutor(VelocityExecutor executor) {
+    velocityExecutor_ = std::move(executor);
+  }
+
+  void clearVelocityExecutor() { velocityExecutor_ = {}; }
 
   void initializeCoverages(unsigned numGeometryPoints) override {
     if (coverages == nullptr) {
@@ -151,21 +160,56 @@ public:
     assert(coverage && coverage->size() == materialIds.size());
 
     auto velocity =
-        SmartPointer<std::vector<NumericType>>::New(materialIds.size(), 0.);
+        SmartPointer<std::vector<NumericType>>::New(materialIds.size(),
+                                                   NumericType(0));
 
+    const auto computeCpuVelocity = [&]() {
 #pragma omp parallel for
-    for (size_t i = 0; i < materialIds.size(); ++i) {
-      if (MaterialMap::isMaterial(materialIds[i], params.etchFrontMaterial)) {
-        const auto etchVelocity =
-            params.siliconDensity > 0.
-                ? params.kEtch * params.surfaceSiteDensity * coverage->at(i) /
-                      params.siliconDensity
-                : NumericType(0.);
-        velocity->at(i) = -etchVelocity * units::Time::convertSecond() /
-                          units::Length::convertMeter();
+      for (size_t i = 0; i < materialIds.size(); ++i) {
+        if (MaterialMap::isMaterial(materialIds[i], params.etchFrontMaterial)) {
+          const auto etchVelocity =
+              params.siliconDensity > 0.
+                  ? params.kEtch * params.surfaceSiteDensity * coverage->at(i) /
+                        params.siliconDensity
+                  : NumericType(0.);
+          velocity->at(i) = -etchVelocity * units::Time::convertSecond() /
+                            units::Length::convertMeter();
+        }
       }
+    };
+
+    bool executorSucceeded = false;
+    if (velocityExecutor_) {
+      std::vector<NumericType> candidate(materialIds.size(), NumericType(0));
+      NeutralTransportVelocityWork<NumericType> work{
+          std::span<const NumericType>(*coverage),
+          std::span<const NumericType>(materialIds),
+          std::span<NumericType>(candidate),
+          {params.kEtch,
+           params.surfaceSiteDensity,
+           params.siliconDensity,
+           static_cast<NumericType>(units::Time::convertSecond()),
+           static_cast<NumericType>(units::Length::convertMeter()),
+           static_cast<int>(params.etchFrontMaterial.legacyId())}};
+      std::string executorError;
+      try {
+        executorSucceeded = velocityExecutor_(work, executorError) &&
+                            work.complete &&
+                            work.writtenCount == work.output.size();
+      } catch (...) {
+        executorSucceeded = false;
+      }
+      if (executorSucceeded) {
+        *velocity = std::move(candidate);
+      } else {
+        computeCpuVelocity();
+      }
+    } else {
+      computeCpuVelocity();
     }
 
+    // Velocity injection is deliberately limited to the candidate vector;
+    // surface-data bookkeeping remains on the canonical CPU path.
     if (Logger::hasIntermediate() && surfaceData != nullptr) {
       auto stickingData = surfaceData->getScalarData("stickingCoefficient");
       if (stickingData && stickingData->size() == coverage->size()) {
@@ -548,6 +592,7 @@ private:
   }
 
   const NeutralTransportParameters<NumericType> &params;
+  VelocityExecutor velocityExecutor_{};
   std::vector<Vec3D<NumericType>> cachedCoordinates_{};
   bool hasCoordinates_ = false;
   mutable std::vector<std::vector<DiffusionEdge>> diffusionGraph_{};

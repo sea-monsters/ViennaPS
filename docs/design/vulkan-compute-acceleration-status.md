@@ -1605,6 +1605,28 @@ available.
 | Scope boundary | only the fixed etch-front velocity formula is accelerated; coverage evolution, graph diffusion, ray transport, and process/controller routing remain CPU |
 | Path policy | Vulkan SDK and SPIR-V locations are generated or supplied through the local environment; no machine-specific path is tracked |
 
+### P5-N1: CPU-neutral velocity executor seam
+
+- Status: accepted locally as an explicit, CPU-canonical injection seam; the
+  Vulkan bridge and Process-level policy route remain pending
+- Date: 2026-08-03
+
+`NeutralTransportVelocityWork<T>` exposes coverage, material-ID, and candidate
+velocity spans plus the explicit etch-front parameter tuple without exposing a
+Vulkan or ProcessContext type. `NeutralTransportSurfaceModel` uses it only
+when an explicit executor is installed. A candidate is committed only when the
+callback returns success and reports the complete output count; absence,
+failure, exception, or incomplete output reruns the unchanged CPU formula.
+`stickingCoefficient` bookkeeping remains on the existing CPU path.
+
+| Gate | Result |
+|---|---|
+| CPU fallback | focused float and double test retains the historical velocity result for no executor, callback failure, exception, and incomplete output |
+| Transaction boundary | the output candidate is zero-initialized, passed by span, and committed only after explicit complete/count acknowledgement |
+| Explicit execution | a successful caller-provided executor replaces only the velocity candidate; no backend is selected automatically |
+| Direct validation | an independent MSVC C++20 compile and focused executable completed successfully; root CMake/CTest remains externally gated by CPM release-asset access |
+| Scope boundary | no Vulkan type enters the public model header; no GPU bridge, numerical promotion, Process/Context wiring, or B2A surface-diffusion change is included |
+
 ### P5-B2: exact FP32 CSR graph-diffusion primitive
 
 - Status: accepted on local Vulkan hardware by CPU differential; surface-process

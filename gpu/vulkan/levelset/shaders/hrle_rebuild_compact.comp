@@ -1,0 +1,60 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+// Input classification layout: value, source point id, action, padding.
+struct DecisionData {
+  float value;
+  uint sourcePointId;
+  uint action;
+  uint padding;
+};
+
+// Output layout intentionally includes the original candidate index.  It is
+// not a byte-for-byte copy of DecisionData so defined points can be rebuilt
+// after the final device-to-host transfer.
+struct CompactedDecisionData {
+  uint candidateIndex;
+  float value;
+  uint sourcePointId;
+  uint action;
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer DecisionBuffer {
+  DecisionData decisions[];
+};
+layout(std430, set = 0, binding = 1) readonly buffer OffsetBuffer {
+  uint offsets[];
+};
+layout(std430, set = 0, binding = 2) writeonly buffer CompactedBuffer {
+  CompactedDecisionData compacted[];
+};
+
+layout(push_constant) uniform Parameters {
+  uint elementCount;
+  uint outputCapacity;
+} parameters;
+
+const uint ACTION_DEFINED = 2u;
+
+void main() {
+  const uint index = gl_GlobalInvocationID.x;
+  if (index >= parameters.elementCount) {
+    return;
+  }
+
+  const DecisionData decision = decisions[index];
+  if (decision.action != ACTION_DEFINED) {
+    return;
+  }
+
+  const uint outputIndex = offsets[index];
+  if (outputIndex >= parameters.outputCapacity) {
+    return;
+  }
+
+  compacted[outputIndex].candidateIndex = index;
+  compacted[outputIndex].value = decision.value;
+  compacted[outputIndex].sourcePointId = decision.sourcePointId;
+  compacted[outputIndex].action = decision.action;
+}

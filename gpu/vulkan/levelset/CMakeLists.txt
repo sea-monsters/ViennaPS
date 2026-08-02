@@ -6,6 +6,14 @@ set(VIENNAPS_HRLE_CLASSIFICATION_SHADER
     "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hrle_rebuild_classification.comp")
 set(VIENNAPS_HRLE_CLASSIFICATION_SPV
     "${CMAKE_CURRENT_BINARY_DIR}/hrle_rebuild_classification.comp.spv")
+set(VIENNAPS_HRLE_ACTION_FLAGS_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hrle_rebuild_action_flags.comp")
+set(VIENNAPS_HRLE_ACTION_FLAGS_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/hrle_rebuild_action_flags.comp.spv")
+set(VIENNAPS_HRLE_COMPACT_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hrle_rebuild_compact.comp")
+set(VIENNAPS_HRLE_COMPACT_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/hrle_rebuild_compact.comp.spv")
 
 find_program(VIENNAPS_LEVELSET_SHADER_COMPILER
              NAMES glslc glslangValidator
@@ -70,6 +78,42 @@ endif()
 
 add_custom_target(viennaps-vulkan-hrle-classification-spv
                   DEPENDS "${VIENNAPS_HRLE_CLASSIFICATION_SPV}")
+
+if("${VIENNAPS_LEVELSET_SHADER_COMPILER}" MATCHES "glslangValidator")
+  add_custom_command(
+    OUTPUT "${VIENNAPS_HRLE_ACTION_FLAGS_SPV}"
+    COMMAND "${VIENNAPS_LEVELSET_SHADER_COMPILER}" -V
+            "${VIENNAPS_HRLE_ACTION_FLAGS_SHADER}"
+            -o "${VIENNAPS_HRLE_ACTION_FLAGS_SPV}"
+    DEPENDS "${VIENNAPS_HRLE_ACTION_FLAGS_SHADER}"
+    COMMENT "Generating Vulkan HRLE rebuild action-flags SPIR-V")
+  add_custom_command(
+    OUTPUT "${VIENNAPS_HRLE_COMPACT_SPV}"
+    COMMAND "${VIENNAPS_LEVELSET_SHADER_COMPILER}" -V
+            "${VIENNAPS_HRLE_COMPACT_SHADER}"
+            -o "${VIENNAPS_HRLE_COMPACT_SPV}"
+    DEPENDS "${VIENNAPS_HRLE_COMPACT_SHADER}"
+    COMMENT "Generating Vulkan HRLE rebuild compaction SPIR-V")
+else()
+  add_custom_command(
+    OUTPUT "${VIENNAPS_HRLE_ACTION_FLAGS_SPV}"
+    COMMAND "${VIENNAPS_LEVELSET_SHADER_COMPILER}"
+            -o "${VIENNAPS_HRLE_ACTION_FLAGS_SPV}"
+            "${VIENNAPS_HRLE_ACTION_FLAGS_SHADER}"
+    DEPENDS "${VIENNAPS_HRLE_ACTION_FLAGS_SHADER}"
+    COMMENT "Generating Vulkan HRLE rebuild action-flags SPIR-V")
+  add_custom_command(
+    OUTPUT "${VIENNAPS_HRLE_COMPACT_SPV}"
+    COMMAND "${VIENNAPS_LEVELSET_SHADER_COMPILER}"
+            -o "${VIENNAPS_HRLE_COMPACT_SPV}"
+            "${VIENNAPS_HRLE_COMPACT_SHADER}"
+    DEPENDS "${VIENNAPS_HRLE_COMPACT_SHADER}"
+    COMMENT "Generating Vulkan HRLE rebuild compaction SPIR-V")
+endif()
+
+add_custom_target(viennaps-vulkan-hrle-compaction-spv
+                  DEPENDS "${VIENNAPS_HRLE_ACTION_FLAGS_SPV}"
+                          "${VIENNAPS_HRLE_COMPACT_SPV}")
 
 add_library(viennaps_vulkan_levelset_update
             levelset_update.cpp
@@ -150,6 +194,12 @@ if(TARGET viennaps_vulkan_reduction_scan_primitives)
 
   add_library(viennaps_vulkan_hrle_compaction
               hrle_rebuild_compaction.cpp)
+  set_property(TARGET viennaps_vulkan_hrle_compaction
+               PROPERTY VIENNAPS_HRLE_ACTION_FLAGS_SPV
+                        "${VIENNAPS_HRLE_ACTION_FLAGS_SPV}")
+  set_property(TARGET viennaps_vulkan_hrle_compaction
+               PROPERTY VIENNAPS_HRLE_COMPACT_SPV
+                        "${VIENNAPS_HRLE_COMPACT_SPV}")
   target_include_directories(viennaps_vulkan_hrle_compaction
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
            "${CMAKE_CURRENT_LIST_DIR}/../../../include/viennaps")
@@ -169,7 +219,8 @@ if(TARGET viennaps_vulkan_reduction_scan_primitives)
                  hrle_rebuild_compaction_smoke.cpp)
   add_dependencies(viennaps-vulkan-hrle-compaction-smoke
                    viennaps-vulkan-hrle-classification-spv
-                   viennaps-vulkan-reduction-scan-smoke-spv)
+                   viennaps-vulkan-reduction-scan-smoke-spv
+                   viennaps-vulkan-hrle-compaction-spv)
   target_compile_definitions(viennaps-vulkan-hrle-compaction-smoke PRIVATE
     "VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH=\"${_VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH}\""
     "VIENNAPS_REDUCTION_SCAN_SPV_PATH=\"${_VIENNAPS_REDUCTION_SCAN_SPV_PATH}\"")

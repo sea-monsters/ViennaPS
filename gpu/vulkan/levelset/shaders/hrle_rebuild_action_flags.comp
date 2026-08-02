@@ -1,0 +1,32 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+// Keep this layout byte-for-byte compatible with the HRLE classification
+// output: value, source point id, action, padding (16 bytes).
+struct DecisionData {
+  float value;
+  uint sourcePointId;
+  uint action;
+  uint padding;
+};
+
+layout(std430, set = 0, binding = 0) readonly buffer DecisionBuffer {
+  DecisionData decisions[];
+};
+layout(std430, set = 0, binding = 1) writeonly buffer FlagBuffer {
+  uint flags[];
+};
+
+layout(push_constant) uniform Parameters { uint elementCount; } parameters;
+
+const uint ACTION_DEFINED = 2u;
+
+void main() {
+  const uint index = gl_GlobalInvocationID.x;
+  if (index >= parameters.elementCount) {
+    return;
+  }
+
+  flags[index] = decisions[index].action == ACTION_DEFINED ? 1u : 0u;
+}

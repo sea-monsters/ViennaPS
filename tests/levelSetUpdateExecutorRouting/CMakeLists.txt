@@ -23,7 +23,8 @@ foreach(scenario IN ITEMS fallback-error fallback-throw fallback-invalid
                           rebuild-fallback rebuild-fallback-error
                           rebuild-fallback-throw rebuild-fallback-invalid
                           rebuild-strict-error rebuild-strict-throw
-                          rebuild-strict-invalid)
+                          rebuild-strict-invalid rebuild-handled
+                          rebuild-handled-no-point-data)
   string(REPLACE "-" "_" scenario_name "${scenario}")
   add_test(NAME "${PROJECT_NAME}_${scenario_name}"
            COMMAND $<TARGET_FILE:${PROJECT_NAME}> "${scenario}")

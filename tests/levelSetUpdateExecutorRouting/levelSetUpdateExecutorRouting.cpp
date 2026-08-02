@@ -15,6 +15,7 @@ namespace {
 constexpr int kDimension = 2;
 using NumericType = float;
 using Advect = viennals::Advect<NumericType, kDimension>;
+using LevelSetDomain = viennals::Domain<NumericType, kDimension>;
 using FailurePolicy = viennaps::LevelSetUpdateFailurePolicy;
 
 enum class ExecutorMode { NONE, FALLBACK, ERROR, THROW, INVALID };
@@ -25,6 +26,16 @@ class ConstantVelocityField final
 public:
   NumericType getScalarVelocity(const viennaps::Vec3D<NumericType> &, int,
                                 const viennaps::Vec3D<NumericType> &,
+                                unsigned long) override {
+    return -0.1F;
+  }
+};
+
+class LsConstantVelocityField final
+    : public viennals::VelocityField<NumericType> {
+public:
+  NumericType getScalarVelocity(const viennacore::Vec3D<NumericType> &, int,
+                                const viennacore::Vec3D<NumericType> &,
                                 unsigned long) override {
     return -0.1F;
   }
@@ -69,6 +80,177 @@ struct RunResult {
   double processTime = 0.0;
   unsigned advectionSteps = 0U;
 };
+
+struct PointDataSnapshot {
+  std::vector<std::vector<NumericType>> scalars;
+  std::vector<std::vector<viennacore::Vec3D<NumericType>>> vectors;
+};
+
+[[nodiscard]] PointDataSnapshot
+snapshotPointData(const LevelSetDomain &domain) {
+  const auto &pointData = domain.getPointData();
+  PointDataSnapshot result;
+  for (unsigned i = 0; i < pointData.getScalarDataSize(); ++i)
+    result.scalars.push_back(*pointData.getScalarData(i));
+  for (unsigned i = 0; i < pointData.getVectorDataSize(); ++i)
+    result.vectors.push_back(*pointData.getVectorData(i));
+  return result;
+}
+
+[[nodiscard]] PointDataSnapshot
+selectPointData(const PointDataSnapshot &source,
+                const std::vector<std::vector<unsigned>> &sourceIds) {
+  PointDataSnapshot result;
+  for (const auto &sourceScalars : source.scalars) {
+    auto &selectedScalars = result.scalars.emplace_back();
+    for (const auto &segmentIds : sourceIds)
+      for (const auto sourceId : segmentIds) {
+        VC_TEST_ASSERT(sourceId < sourceScalars.size());
+        selectedScalars.push_back(sourceScalars[sourceId]);
+      }
+  }
+  for (const auto &sourceVectors : source.vectors) {
+    auto &selectedVectors = result.vectors.emplace_back();
+    for (const auto &segmentIds : sourceIds)
+      for (const auto sourceId : segmentIds) {
+        VC_TEST_ASSERT(sourceId < sourceVectors.size());
+        selectedVectors.push_back(sourceVectors[sourceId]);
+      }
+  }
+  return result;
+}
+
+void seedPointData(LevelSetDomain &domain) {
+  const unsigned pointCount = domain.getNumberOfPoints();
+  std::vector<NumericType> scalars(pointCount);
+  std::vector<viennacore::Vec3D<NumericType>> vectors(pointCount);
+  for (unsigned i = 0; i < pointCount; ++i) {
+    scalars[i] = static_cast<NumericType>(i) + 0.25F;
+    vectors[i] = {static_cast<NumericType>(i),
+                  static_cast<NumericType>(2U * i) + 0.5F,
+                  static_cast<NumericType>(-static_cast<int>(i))};
+  }
+  domain.getPointData().insertNextScalarData(std::move(scalars), "ScalarProbe");
+  domain.getPointData().insertNextVectorData(std::move(vectors), "VectorProbe");
+}
+
+void assertPointDataEqual(const PointDataSnapshot &expected,
+                          const PointDataSnapshot &actual) {
+  VC_TEST_ASSERT(expected.scalars == actual.scalars);
+  VC_TEST_ASSERT(expected.vectors.size() == actual.vectors.size());
+  for (unsigned data = 0; data < expected.vectors.size(); ++data) {
+    VC_TEST_ASSERT(expected.vectors[data].size() ==
+                   actual.vectors[data].size());
+    for (unsigned point = 0; point < expected.vectors[data].size(); ++point)
+      for (unsigned component = 0; component < 3U; ++component)
+        VC_TEST_ASSERT(expected.vectors[data][point][component] ==
+                       actual.vectors[data][point][component]);
+  }
+}
+
+struct HandledResult {
+  PointDataSnapshot expectedPointData;
+  PointDataSnapshot afterPointData;
+  std::vector<std::vector<NumericType>> replacementValues;
+  std::vector<std::vector<NumericType>> finalValues;
+  std::vector<std::vector<unsigned>> sourceIds;
+  unsigned executorCalls = 0U;
+  unsigned replacementSegments = 0U;
+  unsigned replacementPoints = 0U;
+};
+
+[[nodiscard]] HandledResult runHandledReplacement(const bool updatePointData) {
+  auto domain = makeDomain();
+  auto levelSet = domain->getSurface();
+  seedPointData(*levelSet);
+
+  Advect advect;
+  advect.insertNextLevelSet(levelSet);
+  advect.setVelocityField(
+      viennacore::SmartPointer<LsConstantVelocityField>::New());
+  advect.setSpatialScheme(
+      viennals::SpatialSchemeEnum::ENGQUIST_OSHER_1ST_ORDER);
+  advect.setTemporalScheme(viennals::TemporalSchemeEnum::FORWARD_EULER);
+  advect.setAdvectionTime(0.05);
+  advect.setTimeStepRatio(0.4999);
+  advect.setSingleStep(true);
+  advect.setUpdatePointData(updatePointData);
+
+  HandledResult result;
+  advect.setLevelSetRebuildExecutor(
+      [&result, levelSet](const Advect::LevelSetRebuildContext &context,
+                          Advect::LevelSetRebuildOutput &output,
+                          std::string &) {
+        ++result.executorCalls;
+        if (result.executorCalls > 1U)
+          return Advect::LevelSetRebuildStatus::FALLBACK;
+        output.domain = viennacore::SmartPointer<LevelSetDomain>::New(
+            context.domain.getGrid());
+        output.domain->getDomain().deepCopy(&output.domain->getGrid(),
+                                            context.domain);
+        const auto &oldDomain = context.domain;
+        auto &replacementDomain = output.domain->getDomain();
+        result.replacementSegments = replacementDomain.getNumberOfSegments();
+        result.replacementPoints = replacementDomain.getNumberOfPoints();
+        const auto sourcePointData = snapshotPointData(*levelSet);
+        result.replacementValues.clear();
+        result.replacementValues.reserve(result.replacementSegments);
+        if (context.updatePointData)
+          output.sourceIds.resize(result.replacementSegments);
+        for (unsigned segment = 0; segment < result.replacementSegments;
+             ++segment) {
+          auto &replacementSegment =
+              replacementDomain.getDomainSegment(segment);
+          auto &values = result.replacementValues.emplace_back();
+          values.reserve(replacementSegment.definedValues.size());
+          if (context.updatePointData)
+            output.sourceIds[segment].reserve(
+                replacementSegment.definedValues.size());
+          const unsigned sourceOffset = oldDomain.getPointIdOffset(segment);
+          for (unsigned local = 0;
+               local < replacementSegment.definedValues.size(); ++local) {
+            replacementSegment.definedValues[local] += 0.125F;
+            values.push_back(replacementSegment.definedValues[local]);
+            if (context.updatePointData)
+              output.sourceIds[segment].push_back(sourceOffset + local);
+          }
+        }
+        result.sourceIds = output.sourceIds;
+        if (context.updatePointData)
+          result.expectedPointData =
+              selectPointData(sourcePointData, result.sourceIds);
+        return Advect::LevelSetRebuildStatus::HANDLED;
+      });
+  advect.apply();
+
+  const auto &resultDomain = *domain->getSurface();
+  const auto &finalSparseDomain = resultDomain.getDomain();
+  for (unsigned segment = 0; segment < finalSparseDomain.getNumberOfSegments();
+       ++segment)
+    result.finalValues.push_back(
+        finalSparseDomain.getDomainSegment(segment).definedValues);
+  result.afterPointData = snapshotPointData(resultDomain);
+  return result;
+}
+
+void checkHandledReplacement() {
+  const auto result = runHandledReplacement(true);
+  VC_TEST_ASSERT(result.executorCalls > 0U);
+  VC_TEST_ASSERT(result.replacementSegments > 0U);
+  VC_TEST_ASSERT(result.replacementPoints > 0U);
+  VC_TEST_ASSERT(result.finalValues == result.replacementValues);
+  assertPointDataEqual(result.expectedPointData, result.afterPointData);
+}
+
+void checkHandledWithoutPointData() {
+  const auto result = runHandledReplacement(false);
+  VC_TEST_ASSERT(result.executorCalls > 0U);
+  VC_TEST_ASSERT(result.replacementSegments > 0U);
+  VC_TEST_ASSERT(result.replacementPoints > 0U);
+  VC_TEST_ASSERT(result.finalValues == result.replacementValues);
+  VC_TEST_ASSERT(result.afterPointData.scalars.empty());
+  VC_TEST_ASSERT(result.afterPointData.vectors.empty());
+}
 
 [[nodiscard]] RunResult
 run(const ExecutorMode mode,
@@ -295,6 +477,10 @@ int main(const int argc, const char *const argv[]) {
     VC_TEST_ASSERT(result.processTime == 0.0);
     VC_TEST_ASSERT(result.advectionSteps == 0U);
     VC_TEST_ASSERT(result.executorCalls > 0U);
+  } else if (scenario == "rebuild-handled") {
+    checkHandledReplacement();
+  } else if (scenario == "rebuild-handled-no-point-data") {
+    checkHandledWithoutPointData();
   } else
     return 2;
   return 0;

@@ -1373,9 +1373,17 @@ ViennaPS carries the executor through `ProcessContext`, `Process`, and
 | Strict rollback | the same failure classes return failure with exact pre-step level-set values, zero process time, and zero accepted steps |
 | API propagation | `Process` set/get/clear and `ProcessContext`/`AdvectionHandler` forwarding are compiled and exercised |
 | Integration gates | Forward Euler, RK2, and RK3 stop after rebuild failure |
-| Focused validation | the no-SDK routing group passes 15/15; the ViennaLS patch applies cleanly to its pinned source tree |
-| Residual boundary | a valid `HANDLED` replacement, scalar/vector point-data translation including `updatePointData=false`, multi-segment/3D input, and RK2/RK3 rebuild failure are not yet runtime-tested |
+| Focused validation | the no-SDK routing group passes 17/17; the ViennaLS patch applies cleanly to its pinned source tree |
+| Valid handled output | a real 2D replacement commits exact HRLE values and exact scalar/vector PointData selected by the callback-time global source-ID map |
+| PointData disabled | `updatePointData=false` commits the replacement and publishes no stale scalar/vector PointData |
+| Residual boundary | multi-segment/3D handled input and RK2/RK3 rebuild failure are not yet runtime-tested |
 | Production boundary | no segment-aware Vulkan adapter or deployment-suite connection is installed by this slice |
+
+The PointData oracle must sample the source at rebuild-callback time. Earlier
+advection preparation can already change the current PointData layout, so a
+pre-`apply()` snapshot is not the source addressed by the executor contract.
+`translateFromMultiData` consumes the callback's segment vectors in order, but
+each value is a global index into that callback-time flat PointData array.
 
 ## P4D-deployment-probe audit: persisted automatic selection gap
 

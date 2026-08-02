@@ -1185,7 +1185,7 @@ download round trip, move state, and the principal validation failures.
 | No-SDK behavior | the 17 relevant CPU, policy, HRLE, executor, and probe tests pass |
 | Deployment schema | no schema change; use existing suite gate, estimated bytes, and safe working-set threshold |
 | Conservative HRLE peak | 2D is at least `120N + 8`; 3D is at least `152N + 8`, plus scan scratch and alignment |
-| Residual boundary | concurrent reset, timeout/deferred cleanup, device scan overloads, shaders, and materialization remain pending |
+| Residual boundary | concurrent reset, timeout/deferred cleanup, level-set shaders, and materialization remain pending |
 | Path policy | no SDK, dependency, source checkout, or build-cache path is tracked |
 
 The deployment-time profile already contains `vulkanPrimitiveSuitePass` and
@@ -1195,6 +1195,40 @@ must require the primitive suite, compute capability, and sufficient safe
 working set. Manual selection continues to override policy, but not missing
 hardware capabilities or an unsafe memory bound; those cases retain the
 existing strict/fallback behavior.
+
+## P4C3-device-scan: resident exclusive offsets and selected count
+
+- Status: accepted locally
+- Date: 2026-08-02
+- Scope: execute the HRLE defined-mask exclusive scan and selected-count
+  calculation without moving intermediate arrays through host-visible memory
+
+`ReductionScanPrimitives` now overloads integer exclusive scan for
+generation-aware `DeviceBuffer` inputs and outputs. Recursive block sums and
+offsets are allocated on the same `ComputeSession`, and the existing scan-block
+and add-offset shader operations are reused. A second device API writes the
+compaction count to a one-element device buffer. It validates flags, offsets,
+count, session generation, capacity, and aliasing before the N=0 short circuit,
+so operation 4 never evaluates `elementCount - 1` for an empty stream.
+
+The existing host-visible reduction, scan, and stable-compaction APIs remain
+unchanged. Device dispatch uses explicit transfer/compute and compute/compute
+dependencies and waits for fence completion before recycling the shared
+command buffer. Final materialization will download the N offsets and count K,
+append K as the N+1 tail offset, and compare them exactly with the CPU oracle.
+
+| Gate | Result |
+|---|---|
+| Scan boundaries | N = 0, 1, 255, 256, 257, and 513 pass |
+| Exact oracle | every device exclusive offset equals the CPU prefix sum |
+| Count oracle | mixed flags produce the exact CPU selected count on device |
+| Session isolation | foreign-generation buffers fail before dispatch and preserve the output sentinel |
+| Validation | length and alias errors fail closed; N=0 does not dispatch the count shader |
+| Compatibility | legacy host reduction/scan production checks still pass |
+| Combined Vulkan gate | runtime quartet plus reduction/scan production smoke pass 5/5 |
+| No-SDK behavior | the 17 relevant CPU, policy, HRLE, executor, and probe tests pass |
+| Residual boundary | action-flags shader, 16-byte stable scatter, device classification output, and final readback remain pending |
+| Path policy | no SDK, dependency, source checkout, or build-cache path is tracked |
 
 ## Next slice
 

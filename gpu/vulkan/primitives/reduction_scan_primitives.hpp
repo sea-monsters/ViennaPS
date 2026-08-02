@@ -72,6 +72,21 @@ public:
                                       std::string &error,
                                       ReductionScanOptions options = {});
 
+  // Device-resident variant. Input/output and all recursive scratch buffers
+  // remain on the active session's device; no host visibility is required.
+  [[nodiscard]] bool exclusiveScanInt(runtime::DeviceBuffer &input,
+                                      std::size_t inputElementCount,
+                                      runtime::DeviceBuffer &output,
+                                      std::size_t outputElementCount,
+                                      std::string &error,
+                                      ReductionScanOptions options = {});
+
+  [[nodiscard]] bool writeCompactionCount(runtime::DeviceBuffer &flags,
+                                          runtime::DeviceBuffer &offsets,
+                                          std::size_t elementCount,
+                                          runtime::DeviceBuffer &count,
+                                          std::string &error);
+
   [[nodiscard]] bool stableCompactFloat(
       runtime::HostVisibleBuffer &input, std::size_t inputElementCount,
       runtime::HostVisibleBuffer &flags, std::size_t flagElementCount,
@@ -144,10 +159,17 @@ private:
                                         runtime::HostVisibleBuffer &blockSums,
                                         std::size_t elementCount,
                                         std::string &error);
+  [[nodiscard]] bool dispatchDeviceScanBlocks(
+      runtime::DeviceBuffer &input, runtime::DeviceBuffer &output,
+      runtime::DeviceBuffer &blockSums, std::size_t elementCount,
+      std::string &error);
   [[nodiscard]] bool
   dispatchScanAddOffsets(runtime::HostVisibleBuffer &output,
                          runtime::HostVisibleBuffer &blockOffsets,
                          std::size_t elementCount, std::string &error);
+  [[nodiscard]] bool dispatchDeviceScanAddOffsets(
+      runtime::DeviceBuffer &output, runtime::DeviceBuffer &blockOffsets,
+      std::size_t elementCount, std::string &error);
   [[nodiscard]] bool
   dispatchNormalizeFlags(runtime::HostVisibleBuffer &flags,
                          runtime::HostVisibleBuffer &normalizedFlags,
@@ -156,6 +178,10 @@ private:
       runtime::HostVisibleBuffer &normalizedFlags,
       runtime::HostVisibleBuffer &offsets, runtime::HostVisibleBuffer &count,
       std::size_t elementCount, std::size_t &selectedCount, std::string &error);
+  [[nodiscard]] bool dispatchDeviceCompactionCount(
+      runtime::DeviceBuffer &flags, runtime::DeviceBuffer &offsets,
+      runtime::DeviceBuffer &count, std::size_t elementCount,
+      std::string &error);
   [[nodiscard]] bool dispatchCompactionScatter(
       runtime::HostVisibleBuffer &input, runtime::HostVisibleBuffer &output,
       runtime::HostVisibleBuffer &normalizedFlags,
@@ -170,6 +196,25 @@ private:
                                       std::size_t elementCount,
                                       runtime::HostVisibleBuffer &output,
                                       std::string &error);
+  [[nodiscard]] bool scanIntRecursive(runtime::DeviceBuffer &input,
+                                      std::size_t elementCount,
+                                      runtime::DeviceBuffer &output,
+                                      std::string &error);
+  [[nodiscard]] bool validateDeviceIntLength(
+      std::string_view label, const runtime::DeviceBuffer &buffer,
+      std::size_t elementCount, std::string &error) const;
+  [[nodiscard]] bool validateDeviceAlias(
+      std::string_view label, const runtime::DeviceBuffer &input,
+      const runtime::DeviceBuffer &output, bool allowInPlace,
+      std::string &error) const;
+  [[nodiscard]] bool updateDeviceDescriptors(
+      std::array<VkBuffer, 5u> buffers, std::string &error);
+  [[nodiscard]] bool dispatchDeviceKernel(
+      runtime::ComputePipeline &pipeline, std::size_t dispatchX,
+      const PushConstants &constants,
+      std::span<const VkBufferMemoryBarrier> preBarriers,
+      std::span<const VkBufferMemoryBarrier> postBarriers,
+      std::string &error);
 
   runtime::ShaderModule shaderModule_{};
   runtime::DescriptorSetLayout descriptorSetLayout_{};

@@ -272,17 +272,123 @@ scanOracle(const std::vector<std::int32_t> &input,
   return true;
 }
 
+[[nodiscard]] bool runDeviceScanCases(runtime::ComputeSession &session,
+                                      ReductionScanPrimitives &primitives,
+                                      std::string &error) {
+  constexpr std::array<std::size_t, 6u> lengths = {0u, 1u, 255u,
+                                                    256u, 257u, 513u};
+  constexpr std::int32_t guard = 0x13579bdf;
+  for (const auto length : lengths) {
+    const auto capacity = std::max<std::size_t>(1u, length);
+    runtime::DeviceBuffer input{};
+    runtime::DeviceBuffer output{};
+    if (!input.create(session, capacity * sizeof(std::int32_t), error) ||
+        !output.create(session, capacity * sizeof(std::int32_t), error)) {
+      return false;
+    }
+    std::vector<std::int32_t> values(capacity, 0);
+    std::vector<std::int32_t> expected(capacity, guard);
+    for (std::size_t index = 0u; index < length; ++index) {
+      values[index] = static_cast<std::int32_t>(index % 5u) - 2;
+      expected[index] = scanOracle(values, length, guard)[index];
+    }
+    if (!output.upload(session, expected.data(),
+                       expected.size() * sizeof(std::int32_t), 0u, error) ||
+        !input.upload(session, values.data(),
+                      values.size() * sizeof(std::int32_t), 0u, error) ||
+        !primitives.exclusiveScanInt(input, length, output, length, error)) {
+      return false;
+    }
+    std::vector<std::int32_t> actual(capacity, 0);
+    if (!output.download(session, actual.data(),
+                         actual.size() * sizeof(std::int32_t), 0u, error) ||
+        actual != expected) {
+      error = "device scan mismatch at length " + std::to_string(length);
+      return false;
+    }
+  }
+
+  runtime::DeviceBuffer flags{};
+  runtime::DeviceBuffer offsets{};
+  runtime::DeviceBuffer count{};
+  constexpr std::size_t countLength = 513u;
+  if (!flags.create(session, countLength * sizeof(std::int32_t), error) ||
+      !offsets.create(session, countLength * sizeof(std::int32_t), error) ||
+      !count.create(session, sizeof(std::int32_t), error)) {
+    return false;
+  }
+  std::vector<std::int32_t> flagValues(countLength, 0);
+  for (std::size_t index = 0u; index < countLength; ++index) {
+    flagValues[index] = (index % 3u) == 0u ? 1 : 0;
+  }
+  if (!flags.upload(session, flagValues.data(),
+                    flagValues.size() * sizeof(std::int32_t), 0u, error) ||
+      !primitives.exclusiveScanInt(flags, countLength, offsets, countLength,
+                                   error) ||
+      !primitives.writeCompactionCount(flags, offsets, countLength, count,
+                                       error)) {
+    return false;
+  }
+  std::int32_t actualCount = -1;
+  if (!count.download(session, &actualCount, sizeof(actualCount), 0u, error) ||
+      actualCount != static_cast<std::int32_t>(
+                         (countLength + 2u) / 3u)) {
+    error = "device compaction count mismatch";
+    return false;
+  }
+  runtime::ComputeSession foreignSession{};
+  if (!foreignSession.initialize(error)) {
+    return false;
+  }
+  runtime::DeviceBuffer foreign{};
+  if (!foreign.create(foreignSession, sizeof(std::int32_t), error)) {
+    return false;
+  }
+  constexpr std::int32_t sentinel = 0x2468ace;
+  if (!offsets.upload(session, &sentinel, sizeof(sentinel), 0u, error)) {
+    return false;
+  }
+  error.clear();
+  if (primitives.exclusiveScanInt(foreign, 1u, offsets, 1u, error)) {
+    error = "cross-session device scan succeeded unexpectedly";
+    return false;
+  }
+  std::int32_t actualSentinel = 0;
+  if (!offsets.download(session, &actualSentinel, sizeof(actualSentinel), 0u,
+                        error) ||
+      actualSentinel != sentinel) {
+    error = "cross-session rejection changed device output";
+    return false;
+  }
+  error.clear();
+  if (primitives.exclusiveScanInt(offsets, 1u, offsets, 1u, error)) {
+    error = "device in-place scan succeeded unexpectedly";
+    return false;
+  }
+  error.clear();
+  if (primitives.exclusiveScanInt(flags, countLength, offsets,
+                                  countLength - 1u, error)) {
+    error = "device length mismatch succeeded unexpectedly";
+    return false;
+  }
+  return true;
+}
+
 } // namespace
 
 int main() {
   std::string error;
+  runtime::ComputeSession session{};
   ReductionScanPrimitives primitives{};
-  if (!primitives.initialize(VIENNAPS_VULKAN_REDUCTION_SCAN_SPV_PATH, error) ||
+  if (!session.initialize(error) ||
+      !primitives.initialize(session, VIENNAPS_VULKAN_REDUCTION_SCAN_SPV_PATH,
+                              error) ||
       !runReductionCases(primitives, error) ||
       !runScanCases(primitives, error) ||
       !runScanWrapCase(primitives, error) ||
       !runInPlaceCases(primitives, error) ||
-      !runValidationCases(primitives, error)) {
+      !runValidationCases(primitives, error) ||
+      !runDeviceScanCases(session, primitives, error)) {
     std::cerr << error << '\n';
     return 1;
   }

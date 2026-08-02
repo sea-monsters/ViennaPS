@@ -428,6 +428,32 @@ bool ReductionScanPrimitives::updateDescriptors(
   return true;
 }
 
+bool ReductionScanPrimitives::updateDeviceDescriptors(
+    const std::array<VkBuffer, 5u> buffers, std::string &error) {
+  for (const auto buffer : buffers) {
+    if (buffer == VK_NULL_HANDLE) {
+      return setError(error, "descriptors", "a device binding is invalid");
+    }
+  }
+  std::array<VkDescriptorBufferInfo, 5u> infos{};
+  std::array<VkWriteDescriptorSet, 5u> writes{};
+  for (std::uint32_t index = 0u; index < buffers.size(); ++index) {
+    infos[index].buffer = buffers[index];
+    infos[index].offset = 0u;
+    infos[index].range = VK_WHOLE_SIZE;
+    writes[index].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[index].dstSet = descriptorSet_;
+    writes[index].dstBinding = index;
+    writes[index].descriptorCount = 1u;
+    writes[index].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    writes[index].pBufferInfo = &infos[index];
+  }
+  vkUpdateDescriptorSets(activeSession_->device().get(),
+                         static_cast<std::uint32_t>(writes.size()),
+                         writes.data(), 0u, nullptr);
+  return true;
+}
+
 bool ReductionScanPrimitives::dispatchKernel(
     runtime::ComputePipeline &pipeline, const std::size_t dispatchX,
     const PushConstants &constants,
@@ -485,7 +511,71 @@ bool ReductionScanPrimitives::dispatchKernel(
                     fence_.get()) != VK_SUCCESS) {
     return setError(error, "dispatch", "vkQueueSubmit failed");
   }
-  if (!fence_.wait(10'000'000'000ULL, error)) {
+  if (!fence_.wait(std::numeric_limits<std::uint64_t>::max(), error)) {
+    return false;
+  }
+  fence_.reset();
+  return true;
+}
+
+bool ReductionScanPrimitives::dispatchDeviceKernel(
+    runtime::ComputePipeline &pipeline, const std::size_t dispatchX,
+    const PushConstants &constants,
+    const std::span<const VkBufferMemoryBarrier> preBarriers,
+    const std::span<const VkBufferMemoryBarrier> postBarriers,
+    std::string &error) {
+  if (!isReady(error) || dispatchX == 0u) {
+    return dispatchX == 0u
+               ? setError(error, "dispatch", "workgroup count is zero")
+               : false;
+  }
+  const auto maxGroups = activeSession_->device()
+                             .selection()
+                             .properties.limits.maxComputeWorkGroupCount[0];
+  if (dispatchX > maxGroups ||
+      dispatchX > std::numeric_limits<std::uint32_t>::max()) {
+    return setError(error, "dispatch", "workgroup count exceeds device limit");
+  }
+  if (vkResetCommandBuffer(commandBuffer_, 0u) != VK_SUCCESS) {
+    return setError(error, "dispatch", "vkResetCommandBuffer failed");
+  }
+  VkCommandBufferBeginInfo begin{};
+  begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  if (vkBeginCommandBuffer(commandBuffer_, &begin) != VK_SUCCESS) {
+    return setError(error, "dispatch", "vkBeginCommandBuffer failed");
+  }
+  vkCmdPipelineBarrier(
+      commandBuffer_,
+      VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+      VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0u, 0u, nullptr,
+      static_cast<std::uint32_t>(preBarriers.size()), preBarriers.data(), 0u,
+      nullptr);
+  vkCmdBindPipeline(commandBuffer_, VK_PIPELINE_BIND_POINT_COMPUTE,
+                    pipeline.get());
+  vkCmdBindDescriptorSets(commandBuffer_, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          pipelineLayout_.get(), 0u, 1u, &descriptorSet_, 0u,
+                          nullptr);
+  vkCmdPushConstants(commandBuffer_, pipelineLayout_.get(),
+                     VK_SHADER_STAGE_COMPUTE_BIT, 0u, sizeof(constants),
+                     &constants);
+  vkCmdDispatch(commandBuffer_, static_cast<std::uint32_t>(dispatchX), 1u, 1u);
+  vkCmdPipelineBarrier(commandBuffer_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0u, 0u, nullptr,
+                       static_cast<std::uint32_t>(postBarriers.size()),
+                       postBarriers.data(), 0u, nullptr);
+  if (vkEndCommandBuffer(commandBuffer_) != VK_SUCCESS) {
+    return setError(error, "dispatch", "vkEndCommandBuffer failed");
+  }
+  VkSubmitInfo submit{};
+  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  submit.commandBufferCount = 1u;
+  submit.pCommandBuffers = &commandBuffer_;
+  if (vkQueueSubmit(activeSession_->device().computeQueue(), 1u, &submit,
+                    fence_.get()) != VK_SUCCESS) {
+    return setError(error, "dispatch", "vkQueueSubmit failed");
+  }
+  if (!fence_.wait(std::numeric_limits<std::uint64_t>::max(), error)) {
     return false;
   }
   fence_.reset();
@@ -573,6 +663,95 @@ bool ReductionScanPrimitives::dispatchScanBlocks(
   return output.invalidate(error) && blockSums.invalidate(error);
 }
 
+bool ReductionScanPrimitives::validateDeviceIntLength(
+    const std::string_view label, const runtime::DeviceBuffer &buffer,
+    const std::size_t elementCount, std::string &error) const {
+  if (!buffer.isValid()) {
+    return setError(error, "validation",
+                    std::string(label) + " buffer is not initialized");
+  }
+  if (buffer.ownerDevice() != activeSession_->device().get()) {
+    return setError(error, "validation",
+                    std::string(label) + " belongs to a different device");
+  }
+  if (buffer.ownerSessionGeneration() != activeSession_->generation()) {
+    return setError(error, "validation",
+                    std::string(label) + " belongs to a stale session");
+  }
+  if (buffer.size() > activeSession_->device()
+                          .selection()
+                          .properties.limits.maxStorageBufferRange) {
+    return setError(error, "validation",
+                    std::string(label) + " exceeds maxStorageBufferRange");
+  }
+  const auto capacity =
+      static_cast<std::size_t>(buffer.size() / sizeof(std::int32_t));
+  if (elementCount > capacity) {
+    return setError(error, "validation",
+                    std::string(label) + " exceeds buffer capacity");
+  }
+  return true;
+}
+
+bool ReductionScanPrimitives::validateDeviceAlias(
+    const std::string_view label, const runtime::DeviceBuffer &input,
+    const runtime::DeviceBuffer &output, const bool allowInPlace,
+    std::string &error) const {
+  if (!allowInPlace && input.handle() == output.handle()) {
+    return setError(error, "validation",
+                    std::string(label) + " in-place aliasing is disallowed");
+  }
+  return true;
+}
+
+bool ReductionScanPrimitives::dispatchDeviceScanBlocks(
+    runtime::DeviceBuffer &input, runtime::DeviceBuffer &output,
+    runtime::DeviceBuffer &blockSums, const std::size_t elementCount,
+    std::string &error) {
+  const auto blockCount = ceilDiv(elementCount, kWorkgroupSize);
+  if (!validateDeviceIntLength("scan input", input, elementCount, error) ||
+      !validateDeviceIntLength("scan output", output, elementCount, error) ||
+      !validateDeviceIntLength("scan block sums", blockSums, blockCount,
+                               error) ||
+      !updateDeviceDescriptors(
+          {dummyFloat_.handle(), dummyFloat_.handle(), input.handle(),
+           output.handle(), blockSums.handle()},
+          error)) {
+    return false;
+  }
+  std::array<VkBufferMemoryBarrier, 3u> pre{};
+  std::size_t preCount = 0u;
+  if (input.handle() == output.handle()) {
+    pre[preCount++] = makeBarrier(
+        input.handle(), input.size(),
+        VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+  } else {
+    pre[preCount++] = makeBarrier(
+        input.handle(), input.size(),
+        VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+        VK_ACCESS_SHADER_READ_BIT);
+    pre[preCount++] = makeBarrier(
+        output.handle(), output.size(),
+        VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+        VK_ACCESS_SHADER_WRITE_BIT);
+  }
+  pre[preCount++] = makeBarrier(
+      blockSums.handle(), blockSums.size(),
+      VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+      VK_ACCESS_SHADER_WRITE_BIT);
+  const std::array post{
+      makeBarrier(output.handle(), output.size(), VK_ACCESS_SHADER_WRITE_BIT,
+                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT),
+      makeBarrier(blockSums.handle(), blockSums.size(),
+                  VK_ACCESS_SHADER_WRITE_BIT,
+                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)};
+  return dispatchDeviceKernel(
+      scanBlocksPipeline_, blockCount,
+      {static_cast<std::uint32_t>(elementCount), 0u},
+      std::span(pre.data(), preCount), post, error);
+}
+
 bool ReductionScanPrimitives::dispatchScanAddOffsets(
     runtime::HostVisibleBuffer &output,
     runtime::HostVisibleBuffer &blockOffsets, const std::size_t elementCount,
@@ -602,6 +781,34 @@ bool ReductionScanPrimitives::dispatchScanAddOffsets(
     return false;
   }
   return output.invalidate(error);
+}
+
+bool ReductionScanPrimitives::dispatchDeviceScanAddOffsets(
+    runtime::DeviceBuffer &output, runtime::DeviceBuffer &blockOffsets,
+    const std::size_t elementCount, std::string &error) {
+  const auto blockCount = ceilDiv(elementCount, kWorkgroupSize);
+  if (!validateDeviceIntLength("scan output", output, elementCount, error) ||
+      !validateDeviceIntLength("scan block offsets", blockOffsets, blockCount,
+                               error) ||
+      !updateDeviceDescriptors(
+          {dummyFloat_.handle(), dummyFloat_.handle(), dummyInt_.handle(),
+           output.handle(), blockOffsets.handle()},
+          error)) {
+    return false;
+  }
+  const std::array pre{
+      makeBarrier(output.handle(), output.size(),
+                  VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                  VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT),
+      makeBarrier(blockOffsets.handle(), blockOffsets.size(),
+                  VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                  VK_ACCESS_SHADER_READ_BIT)};
+  const std::array post{makeBarrier(
+      output.handle(), output.size(), VK_ACCESS_SHADER_WRITE_BIT,
+      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)};
+  return dispatchDeviceKernel(
+      scanAddOffsetsPipeline_, ceilDiv(elementCount, kWorkgroupSize),
+      {static_cast<std::uint32_t>(elementCount), 0u}, pre, post, error);
 }
 
 bool ReductionScanPrimitives::dispatchNormalizeFlags(
@@ -681,6 +888,47 @@ bool ReductionScanPrimitives::dispatchCompactionCount(
   return true;
 }
 
+bool ReductionScanPrimitives::dispatchDeviceCompactionCount(
+    runtime::DeviceBuffer &flags, runtime::DeviceBuffer &offsets,
+    runtime::DeviceBuffer &count, const std::size_t elementCount,
+    std::string &error) {
+  if (!validateDeviceIntLength("normalized compaction flags", flags,
+                              elementCount, error) ||
+      !validateDeviceIntLength("compaction offsets", offsets, elementCount,
+                               error) ||
+      !validateDeviceIntLength("compaction count", count, 1u, error) ||
+      flags.handle() == offsets.handle() || flags.handle() == count.handle() ||
+      offsets.handle() == count.handle()) {
+    if (error.empty()) {
+      return setError(error, "validation",
+                      "compaction device buffers must not alias");
+    }
+    return false;
+  }
+  if (!updateDeviceDescriptors(
+          {dummyFloat_.handle(), dummyFloat_.handle(), flags.handle(),
+           offsets.handle(), count.handle()},
+          error)) {
+    return false;
+  }
+  const std::array pre{
+      makeBarrier(flags.handle(), flags.size(),
+                  VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                  VK_ACCESS_SHADER_READ_BIT),
+      makeBarrier(offsets.handle(), offsets.size(),
+                  VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                  VK_ACCESS_SHADER_READ_BIT),
+      makeBarrier(count.handle(), count.size(),
+                  VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+                  VK_ACCESS_SHADER_WRITE_BIT)};
+  const std::array post{makeBarrier(
+      count.handle(), count.size(), VK_ACCESS_SHADER_WRITE_BIT,
+      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)};
+  return dispatchDeviceKernel(
+      compactionCountPipeline_, 1u,
+      {static_cast<std::uint32_t>(elementCount), 0u}, pre, post, error);
+}
+
 bool ReductionScanPrimitives::dispatchCompactionScatter(
     runtime::HostVisibleBuffer &input, runtime::HostVisibleBuffer &output,
     runtime::HostVisibleBuffer &normalizedFlags,
@@ -745,6 +993,30 @@ bool ReductionScanPrimitives::scanIntRecursive(
     return false;
   }
   return dispatchScanAddOffsets(output, blockOffsets, elementCount, error);
+}
+
+bool ReductionScanPrimitives::scanIntRecursive(
+    runtime::DeviceBuffer &input, const std::size_t elementCount,
+    runtime::DeviceBuffer &output, std::string &error) {
+  const auto blockCount = ceilDiv(elementCount, kWorkgroupSize);
+  runtime::DeviceBuffer blockSums{};
+  const auto scratchBytes = static_cast<VkDeviceSize>(
+      std::max<std::size_t>(1u, blockCount) * sizeof(std::int32_t));
+  if (!blockSums.create(*activeSession_, scratchBytes, error) ||
+      !dispatchDeviceScanBlocks(input, output, blockSums, elementCount,
+                                error)) {
+    return false;
+  }
+  if (blockCount == 1u) {
+    return true;
+  }
+  runtime::DeviceBuffer blockOffsets{};
+  if (!blockOffsets.create(*activeSession_, scratchBytes, error) ||
+      !scanIntRecursive(blockSums, blockCount, blockOffsets, error)) {
+    return false;
+  }
+  return dispatchDeviceScanAddOffsets(output, blockOffsets, elementCount,
+                                      error);
 }
 
 bool ReductionScanPrimitives::reduceSumMinMax(runtime::HostVisibleBuffer &input,
@@ -816,6 +1088,63 @@ bool ReductionScanPrimitives::exclusiveScanInt(
     return setError(error, "validation", "scan length exceeds uint32");
   }
   return scanIntRecursive(input, inputElementCount, output, error);
+}
+
+bool ReductionScanPrimitives::exclusiveScanInt(
+    runtime::DeviceBuffer &input, const std::size_t inputElementCount,
+    runtime::DeviceBuffer &output, const std::size_t outputElementCount,
+    std::string &error, const ReductionScanOptions options) {
+  if (!isReady(error)) {
+    return false;
+  }
+  if (inputElementCount != outputElementCount) {
+    return setError(error, "validation",
+                    "scan input and output lengths must match");
+  }
+  if (!validateDeviceIntLength("scan input", input, inputElementCount, error) ||
+      !validateDeviceIntLength("scan output", output, outputElementCount,
+                               error) ||
+      !validateDeviceAlias("scan", input, output, options.allowInPlaceScan,
+                           error)) {
+    return false;
+  }
+  if (inputElementCount == 0u) {
+    return true;
+  }
+  if (inputElementCount > std::numeric_limits<std::uint32_t>::max()) {
+    return setError(error, "validation", "scan length exceeds uint32");
+  }
+  return scanIntRecursive(input, inputElementCount, output, error);
+}
+
+bool ReductionScanPrimitives::writeCompactionCount(
+    runtime::DeviceBuffer &flags, runtime::DeviceBuffer &offsets,
+    const std::size_t elementCount, runtime::DeviceBuffer &count,
+    std::string &error) {
+  if (!isReady(error)) {
+    return false;
+  }
+  if (!validateDeviceIntLength("compaction flags", flags, elementCount,
+                              error) ||
+      !validateDeviceIntLength("compaction offsets", offsets, elementCount,
+                               error) ||
+      !validateDeviceIntLength("compaction count", count, 1u, error) ||
+      flags.handle() == offsets.handle() || flags.handle() == count.handle() ||
+      offsets.handle() == count.handle()) {
+    if (error.empty()) {
+      return setError(error, "validation",
+                      "compaction device buffers must not alias");
+    }
+    return false;
+  }
+  if (elementCount == 0u) {
+    return true;
+  }
+  if (elementCount > std::numeric_limits<std::uint32_t>::max()) {
+    return setError(error, "validation", "compaction length exceeds uint32");
+  }
+  return dispatchDeviceCompactionCount(flags, offsets, count, elementCount,
+                                       error);
 }
 
 bool ReductionScanPrimitives::stableCompact(

@@ -1951,6 +1951,20 @@ remain `DeviceBuffer` objects for the next composition stage.
 | Build and test | standalone `gpu/vulkan` build under MSVC succeeds; two direct Intel Arc executions print `ray surface reduction Vulkan dispatch PASS`, and focused CTest passes 1/1 |
 | Scope boundary | P5-JC requires the P5-JB2B sorted-input contract and does not independently prove sorting; it deliberately has no device-visible non-normal/overflow status, so CPU-equivalent rejection of non-finite or out-of-domain intermediate sums remains a P5-JD gate rather than a claimed capability |
 
+#### Strict-FP32 deployment-probe finding
+
+The local Intel Arc driver reports `shaderDenormPreserveFloat32`,
+`shaderSignedZeroInfNanPreserveFloat32`, and
+`shaderRoundingModeRTEFloat32` as supported. A separately assembled,
+`spirv-val`-valid reduction shader that requested the corresponding
+`DenormPreserve`, `SignedZeroInfNanPreserve`, and `RoundingModeRTE` execution
+modes nevertheless exceeded a 60-second isolated smoke timeout on this driver.
+The experimental shader and build directory were removed; no such mode is
+enabled by the accepted P5-JC implementation. Therefore, the deployment record
+must treat the static float-control properties as a candidate only: a
+process-isolated, watchdog-bounded numerical smoke must pass bitwise CPU
+differential cases before the strict GPU profile is selected automatically.
+
 ## Next slice
 
 The segmented rebuild adapter is installed by the level-set controller, the
@@ -1965,7 +1979,9 @@ command submission while retaining the sixteen stable P5-JB2B LSD passes,
 their full `RayRecord` bit contract, and device-local count storage. It must
 also add a device-visible status path and fail-closed policy for non-finite or
 out-of-domain intermediate FP32 sums before claiming full `reduceCpu`
-rejection equivalence; HostVisible radix helpers cannot be reused.
+rejection equivalence. The strict FP32 deployment profile additionally needs
+the isolated watchdog probe described above; HostVisible radix helpers cannot
+be reused.
 CPU differential checking remains an explicit validation gate, not a
 production per-call guard. Coverage reaction is a capability-gated FP64
 candidate, without weakening the current fail-closed gate.

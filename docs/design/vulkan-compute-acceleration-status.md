@@ -1715,6 +1715,36 @@ route must first pass the selected device's `shaderFloat64` gate and a direct
 CPU/GPU double-intermediate differential, or separately specify and validate a
 software-double implementation; manual selection cannot bypass either gate.
 
+### P5-F: deterministic ray hit-to-record batch
+
+- Status: accepted locally as a bounded composition primitive; reduction and
+  process integration pending
+- Date: 2026-08-02
+
+`RayHitBatchPrimitive` is the explicit seam between P5-D geometry hits and
+P5-C's reducer input: it scans hit records in source-ray order and emits only
+non-miss `(rayId, surfaceId, weight)` records. It performs no floating-point
+calculation; the ray weight, including a negative-zero bit pattern, is copied
+exactly. The CPU oracle uses the same stable input order. Both primitives can
+be initialized on one external `ComputeSession`, so buffers produced by the
+triangle-hit dispatch are accepted directly by the batch primitive.
+
+Before dispatch the host validates hit sentinels, hit/barycentric domains,
+strict FP32 weights, capacity, aliasing, and device ownership. It derives the
+entire expected output sequence from the validated host inputs. GPU records
+first enter private buffers; the returned count and every ray, surface, and
+weight bit pattern must equal that sequence before caller SoA buffers and count
+are published.
+
+| Gate | Result |
+|---|---|
+| CPU differential | mixed hit/miss records, same-surface records, and negative-zero weights are bit-exact; max ULP is 0 for every copied weight |
+| P5-D composition | Intel Arc smoke uses one shared session: P5-D computes the hit buffer, P5-F compacts it, and the P5-D CPU oracle followed by the CPU batch oracle matches exactly |
+| Transaction boundary | caller tails and count survive insufficient capacity, NaN weight, malformed hit, and `N=0` no-op cases on the actual device |
+| Shader validation | `spirv-val` passes; the shader has no FP arithmetic, so no `NoContraction` claim is required |
+| Build and test | a clean-first local ray-only build prints `ray hit batch Vulkan dispatch PASS`; the focused CTest passes 1/1 |
+| Scope boundary | this is one-invocation stable compaction only; it does not run P5-C reduction, use device-resident chaining, sample particle physics, trace reflections, map materials, normalize flux, or route a Process |
+
 ## Next slice
 
 The segmented rebuild adapter is installed by the level-set controller, the
@@ -1724,9 +1754,10 @@ RK2/RK3 remain deliberately CPU-only until a multi-stage device state machine
 is proven. The first surface velocity formula is now exact but intentionally
 unwired to process selection. Direct negative/non-finite time injection and
 the optional VTK-enabled install/export conflict remain validation gaps. The
-next implementation slices are bounded ray batch composition and a scalable
-deterministic sort/reduce design. Coverage reaction is a capability-gated FP64
-candidate, without weakening the current fail-closed gate.
+next implementation slice is a residency-aware P5-D to P5-F to P5-C chain,
+followed by a scalable deterministic sort/reduce design. Coverage reaction is
+a capability-gated FP64 candidate, without weakening the current fail-closed
+gate.
 
 After those production-seam gates, the Level Set work advances to HRLE
 sparse rebuild integration, followed by particle/ray and surface/oxidation

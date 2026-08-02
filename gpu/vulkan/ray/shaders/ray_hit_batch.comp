@@ -1,0 +1,51 @@
+#version 450
+
+layout(local_size_x = 1) in;
+
+struct Hit {
+  float t;
+  uint triangleIndex;
+  float u;
+  float v;
+};
+
+layout(set = 0, binding = 0, std430) readonly buffer Hits { Hit hit[]; };
+layout(set = 0, binding = 1, std430) readonly buffer RayWeights {
+  float weight[];
+};
+layout(set = 0, binding = 2, std430) writeonly buffer RayIds { uint rayId[]; };
+layout(set = 0, binding = 3, std430) writeonly buffer SurfaceIds {
+  uint surfaceId[];
+};
+layout(set = 0, binding = 4, std430) writeonly buffer OutputWeights {
+  float outWeight[];
+};
+layout(set = 0, binding = 5, std430) buffer OutputCount { uint count; };
+
+layout(push_constant) uniform Constants {
+  uint rayCount;
+  uint surfaceDomain;
+  uint outputCapacity;
+} constants;
+
+void main() {
+  count = 0u;
+  uint missIndex = 0xffffffffu;
+  uint written = 0u;
+  for (uint i = 0u; i < constants.rayCount; ++i) {
+    const Hit candidate = hit[i];
+    if (candidate.triangleIndex == missIndex)
+      continue;
+    if (candidate.triangleIndex >= constants.surfaceDomain)
+      continue;
+    if (written >= constants.outputCapacity) {
+      count = constants.outputCapacity + 1u;
+      return;
+    }
+    rayId[written] = i;
+    surfaceId[written] = candidate.triangleIndex;
+    outWeight[written] = weight[i];
+    ++written;
+  }
+  count = written;
+}

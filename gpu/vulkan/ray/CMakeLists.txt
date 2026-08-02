@@ -10,6 +10,10 @@ set(VIENNAPS_VULKAN_TRIANGLE_HIT_SHADER
     "${CMAKE_CURRENT_SOURCE_DIR}/shaders/triangle_hit.comp")
 set(VIENNAPS_VULKAN_TRIANGLE_HIT_SPV
     "${CMAKE_CURRENT_BINARY_DIR}/triangle_hit.comp.spv")
+set(VIENNAPS_VULKAN_RAY_HIT_BATCH_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/ray_hit_batch.comp")
+set(VIENNAPS_VULKAN_RAY_HIT_BATCH_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/ray_hit_batch.comp.spv")
 
 find_program(VIENNAPS_VULKAN_RAY_SHADER_COMPILER
              NAMES glslc glslangValidator
@@ -128,4 +132,59 @@ target_link_libraries(viennaps-vulkan-triangle-hit-smoke PRIVATE
 if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
   add_test(NAME viennaps-vulkan-triangle-hit-smoke
            COMMAND viennaps-vulkan-triangle-hit-smoke)
+endif()
+
+if("${VIENNAPS_VULKAN_RAY_SHADER_COMPILER}" MATCHES ".*glslangValidator.*")
+  add_custom_command(
+    OUTPUT ${VIENNAPS_VULKAN_RAY_HIT_BATCH_SPV}
+    COMMAND ${VIENNAPS_VULKAN_RAY_SHADER_COMPILER} -V
+            ${VIENNAPS_VULKAN_RAY_HIT_BATCH_SHADER} -o
+            ${VIENNAPS_VULKAN_RAY_HIT_BATCH_SPV}
+    DEPENDS ${VIENNAPS_VULKAN_RAY_HIT_BATCH_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Generating Vulkan ray hit batch SPIR-V shader.")
+else()
+  add_custom_command(
+    OUTPUT ${VIENNAPS_VULKAN_RAY_HIT_BATCH_SPV}
+    COMMAND ${VIENNAPS_VULKAN_RAY_SHADER_COMPILER} -o
+            ${VIENNAPS_VULKAN_RAY_HIT_BATCH_SPV}
+            ${VIENNAPS_VULKAN_RAY_HIT_BATCH_SHADER}
+    DEPENDS ${VIENNAPS_VULKAN_RAY_HIT_BATCH_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Generating Vulkan ray hit batch SPIR-V shader.")
+endif()
+add_custom_target(viennaps-vulkan-ray-hit-batch-spv
+                  DEPENDS ${VIENNAPS_VULKAN_RAY_HIT_BATCH_SPV})
+
+add_library(viennaps_vulkan_ray_hit_batch ray_hit_batch.cpp)
+add_dependencies(viennaps_vulkan_ray_hit_batch
+                 viennaps-vulkan-ray-hit-batch-spv)
+target_link_libraries(viennaps_vulkan_ray_hit_batch PUBLIC
+                      viennaps_vulkan_compute_runtime Vulkan::Vulkan)
+target_include_directories(viennaps_vulkan_ray_hit_batch PUBLIC
+                           "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(viennaps_vulkan_ray_hit_batch PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps_vulkan_ray_hit_batch PRIVATE /W4 /WX)
+else()
+  target_compile_options(viennaps_vulkan_ray_hit_batch PRIVATE
+                         -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_RAY_HIT_BATCH_SPV_PATH
+       "${VIENNAPS_VULKAN_RAY_HIT_BATCH_SPV}")
+add_executable(viennaps-vulkan-ray-hit-batch-smoke ray_hit_batch_smoke.cpp)
+add_dependencies(viennaps-vulkan-ray-hit-batch-smoke
+                 viennaps-vulkan-ray-hit-batch-spv
+                 viennaps-vulkan-triangle-hit-spv)
+target_compile_features(viennaps-vulkan-ray-hit-batch-smoke PRIVATE cxx_std_20)
+target_compile_definitions(viennaps-vulkan-ray-hit-batch-smoke PRIVATE
+  "VIENNAPS_VULKAN_RAY_HIT_BATCH_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_HIT_BATCH_SPV_PATH}\""
+  "VIENNAPS_VULKAN_TRIANGLE_HIT_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_HIT_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-ray-hit-batch-smoke PRIVATE
+                      viennaps_vulkan_ray_hit_batch
+                      viennaps_vulkan_triangle_hit Vulkan::Vulkan)
+if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+  add_test(NAME viennaps-vulkan-ray-hit-batch-smoke
+           COMMAND viennaps-vulkan-ray-hit-batch-smoke)
 endif()

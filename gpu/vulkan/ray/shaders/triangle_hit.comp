@@ -1,0 +1,94 @@
+// Copyright 2026 ViennaPS
+// SPDX-License-Identifier: MIT
+
+#version 450
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer RayOrigins {
+  vec4 originNear[];
+};
+layout(set = 0, binding = 1, std430) readonly buffer RayDirections {
+  vec4 directionFar[];
+};
+layout(set = 0, binding = 2, std430) readonly buffer Triangles {
+  vec4 vertex[];
+};
+struct Hit {
+  float t;
+  uint triangleIndex;
+  float u;
+  float v;
+};
+layout(set = 0, binding = 3, std430) buffer Hits { Hit hit[]; };
+
+layout(push_constant) uniform Constants {
+  uint rayCount;
+  uint triangleCount;
+} constants;
+
+precise float dot3(const vec3 left, const vec3 right) {
+  precise float sum = left.x * right.x;
+  sum = sum + left.y * right.y;
+  sum = sum + left.z * right.z;
+  return sum;
+}
+
+vec3 cross3(const vec3 left, const vec3 right) {
+  precise float x = left.y * right.z - left.z * right.y;
+  precise float y = left.z * right.x - left.x * right.z;
+  precise float z = left.x * right.y - left.y * right.x;
+  return vec3(x, y, z);
+}
+
+void main() {
+  const uint rayIndex = gl_GlobalInvocationID.x;
+  if (rayIndex >= constants.rayCount)
+    return;
+
+  const uint missIndex = 0xffffffffu;
+  precise float bestT = uintBitsToFloat(0x7f7fffffu);
+  uint bestIndex = missIndex;
+  precise float bestU = 0.0;
+  precise float bestV = 0.0;
+  const vec3 rayOrigin = originNear[rayIndex].xyz;
+  const vec3 rayDirection = directionFar[rayIndex].xyz;
+  const float rayNear = originNear[rayIndex].w;
+  const float rayFar = directionFar[rayIndex].w;
+
+  for (uint triangleIndex = 0u; triangleIndex < constants.triangleCount;
+       ++triangleIndex) {
+    const uint base = triangleIndex * 3u;
+    const vec3 a = vertex[base].xyz;
+    const vec3 b = vertex[base + 1u].xyz;
+    const vec3 c = vertex[base + 2u].xyz;
+    const vec3 edge1 = b - a;
+    const vec3 edge2 = c - a;
+    const vec3 pvec = cross3(rayDirection, edge2);
+    precise float determinant = dot3(edge1, pvec);
+    if (abs(determinant) <= 1.0e-7)
+      continue;
+    precise float inverseDeterminant = 1.0 / determinant;
+    const vec3 tvec = rayOrigin - a;
+    precise float u = dot3(tvec, pvec) * inverseDeterminant;
+    if (u < 0.0 || u > 1.0)
+      continue;
+    const vec3 qvec = cross3(tvec, edge1);
+    precise float v = dot3(rayDirection, qvec) * inverseDeterminant;
+    if (v < 0.0 || u + v > 1.0)
+      continue;
+    precise float t = dot3(edge2, qvec) * inverseDeterminant;
+    if (t < rayNear || t > rayFar || isnan(t) || isinf(t))
+      continue;
+    if (bestIndex == missIndex || t < bestT) {
+      bestT = t;
+      bestIndex = triangleIndex;
+      bestU = u;
+      bestV = v;
+    }
+  }
+  hit[rayIndex].t = bestT;
+  hit[rayIndex].triangleIndex = bestIndex;
+  hit[rayIndex].u = bestU;
+  hit[rayIndex].v = bestV;
+}

@@ -1663,6 +1663,37 @@ CPU and Vulkan rejection paths preserve caller IDs, weights, and count.
 | Build and test | a local-cache, ray-only configuration builds the Intel Arc smoke and its focused CTest passes |
 | Scope boundary | this is an O(N²), one-invocation correctness baseline; it does not trace rays, intersect geometry, sample particles, or route production fluxes |
 
+### P5-D: exact FP32 ray-triangle hit primitive
+
+- Status: accepted locally as a bounded correctness primitive; ray-batch and
+  process integration pending
+- Date: 2026-08-02
+
+`TriangleHitPrimitive` adds the corresponding deterministic geometry primitive:
+the CPU oracle and compute shader both scan triangles in ascending index order
+with the same Moller-Trumbore FP32 operation order. A strict `t < bestT`
+replacement gives coincident hits the lowest triangle index. The shader uses
+explicit `precise` dot and cross helpers, and generated SPIR-V marks their
+floating-point arithmetic and the final hit calculations `NoContraction`.
+
+The host has separate origin/near, direction/far, triangle, and hit buffers;
+all are required to be non-aliasing and owned by the selected device. Strict
+normal-or-zero finite validation, non-negative ordered near/far limits, and
+capacity checks execute before dispatch. Results first enter a private hit
+buffer; only a valid fixed miss sentinel or an in-range finite hit is copied
+to the caller, so invalid input and malformed shader output cannot partially
+publish a result.
+
+| Gate | Result |
+|---|---|
+| CPU differential | Intel Arc Vulkan output is bit-exact to the CPU oracle for a hit, equal-distance tie, and misses; `t`, `u`, and `v` have max ULP 0 |
+| Determinism | triangles are scanned by ascending index and coincident nearest hits select the lower index |
+| Transaction boundary | output tail sentinels survive an undersized capacity, NaN input, negative `tMin`, and the `N=0` no-op |
+| Input and output domain | CPU and GPU reject subnormal or non-finite data, invalid near/far limits, buffer aliases, wrong-device buffers, and insufficient capacity before caller output is published |
+| Shader validation | `spirv-val` passes and the generated SPIR-V contains the required `NoContraction` decorations |
+| Build and test | the local ray-only Intel Arc smoke prints `triangle hit Vulkan dispatch PASS`; the focused CTest passes 1/1 |
+| Scope boundary | this is a bounded O(rays times triangles) primitive only; no BVH, ray generation/reflection, particle sampling, surface-flux routing, or process selection is accelerated |
+
 ## Next slice
 
 The segmented rebuild adapter is installed by the level-set controller, the
@@ -1673,7 +1704,7 @@ is proven. The first surface velocity formula is now exact but intentionally
 unwired to process selection. Direct negative/non-finite time injection and
 the optional VTK-enabled install/export conflict remain validation gaps. The
 next implementation slices are surface coverage integration and bounded ray
-geometry traversal, followed by a scalable deterministic sort/reduce design,
+batch composition, followed by a scalable deterministic sort/reduce design,
 without weakening the current fail-closed gate.
 
 After those production-seam gates, the Level Set work advances to HRLE

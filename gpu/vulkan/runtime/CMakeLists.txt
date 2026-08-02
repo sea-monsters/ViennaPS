@@ -75,7 +75,7 @@ target_include_directories(viennaps_vulkan_compute_runtime
 target_link_libraries(viennaps_vulkan_compute_runtime PRIVATE Vulkan::Vulkan)
 target_compile_features(viennaps_vulkan_compute_runtime PRIVATE cxx_std_20)
 if(MSVC)
-  target_compile_options(viennaps_vulkan_compute_runtime PRIVATE /W4 /WX)
+  target_compile_options(viennaps_vulkan_compute_runtime PRIVATE /W4 /WX /EHsc)
 else()
   target_compile_options(viennaps_vulkan_compute_runtime
                          PRIVATE -Wall -Wextra -Wpedantic -Werror)

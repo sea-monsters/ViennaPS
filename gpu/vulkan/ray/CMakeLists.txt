@@ -487,3 +487,105 @@ if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
   add_test(NAME viennaps-vulkan-ray-record-sort-smoke
            COMMAND viennaps-vulkan-ray-record-sort-smoke)
 endif()
+
+# P5-JB2 scalable device-resident stable 4-bit LSD radix sorter.
+set(VIENNAPS_VULKAN_RAY_RECORD_RADIX_HISTOGRAM_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/ray_record_radix_histogram.comp")
+set(VIENNAPS_VULKAN_RAY_RECORD_RADIX_PREFIX_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/ray_record_radix_prefix.comp")
+set(VIENNAPS_VULKAN_RAY_RECORD_RADIX_SCATTER_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/ray_record_radix_scatter.comp")
+set(VIENNAPS_VULKAN_RAY_RECORD_RADIX_HISTOGRAM_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/ray_record_radix_histogram.comp.spv")
+set(VIENNAPS_VULKAN_RAY_RECORD_RADIX_PREFIX_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/ray_record_radix_prefix.comp.spv")
+set(VIENNAPS_VULKAN_RAY_RECORD_RADIX_SCATTER_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/ray_record_radix_scatter.comp.spv")
+foreach(_radix_kind HISTOGRAM PREFIX SCATTER)
+  if("${VIENNAPS_VULKAN_RAY_SHADER_COMPILER}" MATCHES ".*glslangValidator.*")
+    add_custom_command(
+      OUTPUT "${VIENNAPS_VULKAN_RAY_RECORD_RADIX_${_radix_kind}_SPV}"
+      COMMAND ${VIENNAPS_VULKAN_RAY_SHADER_COMPILER} -V
+              "${VIENNAPS_VULKAN_RAY_RECORD_RADIX_${_radix_kind}_SHADER}" -o
+              "${VIENNAPS_VULKAN_RAY_RECORD_RADIX_${_radix_kind}_SPV}"
+      DEPENDS "${VIENNAPS_VULKAN_RAY_RECORD_RADIX_${_radix_kind}_SHADER}"
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+  else()
+    add_custom_command(
+      OUTPUT "${VIENNAPS_VULKAN_RAY_RECORD_RADIX_${_radix_kind}_SPV}"
+      COMMAND ${VIENNAPS_VULKAN_RAY_SHADER_COMPILER} -o
+              "${VIENNAPS_VULKAN_RAY_RECORD_RADIX_${_radix_kind}_SPV}"
+              "${VIENNAPS_VULKAN_RAY_RECORD_RADIX_${_radix_kind}_SHADER}"
+      DEPENDS "${VIENNAPS_VULKAN_RAY_RECORD_RADIX_${_radix_kind}_SHADER}"
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+  endif()
+endforeach()
+add_custom_target(viennaps-vulkan-ray-record-radix-sort-spv
+  DEPENDS ${VIENNAPS_VULKAN_RAY_RECORD_RADIX_HISTOGRAM_SPV}
+          ${VIENNAPS_VULKAN_RAY_RECORD_RADIX_PREFIX_SPV}
+          ${VIENNAPS_VULKAN_RAY_RECORD_RADIX_SCATTER_SPV})
+find_program(VIENNAPS_VULKAN_RAY_RECORD_RADIX_SPIRV_VAL NAMES spirv-val)
+if(VIENNAPS_VULKAN_RAY_RECORD_RADIX_SPIRV_VAL)
+  set(_VIENNAPS_VULKAN_RAY_RECORD_RADIX_VALIDATED)
+  foreach(_radix_kind HISTOGRAM PREFIX SCATTER)
+    add_custom_command(
+      OUTPUT "${VIENNAPS_VULKAN_RAY_RECORD_RADIX_${_radix_kind}_SPV}.validated"
+      COMMAND ${VIENNAPS_VULKAN_RAY_RECORD_RADIX_SPIRV_VAL}
+              "${VIENNAPS_VULKAN_RAY_RECORD_RADIX_${_radix_kind}_SPV}"
+      COMMAND ${CMAKE_COMMAND} -E touch
+              "${VIENNAPS_VULKAN_RAY_RECORD_RADIX_${_radix_kind}_SPV}.validated"
+      DEPENDS "${VIENNAPS_VULKAN_RAY_RECORD_RADIX_${_radix_kind}_SPV}")
+    list(APPEND _VIENNAPS_VULKAN_RAY_RECORD_RADIX_VALIDATED
+      "${VIENNAPS_VULKAN_RAY_RECORD_RADIX_${_radix_kind}_SPV}.validated")
+  endforeach()
+  add_custom_target(viennaps-vulkan-ray-record-radix-sort-spv-validated
+    DEPENDS ${_VIENNAPS_VULKAN_RAY_RECORD_RADIX_VALIDATED})
+endif()
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_RAY_RECORD_RADIX_HISTOGRAM_SPV_PATH
+       "${VIENNAPS_VULKAN_RAY_RECORD_RADIX_HISTOGRAM_SPV}")
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_RAY_RECORD_RADIX_PREFIX_SPV_PATH
+       "${VIENNAPS_VULKAN_RAY_RECORD_RADIX_PREFIX_SPV}")
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_RAY_RECORD_RADIX_SCATTER_SPV_PATH
+       "${VIENNAPS_VULKAN_RAY_RECORD_RADIX_SCATTER_SPV}")
+add_library(viennaps_vulkan_ray_record_radix_sort ray_record_radix_sort.cpp)
+add_dependencies(viennaps_vulkan_ray_record_radix_sort
+                 viennaps-vulkan-ray-record-radix-sort-spv)
+if(TARGET viennaps-vulkan-ray-record-radix-sort-spv-validated)
+  add_dependencies(viennaps_vulkan_ray_record_radix_sort
+                   viennaps-vulkan-ray-record-radix-sort-spv-validated)
+endif()
+target_link_libraries(viennaps_vulkan_ray_record_radix_sort PUBLIC
+                      viennaps_vulkan_compute_runtime Vulkan::Vulkan)
+target_include_directories(viennaps_vulkan_ray_record_radix_sort PUBLIC
+                           "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(viennaps_vulkan_ray_record_radix_sort PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps_vulkan_ray_record_radix_sort PRIVATE /W4 /WX)
+else()
+  target_compile_options(viennaps_vulkan_ray_record_radix_sort PRIVATE
+                         -Wall -Wextra -Wpedantic -Werror)
+endif()
+add_executable(viennaps-vulkan-ray-record-radix-sort-smoke
+               ray_record_radix_sort_smoke.cpp)
+add_dependencies(viennaps-vulkan-ray-record-radix-sort-smoke
+                 viennaps-vulkan-ray-record-radix-sort-spv
+                 viennaps-vulkan-ray-record-compaction-spv
+                 viennaps-vulkan-triangle-hit-device-spv
+                 viennaps-vulkan-reduction-scan-smoke-spv)
+target_compile_features(viennaps-vulkan-ray-record-radix-sort-smoke PRIVATE cxx_std_20)
+target_compile_definitions(viennaps-vulkan-ray-record-radix-sort-smoke PRIVATE
+  "VIENNAPS_VULKAN_RAY_RECORD_RADIX_HISTOGRAM_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_RADIX_HISTOGRAM_SPV_PATH}\""
+  "VIENNAPS_VULKAN_RAY_RECORD_RADIX_PREFIX_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_RADIX_PREFIX_SPV_PATH}\""
+  "VIENNAPS_VULKAN_RAY_RECORD_RADIX_SCATTER_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_RADIX_SCATTER_SPV_PATH}\""
+  "VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV_PATH}\""
+  "VIENNAPS_VULKAN_REDUCTION_SCAN_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_REDUCTION_SCAN_SPV_PATH}\""
+  "VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-ray-record-radix-sort-smoke PRIVATE
+                      viennaps_vulkan_ray_record_radix_sort
+                      viennaps_vulkan_ray_record_compaction
+                      viennaps_vulkan_triangle_hit_device
+                      viennaps_vulkan_ray_hit_batch Vulkan::Vulkan)
+if(BUILD_TESTING OR VIENNAPS_BUILD_TESTS)
+  add_test(NAME viennaps-vulkan-ray-record-radix-sort-smoke
+           COMMAND viennaps-vulkan-ray-record-radix-sort-smoke)
+endif()

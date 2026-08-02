@@ -1,0 +1,64 @@
+#version 450
+layout(std430, binding = 0) readonly buffer InputRecords { uint unusedRecords[]; };
+layout(std430, binding = 1) buffer OutputRecords { uint unusedOutput[]; };
+layout(std430, binding = 2) readonly buffer InputCount { uint unusedCount; };
+layout(std430, binding = 3) readonly buffer Histogram { uint histogram[]; };
+layout(std430, binding = 4) buffer Offsets { uint offsets[]; };
+layout(std430, binding = 5) buffer BlockSums { uint blockSums[]; };
+layout(std430, binding = 6) buffer BlockOffsets { uint blockOffsets[]; };
+layout(std430, binding = 7) buffer DigitBases { uint digitBases[]; };
+layout(push_constant) uniform Params { uint capacity; uint groups; uint shift; uint key; uint mode; uint tiles; } params;
+layout(local_size_x = 256) in;
+shared uint scan[256];
+void main() {
+  uint lid = gl_LocalInvocationID.x;
+  uint digit = gl_WorkGroupID.y;
+  uint tile = gl_WorkGroupID.x;
+  if (params.mode == 3u) {
+    uint d = lid;
+    scan[lid] = d < 16u ? digitBases[d] : 0u;
+    barrier();
+    for (uint offset = 1u; offset < 16u; offset <<= 1u) {
+      uint value = (lid >= offset) ? scan[lid - offset] : 0u;
+      barrier();
+      scan[lid] += value;
+      barrier();
+    }
+    if (d < 16u) digitBases[d] = d == 0u ? 0u : scan[d - 1u];
+    return;
+  }
+  if (params.mode == 2u) {
+    uint group = tile * 256u + lid;
+    if (group < params.groups && digit < 16u)
+      offsets[group * 16u + digit] +=
+          blockOffsets[tile * 16u + digit] + digitBases[digit];
+    return;
+  }
+  if (params.mode == 0u) {
+    uint group = tile * 256u + lid;
+    scan[lid] = group < params.groups ? histogram[group * 16u + digit] : 0u;
+  } else {
+    uint block = tile * 256u + lid;
+    scan[lid] = block < params.tiles ? blockSums[block * 16u + digit] : 0u;
+  }
+  barrier();
+  for (uint offset = 1u; offset < 256u; offset <<= 1u) {
+    uint value = (lid >= offset) ? scan[lid - offset] : 0u;
+    barrier();
+    scan[lid] += value;
+    barrier();
+  }
+  uint inclusive = scan[lid];
+  uint exclusive = lid == 0u ? 0u : scan[lid - 1u];
+  if (params.mode == 0u) {
+    uint group = tile * 256u + lid;
+    if (group < params.groups) offsets[group * 16u + digit] = exclusive;
+    if (lid == 255u) blockSums[tile * 16u + digit] = inclusive;
+  } else {
+    uint block = tile * 256u + lid;
+    if (block < params.tiles) {
+      blockOffsets[block * 16u + digit] = exclusive;
+      if (block == params.tiles - 1u) digitBases[digit] = inclusive;
+    }
+  }
+}

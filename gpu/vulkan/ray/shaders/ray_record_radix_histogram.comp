@@ -1,0 +1,28 @@
+#version 450
+layout(std430, binding = 0) readonly buffer InputRecords { uint records[]; };
+layout(std430, binding = 1) readonly buffer OutputRecords { uint unused[]; };
+layout(std430, binding = 2) readonly buffer InputCount { uint count; };
+layout(std430, binding = 3) buffer Histogram { uint bins[]; };
+layout(std430, binding = 4) buffer Offsets { uint unusedOffsets[]; };
+layout(std430, binding = 5) buffer BlockSums { uint unusedBlocks[]; };
+layout(std430, binding = 6) buffer BlockOffsets { uint unusedBlockOffsets[]; };
+layout(std430, binding = 7) buffer DigitBases { uint unusedDigitBases[]; };
+layout(push_constant) uniform Params { uint capacity; uint groups; uint shift; uint key; } params;
+layout(local_size_x = 64) in;
+shared uint localBins[16];
+uint digit(uint index) {
+  uint base = index * 4u;
+  uint value = (params.key == 0u) ? records[base] : records[base + 1u];
+  return (value >> params.shift) & 15u;
+}
+void main() {
+  uint lid = gl_LocalInvocationID.x;
+  uint group = gl_WorkGroupID.x;
+  if (lid < 16u) localBins[lid] = 0u;
+  barrier();
+  uint index = group * 64u + lid;
+  uint n = min(count, params.capacity);
+  if (index < n) atomicAdd(localBins[digit(index)], 1u);
+  barrier();
+  if (lid < 16u) bins[group * 16u + lid] = localBins[lid];
+}

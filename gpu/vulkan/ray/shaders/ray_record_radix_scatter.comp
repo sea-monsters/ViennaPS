@@ -1,0 +1,27 @@
+#version 450
+struct RayRecord { uint rayId; uint surfaceId; uint weightBits; uint reserved; };
+layout(std430, binding = 0) readonly buffer InputRecords { RayRecord records[]; };
+layout(std430, binding = 1) buffer OutputRecords { RayRecord sorted[]; };
+layout(std430, binding = 2) readonly buffer InputCount { uint count; };
+layout(std430, binding = 3) readonly buffer Histogram { uint unusedHistogram[]; };
+layout(std430, binding = 4) readonly buffer Offsets { uint offsets[]; };
+layout(std430, binding = 5) readonly buffer BlockSums { uint unusedBlocks[]; };
+layout(std430, binding = 6) readonly buffer BlockOffsets { uint unusedBlockOffsets[]; };
+layout(push_constant) uniform Params { uint capacity; uint groups; uint shift; uint key; uint mode; uint tiles; } params;
+layout(local_size_x = 64) in;
+uint digitOf(RayRecord record) {
+  uint value = params.key == 0u ? record.rayId : record.surfaceId;
+  return (value >> params.shift) & 15u;
+}
+void main() {
+  uint index = gl_GlobalInvocationID.x;
+  uint n = min(count, params.capacity);
+  if (index >= n) return;
+  uint group = index >> 6u;
+  uint digit = digitOf(records[index]);
+  uint rank = 0u;
+  uint begin = group << 6u;
+  for (uint j = begin; j < index; ++j)
+    if (digitOf(records[j]) == digit) ++rank;
+  sorted[offsets[group * 16u + digit] + rank] = records[index];
+}

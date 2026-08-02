@@ -3,6 +3,8 @@
 
 #include "vulkan_compute_runtime.hpp"
 
+#include "compute_session.hpp"
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -452,11 +454,11 @@ void HostVisibleBuffer::reset() {
     vkUnmapMemory(device_, memory_);
     mapped_ = nullptr;
   }
-  if (memory_ != VK_NULL_HANDLE && deviceForDestroy_ != VK_NULL_HANDLE) {
-    vkFreeMemory(deviceForDestroy_, memory_, nullptr);
-  }
   if (buffer_ != VK_NULL_HANDLE && deviceForDestroy_ != VK_NULL_HANDLE) {
     vkDestroyBuffer(deviceForDestroy_, buffer_, nullptr);
+  }
+  if (memory_ != VK_NULL_HANDLE && deviceForDestroy_ != VK_NULL_HANDLE) {
+    vkFreeMemory(deviceForDestroy_, memory_, nullptr);
   }
   device_ = VK_NULL_HANDLE;
   deviceForDestroy_ = VK_NULL_HANDLE;
@@ -572,6 +574,403 @@ VkDeviceSize HostVisibleBuffer::size() const { return bytes_; }
 void *HostVisibleBuffer::mappedPtr() const { return mapped_; }
 bool HostVisibleBuffer::hostCoherent() const { return hostCoherent_; }
 VkDevice HostVisibleBuffer::ownerDevice() const { return device_; }
+
+DeviceBuffer::~DeviceBuffer() { reset(); }
+
+DeviceBuffer::DeviceBuffer(DeviceBuffer &&other) noexcept
+    : device_(other.device_), deviceForDestroy_(other.deviceForDestroy_),
+      buffer_(other.buffer_), memory_(other.memory_), bytes_(other.bytes_) {
+  other.device_ = VK_NULL_HANDLE;
+  other.deviceForDestroy_ = VK_NULL_HANDLE;
+  other.buffer_ = VK_NULL_HANDLE;
+  other.memory_ = VK_NULL_HANDLE;
+  other.bytes_ = 0;
+}
+
+DeviceBuffer &DeviceBuffer::operator=(DeviceBuffer &&other) noexcept {
+  if (this != &other) {
+    reset();
+    device_ = other.device_;
+    deviceForDestroy_ = other.deviceForDestroy_;
+    buffer_ = other.buffer_;
+    memory_ = other.memory_;
+    bytes_ = other.bytes_;
+    other.device_ = VK_NULL_HANDLE;
+    other.deviceForDestroy_ = VK_NULL_HANDLE;
+    other.buffer_ = VK_NULL_HANDLE;
+    other.memory_ = VK_NULL_HANDLE;
+    other.bytes_ = 0;
+  }
+  return *this;
+}
+
+bool DeviceBuffer::create(VulkanDevice &device, const VkDeviceSize bytes,
+                          std::string &error) {
+  error.clear();
+  if (bytes == 0) {
+    error = "Requested device buffer size is zero.";
+    return false;
+  }
+  if (!device.isValid()) {
+    error = "Invalid device passed to DeviceBuffer::create.";
+    return false;
+  }
+  if (isValid()) {
+    if (device_ == device.get() && bytes_ == bytes) {
+      return true;
+    }
+    error = "DeviceBuffer is already initialized with different properties.";
+    return false;
+  }
+
+  const VkDevice targetDevice = device.get();
+  VkBuffer buffer = VK_NULL_HANDLE;
+  VkDeviceMemory memory = VK_NULL_HANDLE;
+  VkBufferCreateInfo bufferInfo{};
+  bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  bufferInfo.size = bytes;
+  bufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                     VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                     VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+  bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  VkResult result = vkCreateBuffer(targetDevice, &bufferInfo, nullptr, &buffer);
+  if (result != VK_SUCCESS) {
+    setError(error, "vkCreateBuffer failed", result);
+    return false;
+  }
+
+  VkMemoryRequirements requirements{};
+  vkGetBufferMemoryRequirements(targetDevice, buffer, &requirements);
+  const std::uint32_t memoryType = chooseBestMemoryType(
+      device.selection().memoryProperties, requirements,
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+  if (memoryType == std::numeric_limits<std::uint32_t>::max()) {
+    error = "No matching device-local memory type found.";
+    vkDestroyBuffer(targetDevice, buffer, nullptr);
+    return false;
+  }
+
+  VkMemoryAllocateInfo allocInfo{};
+  allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  allocInfo.allocationSize = requirements.size;
+  allocInfo.memoryTypeIndex = memoryType;
+  result = vkAllocateMemory(targetDevice, &allocInfo, nullptr, &memory);
+  if (result != VK_SUCCESS) {
+    setError(error, "vkAllocateMemory failed", result);
+    vkDestroyBuffer(targetDevice, buffer, nullptr);
+    return false;
+  }
+  result = vkBindBufferMemory(targetDevice, buffer, memory, 0);
+  if (result != VK_SUCCESS) {
+    setError(error, "vkBindBufferMemory failed", result);
+    vkFreeMemory(targetDevice, memory, nullptr);
+    vkDestroyBuffer(targetDevice, buffer, nullptr);
+    return false;
+  }
+
+  device_ = targetDevice;
+  deviceForDestroy_ = targetDevice;
+  buffer_ = buffer;
+  memory_ = memory;
+  bytes_ = bytes;
+  return true;
+}
+
+void DeviceBuffer::reset() {
+  if (buffer_ != VK_NULL_HANDLE && deviceForDestroy_ != VK_NULL_HANDLE) {
+    vkDestroyBuffer(deviceForDestroy_, buffer_, nullptr);
+  }
+  if (memory_ != VK_NULL_HANDLE && deviceForDestroy_ != VK_NULL_HANDLE) {
+    vkFreeMemory(deviceForDestroy_, memory_, nullptr);
+  }
+  device_ = VK_NULL_HANDLE;
+  deviceForDestroy_ = VK_NULL_HANDLE;
+  buffer_ = VK_NULL_HANDLE;
+  memory_ = VK_NULL_HANDLE;
+  bytes_ = 0;
+}
+
+namespace {
+
+[[nodiscard]] bool validateDeviceTransfer(
+    const DeviceBuffer &buffer, ComputeSession &session, const void *data,
+    const VkDeviceSize bytes, const VkDeviceSize offset, std::string &error) {
+  if (!session.isValid()) {
+    error = "Compute session is not initialized.";
+    return false;
+  }
+  if (!buffer.isValid()) {
+    error = "DeviceBuffer has not been created.";
+    return false;
+  }
+  if (buffer.ownerDevice() != session.deviceHandle()) {
+    error = "DeviceBuffer and ComputeSession use different Vulkan devices.";
+    return false;
+  }
+  if (bytes == 0) {
+    error = "Device buffer transfer size is zero.";
+    return false;
+  }
+  if (data == nullptr) {
+    error = "Device buffer transfer data pointer is null.";
+    return false;
+  }
+  if (offset > buffer.size() || bytes > buffer.size() - offset) {
+    error = "Device buffer transfer exceeds the buffer range.";
+    return false;
+  }
+  return true;
+}
+
+[[nodiscard]] bool validateDeviceRange(const DeviceBuffer &buffer,
+                                       const VkDeviceSize bytes,
+                                       const VkDeviceSize offset,
+                                       std::string &error) {
+  if (!buffer.isValid()) {
+    error = "DeviceBuffer has not been created.";
+    return false;
+  }
+  if (bytes == 0) {
+    error = "Device buffer transfer size is zero.";
+    return false;
+  }
+  if (offset > buffer.size() || bytes > buffer.size() - offset) {
+    error = "Device buffer transfer exceeds the buffer range.";
+    return false;
+  }
+  return true;
+}
+
+[[nodiscard]] bool submitTransfer(ComputeSession &session,
+                                   VkCommandBuffer commandBuffer,
+                                   Fence &fence, std::string &error) {
+  if (!fence.create(session.device(), error)) {
+    return false;
+  }
+  VkSubmitInfo submit{};
+  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  submit.commandBufferCount = 1;
+  submit.pCommandBuffers = &commandBuffer;
+  const VkResult result = vkQueueSubmit(session.device().computeQueue(), 1,
+                                        &submit, fence.get());
+  if (result != VK_SUCCESS) {
+    setError(error, "vkQueueSubmit failed", result);
+    return false;
+  }
+  return fence.wait(std::numeric_limits<std::uint64_t>::max(), error);
+}
+
+void addTransferToComputeBarrier(VkCommandBuffer commandBuffer,
+                                 VkBuffer buffer, VkDeviceSize offset,
+                                 VkDeviceSize bytes) {
+  VkBufferMemoryBarrier barrier{};
+  barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+  barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  barrier.dstAccessMask =
+      VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+  barrier.buffer = buffer;
+  barrier.offset = offset;
+  barrier.size = bytes;
+  vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 1,
+                       &barrier, 0, nullptr);
+}
+
+void addDeviceToTransferWriteBarrier(VkCommandBuffer commandBuffer,
+                                     VkBuffer buffer, VkDeviceSize offset,
+                                     VkDeviceSize bytes) {
+  VkBufferMemoryBarrier barrier{};
+  barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+  barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
+                          VK_ACCESS_SHADER_WRITE_BIT |
+                          VK_ACCESS_TRANSFER_WRITE_BIT;
+  barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  barrier.buffer = buffer;
+  barrier.offset = offset;
+  barrier.size = bytes;
+  vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 1,
+                       &barrier, 0, nullptr);
+}
+
+void addDeviceToTransferBarrier(VkCommandBuffer commandBuffer, VkBuffer buffer,
+                                VkDeviceSize offset, VkDeviceSize bytes) {
+  VkBufferMemoryBarrier barrier{};
+  barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+  barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
+                          VK_ACCESS_SHADER_WRITE_BIT |
+                          VK_ACCESS_TRANSFER_WRITE_BIT;
+  barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+  barrier.buffer = buffer;
+  barrier.offset = offset;
+  barrier.size = bytes;
+  vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                       VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 1,
+                       &barrier, 0, nullptr);
+}
+
+} // namespace
+
+bool DeviceBuffer::upload(ComputeSession &session, const void *data,
+                          const VkDeviceSize bytes, const VkDeviceSize offset,
+                          std::string &error) {
+  error.clear();
+  if (!validateDeviceTransfer(*this, session, data, bytes, offset, error)) {
+    return false;
+  }
+  HostVisibleBuffer staging{};
+  if (!staging.create(session.device(), bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, error) ||
+      !staging.write(data, bytes, 0, error)) {
+    return false;
+  }
+  VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+  if (!session.commandContext().allocatePrimary(commandBuffer, error)) {
+    return false;
+  }
+  Fence fence{};
+  VkCommandBufferBeginInfo beginInfo{};
+  beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  VkResult result = vkBeginCommandBuffer(commandBuffer, &beginInfo);
+  if (result == VK_SUCCESS) {
+    addDeviceToTransferWriteBarrier(commandBuffer, buffer_, offset, bytes);
+    VkBufferCopy region{0, offset, bytes};
+    vkCmdCopyBuffer(commandBuffer, staging.handle(), buffer_, 1, &region);
+    addTransferToComputeBarrier(commandBuffer, buffer_, offset, bytes);
+    result = vkEndCommandBuffer(commandBuffer);
+  }
+  if (result != VK_SUCCESS) {
+    setError(error, "DeviceBuffer upload command recording failed", result);
+  } else if (!submitTransfer(session, commandBuffer, fence, error)) {
+    result = VK_ERROR_UNKNOWN;
+  }
+  vkFreeCommandBuffers(session.deviceHandle(), session.commandContext().pool(),
+                       1, &commandBuffer);
+  return result == VK_SUCCESS && error.empty();
+}
+
+bool DeviceBuffer::download(ComputeSession &session, void *data,
+                            const VkDeviceSize bytes, const VkDeviceSize offset,
+                            std::string &error) const {
+  error.clear();
+  if (!validateDeviceTransfer(*this, session, data, bytes, offset, error)) {
+    return false;
+  }
+  HostVisibleBuffer staging{};
+  if (!staging.create(session.device(), bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, error)) {
+    return false;
+  }
+  VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+  if (!session.commandContext().allocatePrimary(commandBuffer, error)) {
+    return false;
+  }
+  Fence fence{};
+  VkCommandBufferBeginInfo beginInfo{};
+  beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  VkResult result = vkBeginCommandBuffer(commandBuffer, &beginInfo);
+  if (result == VK_SUCCESS) {
+    addDeviceToTransferBarrier(commandBuffer, buffer_, offset, bytes);
+    VkBufferCopy region{offset, 0, bytes};
+    vkCmdCopyBuffer(commandBuffer, buffer_, staging.handle(), 1, &region);
+    result = vkEndCommandBuffer(commandBuffer);
+  }
+  if (result != VK_SUCCESS) {
+    setError(error, "DeviceBuffer download command recording failed", result);
+  } else if (!submitTransfer(session, commandBuffer, fence, error)) {
+    result = VK_ERROR_UNKNOWN;
+  }
+  vkFreeCommandBuffers(session.deviceHandle(), session.commandContext().pool(),
+                       1, &commandBuffer);
+  if (result != VK_SUCCESS || !error.empty()) {
+    return false;
+  }
+  return staging.read(data, bytes, 0, error);
+}
+
+bool DeviceBuffer::copyTo(ComputeSession &session, DeviceBuffer &destination,
+                          const VkDeviceSize bytes,
+                          const VkDeviceSize sourceOffset,
+                          const VkDeviceSize destinationOffset,
+                          std::string &error) const {
+  error.clear();
+  if (!session.isValid()) {
+    error = "Compute session is not initialized.";
+    return false;
+  }
+  if (!validateDeviceRange(*this, bytes, sourceOffset, error) ||
+      !validateDeviceRange(destination, bytes, destinationOffset, error)) {
+    return false;
+  }
+  if (ownerDevice() != session.deviceHandle() ||
+      destination.ownerDevice() != session.deviceHandle()) {
+    error = "DeviceBuffer and ComputeSession use different Vulkan devices.";
+    return false;
+  }
+  if (buffer_ == destination.buffer_) {
+    error = "DeviceBuffer copy requires distinct source and destination "
+            "buffers.";
+    return false;
+  }
+  VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+  if (!session.commandContext().allocatePrimary(commandBuffer, error)) {
+    return false;
+  }
+  Fence fence{};
+  VkCommandBufferBeginInfo beginInfo{};
+  beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  VkResult result = vkBeginCommandBuffer(commandBuffer, &beginInfo);
+  if (result == VK_SUCCESS) {
+    VkBufferMemoryBarrier barriers[2]{};
+    for (auto &barrier : barriers) {
+      barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+      barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+      barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT |
+                              VK_ACCESS_SHADER_WRITE_BIT |
+                              VK_ACCESS_TRANSFER_WRITE_BIT;
+      barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT |
+                              VK_ACCESS_TRANSFER_WRITE_BIT;
+    }
+    barriers[0].buffer = buffer_;
+    barriers[0].offset = sourceOffset;
+    barriers[0].size = bytes;
+    barriers[1].buffer = destination.buffer_;
+    barriers[1].offset = destinationOffset;
+    barriers[1].size = bytes;
+    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 2,
+                         barriers, 0, nullptr);
+    VkBufferCopy region{sourceOffset, destinationOffset, bytes};
+    vkCmdCopyBuffer(commandBuffer, buffer_, destination.buffer_, 1, &region);
+    addTransferToComputeBarrier(commandBuffer, destination.buffer_,
+                                destinationOffset, bytes);
+    result = vkEndCommandBuffer(commandBuffer);
+  }
+  if (result != VK_SUCCESS) {
+    setError(error, "DeviceBuffer copy command recording failed", result);
+  } else if (!submitTransfer(session, commandBuffer, fence, error)) {
+    result = VK_ERROR_UNKNOWN;
+  }
+  vkFreeCommandBuffers(session.deviceHandle(), session.commandContext().pool(),
+                       1, &commandBuffer);
+  return result == VK_SUCCESS && error.empty();
+}
+
+bool DeviceBuffer::isValid() const { return buffer_ != VK_NULL_HANDLE; }
+VkBuffer DeviceBuffer::handle() const { return buffer_; }
+VkDeviceMemory DeviceBuffer::memory() const { return memory_; }
+VkDeviceSize DeviceBuffer::size() const { return bytes_; }
+VkDevice DeviceBuffer::ownerDevice() const { return device_; }
 
 ShaderModule::~ShaderModule() { reset(); }
 

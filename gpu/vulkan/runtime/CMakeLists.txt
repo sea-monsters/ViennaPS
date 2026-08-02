@@ -108,6 +108,23 @@ if(NOT VIENNAPS_BUILD_VULKAN_SMOKE)
   return()
 endif()
 
+add_executable(viennaps-runtime-device-buffer-smoke device_buffer_smoke.cpp)
+target_link_libraries(viennaps-runtime-device-buffer-smoke
+  PRIVATE
+    viennaps_vulkan_compute_runtime
+    Vulkan::Vulkan)
+target_compile_features(viennaps-runtime-device-buffer-smoke PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps-runtime-device-buffer-smoke PRIVATE /W4 /WX)
+else()
+  target_compile_options(viennaps-runtime-device-buffer-smoke
+                         PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+if(BUILD_TESTING)
+  add_test(NAME viennaps-runtime-device-buffer-smoke
+           COMMAND viennaps-runtime-device-buffer-smoke)
+endif()
+
 set(VULKAN_RUNTIME_SMOKE_SHADER "${CMAKE_CURRENT_SOURCE_DIR}/shaders/compute_smoke.comp")
 set(VULKAN_RUNTIME_SMOKE_SPV "${CMAKE_CURRENT_BINARY_DIR}/compute_smoke.comp.spv")
 

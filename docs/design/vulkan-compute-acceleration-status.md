@@ -1049,8 +1049,6 @@ is wired and persisted.
 | Production boundary | same-session device residency, sparse insertion, routing, and persisted deployment smoke remain pending |
 | Path policy | SDK discovery is environment supplied; tracked inputs contain no resolved local SDK or dependency path |
 
-## Next slice
-
 ## P4C1-HRLE-session-sharing: one selected Vulkan device
 
 - Status: accepted locally
@@ -1143,6 +1141,56 @@ routing is enabled.
 | No-SDK behavior | CPU target builds and all three HRLE contract tests pass without Vulkan |
 | Residual boundary | allocation/HRLE exceptions, segmentation, and point-data translation remain pending |
 | Path policy | no SDK, dependency, source checkout, or build-cache path is tracked |
+
+## P4C3-runtime: device-local buffer and synchronous transfer foundation
+
+- Status: accepted locally
+- Date: 2026-08-02
+- Scope: provide the device-local storage and transfer primitive required to
+  keep HRLE classification and compaction intermediates on one Vulkan device
+
+The runtime now provides a move-only `DeviceBuffer` backed by device-local
+memory with storage, transfer-source, and transfer-destination usage. Upload,
+download, and device-to-device copy operations are submitted through the
+caller's shared `ComputeSession`. Each operation uses a temporary host-visible
+staging buffer where needed, overflow-safe range validation, an explicit
+transfer/compute memory dependency, and a synchronous fence wait. This avoids
+releasing a command buffer whose submitted transfer might still be pending.
+
+The contract rejects zero-sized allocation or transfer, null host data,
+uninitialized buffers, out-of-range copies, aliases, different logical Vulkan
+devices, and incompatible repeated creation. Repeating creation with the same
+device and size is idempotent. Existing host-visible APIs remain intact. The
+buffer must be reset before its owning session is reset or destroyed; a
+session-generation token for detecting stale handles after reset/reinitialize
+is not implemented yet and remains a gate before the production resident
+pipeline owns buffers across session transitions.
+
+The same slice corrects Vulkan buffer teardown order for host-visible and
+device-local buffers: the bound buffer is destroyed before its memory is
+freed. The new smoke verifies an exact upload, device-to-device copy, and
+download round trip, move state, and the principal validation failures.
+
+| Gate | Result |
+|---|---|
+| Device-local allocation | storage and bidirectional transfer usage pass on the selected Vulkan device |
+| Exact transfer | upload, device copy, and download preserve four uint32 values exactly |
+| Session isolation | a buffer created by one logical device is rejected by a different session |
+| Transfer safety | zero, null, uninitialized, out-of-range, alias, and size mismatch cases fail closed |
+| Runtime compatibility | deployment context, runtime compute, compute session, and device-buffer smokes pass 4/4 |
+| No-SDK behavior | the 17 relevant CPU, policy, HRLE, executor, and probe tests pass |
+| Deployment schema | no schema change; use existing suite gate, estimated bytes, and safe working-set threshold |
+| Conservative HRLE peak | 2D is at least `120N + 8`; 3D is at least `152N + 8`, plus scan scratch and alignment |
+| Residual boundary | session generation, timeout/deferred cleanup, device scan overloads, shaders, and materialization remain pending |
+| Path policy | no SDK, dependency, source checkout, or build-cache path is tracked |
+
+The deployment-time profile already contains `vulkanPrimitiveSuitePass` and
+`safeVulkanWorkingSetBytes`, while each stage supplies `estimatedBytes`.
+Therefore P4C3 does not require a profile-schema change. Automatic routing
+must require the primitive suite, compute capability, and sufficient safe
+working set. Manual selection continues to override policy, but not missing
+hardware capabilities or an unsafe memory bound; those cases retain the
+existing strict/fallback behavior.
 
 ## Next slice
 

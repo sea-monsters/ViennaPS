@@ -20,6 +20,8 @@
 
 namespace viennaps::vulkan::runtime {
 
+class ComputeSession;
+
 struct ComputeQueueSpec {
   std::uint32_t familyIndex = 0;
   bool dedicatedQueue = false;
@@ -139,6 +141,50 @@ private:
   void *mapped_{nullptr};
   bool hostCoherent_{false};
   bool beginMap(std::string &error);
+};
+
+// Device-local storage buffer used by the shared ComputeSession pipeline.
+// Data transfer is deliberately submitted through the owning session so the
+// command pool, queue, and device lifetime stay on one synchronization path.
+// The caller must reset buffers before resetting/reinitializing that session;
+// the current handle check does not provide generation-token stale detection.
+class DeviceBuffer {
+public:
+  DeviceBuffer() = default;
+  ~DeviceBuffer();
+  DeviceBuffer(const DeviceBuffer &) = delete;
+  DeviceBuffer &operator=(const DeviceBuffer &) = delete;
+
+  DeviceBuffer(DeviceBuffer &&other) noexcept;
+  DeviceBuffer &operator=(DeviceBuffer &&other) noexcept;
+
+  [[nodiscard]] bool create(VulkanDevice &device, VkDeviceSize bytes,
+                            std::string &error);
+  void reset();
+
+  [[nodiscard]] bool upload(ComputeSession &session, const void *data,
+                            VkDeviceSize bytes, VkDeviceSize offset,
+                            std::string &error);
+  [[nodiscard]] bool download(ComputeSession &session, void *data,
+                              VkDeviceSize bytes, VkDeviceSize offset,
+                              std::string &error) const;
+  [[nodiscard]] bool copyTo(ComputeSession &session, DeviceBuffer &destination,
+                            VkDeviceSize bytes, VkDeviceSize sourceOffset,
+                            VkDeviceSize destinationOffset,
+                            std::string &error) const;
+
+  [[nodiscard]] bool isValid() const;
+  [[nodiscard]] VkBuffer handle() const;
+  [[nodiscard]] VkDeviceMemory memory() const;
+  [[nodiscard]] VkDeviceSize size() const;
+  [[nodiscard]] VkDevice ownerDevice() const;
+
+private:
+  VkDevice device_{VK_NULL_HANDLE};
+  VkDevice deviceForDestroy_{VK_NULL_HANDLE};
+  VkBuffer buffer_{VK_NULL_HANDLE};
+  VkDeviceMemory memory_{VK_NULL_HANDLE};
+  VkDeviceSize bytes_{0};
 };
 
 class ShaderModule {

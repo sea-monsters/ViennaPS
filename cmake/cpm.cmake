@@ -16,8 +16,36 @@ endif()
 # Expand relative path. This is important if the provided path contains a tilde (~)
 get_filename_component(CPM_DOWNLOAD_LOCATION ${CPM_DOWNLOAD_LOCATION} ABSOLUTE)
 
-file(DOWNLOAD
-     https://github.com/cpm-cmake/CPM.cmake/releases/download/v${CPM_DOWNLOAD_VERSION}/CPM.cmake
-     ${CPM_DOWNLOAD_LOCATION} EXPECTED_HASH SHA256=${CPM_HASH_SUM})
+set(CPM_CACHE_VALID FALSE)
+if(EXISTS "${CPM_DOWNLOAD_LOCATION}")
+  file(SHA256 "${CPM_DOWNLOAD_LOCATION}" CPM_DOWNLOAD_HASH)
+  string(TOLOWER "${CPM_DOWNLOAD_HASH}" CPM_DOWNLOAD_HASH)
+  string(TOLOWER "${CPM_HASH_SUM}" CPM_EXPECTED_HASH)
+  if(CPM_DOWNLOAD_HASH STREQUAL CPM_EXPECTED_HASH)
+    set(CPM_CACHE_VALID TRUE)
+  endif()
+endif()
 
-include(${CPM_DOWNLOAD_LOCATION})
+if(NOT CPM_CACHE_VALID)
+  file(DOWNLOAD
+       https://github.com/cpm-cmake/CPM.cmake/releases/download/v${CPM_DOWNLOAD_VERSION}/CPM.cmake
+       ${CPM_DOWNLOAD_LOCATION} EXPECTED_HASH SHA256=${CPM_HASH_SUM}
+       STATUS CPM_DOWNLOAD_STATUS)
+  list(GET CPM_DOWNLOAD_STATUS 0 CPM_DOWNLOAD_STATUS_CODE)
+  if(NOT CPM_DOWNLOAD_STATUS_CODE EQUAL 0)
+    list(GET CPM_DOWNLOAD_STATUS 1 CPM_DOWNLOAD_STATUS_MESSAGE)
+    message(FATAL_ERROR
+            "CPM download failed (${CPM_DOWNLOAD_STATUS_CODE}): "
+            "${CPM_DOWNLOAD_STATUS_MESSAGE}")
+  endif()
+
+  file(SHA256 "${CPM_DOWNLOAD_LOCATION}" CPM_DOWNLOAD_HASH)
+  string(TOLOWER "${CPM_DOWNLOAD_HASH}" CPM_DOWNLOAD_HASH)
+  string(TOLOWER "${CPM_HASH_SUM}" CPM_EXPECTED_HASH)
+  if(NOT CPM_DOWNLOAD_HASH STREQUAL CPM_EXPECTED_HASH)
+    message(FATAL_ERROR
+            "Downloaded CPM.cmake does not match the expected SHA256 hash")
+  endif()
+endif()
+
+include("${CPM_DOWNLOAD_LOCATION}")

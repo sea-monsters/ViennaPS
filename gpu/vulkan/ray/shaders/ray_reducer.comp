@@ -1,0 +1,79 @@
+// Copyright 2026 ViennaPS
+// SPDX-License-Identifier: MIT
+
+#version 450
+
+layout(local_size_x = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer RayIds { uint rayId[]; };
+layout(set = 0, binding = 1, std430) readonly buffer SurfaceIds { uint surfaceId[]; };
+layout(set = 0, binding = 2, std430) readonly buffer Weights { float weight[]; };
+layout(set = 0, binding = 3, std430) writeonly buffer OutputSurfaces { uint outSurface[]; };
+layout(set = 0, binding = 4, std430) writeonly buffer OutputWeights { float outWeight[]; };
+layout(set = 0, binding = 5, std430) buffer Used { uint used[]; };
+layout(set = 0, binding = 6, std430) buffer OutputCount { uint count; };
+
+layout(push_constant) uniform Constants {
+  uint rayCount;
+  uint surfaceDomain;
+  uint outputCapacity;
+} constants;
+
+bool before(uint left, uint right) {
+  if (surfaceId[left] != surfaceId[right])
+    return surfaceId[left] < surfaceId[right];
+  return rayId[left] < rayId[right];
+}
+
+void main() {
+  count = 0u;
+  for (uint i = 0u; i < constants.rayCount; ++i)
+    used[i] = 0u;
+
+  uint written = 0u;
+  for (;;) {
+    uint selected = constants.rayCount;
+    for (uint i = 0u; i < constants.rayCount; ++i) {
+      if (used[i] == 0u &&
+          (selected == constants.rayCount || before(i, selected)))
+        selected = i;
+    }
+    if (selected == constants.rayCount)
+      break;
+
+    uint selectedSurface = surfaceId[selected];
+    uint selectedRay = rayId[selected];
+    if (written >= constants.outputCapacity) {
+      count = constants.outputCapacity + 1u;
+      return;
+    }
+    precise float sum = 0.0;
+    for (uint i = 0u; i < constants.rayCount; ++i) {
+      if (used[i] == 0u && surfaceId[i] == selectedSurface &&
+          rayId[i] == selectedRay) {
+        precise float nextSum = sum + weight[i];
+        sum = nextSum;
+        used[i] = 1u;
+      }
+    }
+    // A surface may have several ray ids.  Merge all ids for this surface in
+    // sorted order; the loop order is fixed and therefore FP32 deterministic.
+    for (uint i = 0u; i < constants.rayCount; ++i) {
+      if (used[i] == 0u && surfaceId[i] == selectedSurface) {
+        uint candidate = i;
+        for (uint j = 0u; j < constants.rayCount; ++j) {
+          if (used[j] == 0u && surfaceId[j] == selectedSurface &&
+              before(j, candidate))
+            candidate = j;
+        }
+        precise float nextSum = sum + weight[candidate];
+        sum = nextSum;
+        used[candidate] = 1u;
+      }
+    }
+    outSurface[written] = selectedSurface;
+    outWeight[written] = sum;
+    ++written;
+  }
+  count = written;
+}

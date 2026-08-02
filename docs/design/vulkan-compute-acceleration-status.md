@@ -1633,6 +1633,36 @@ successful no-op.
 | Standalone build | a fresh `VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE=ON`, probe-off build links the runtime, executes the Intel Arc smoke, and discovers the CTest |
 | Scope boundary | this is a reusable CSR primitive only; `psSurfaceDiffusion` and coverage/process/controller routing remain CPU |
 
+### P5-C: deterministic FP32 ray-record reducer
+
+- Status: accepted locally as a bounded correctness primitive; traversal and
+  process integration pending
+- Date: 2026-08-02
+
+`DeterministicRayReducer` defines the Vulkan handoff between future ray
+generation and surface-flux aggregation. A record contains stable `rayId`,
+`surfaceId`, and FP32 weight; the canonical CPU oracle orders records by
+`(surfaceId, rayId, inputIndex)` and uses that fixed order for one FP32 sum per
+surface. The current Vulkan shader deliberately uses one invocation and the
+same selection order, so it establishes reproducibility before any scalable
+parallel sort/reduction is introduced.
+
+GPU output is first materialized in private temporary buffers. The shader has
+an explicit output-capacity guard, and the host validates returned count,
+strictly increasing surface IDs, surface-domain membership, and finite
+normal-or-zero FP32 weights before publishing caller buffers or `outputCount`.
+CPU and Vulkan rejection paths preserve caller IDs, weights, and count.
+
+| Gate | Result |
+|---|---|
+| CPU differential | Intel Arc output is bit-exact to the CPU ordered reducer, including a shuffled record order and repeated dispatch |
+| Determinism | identical input is stable; duplicate `(surfaceId, rayId)` records retain input-index order |
+| Transaction boundary | output tail sentinels and `outputCount` survive invalid surface IDs, NaN weights, and insufficient output capacity |
+| Empty input | `N=0` is a valid no-op |
+| Shader validation | `spirv-val` passes; generated SPIR-V retains `NoContraction` on its FP32 additions |
+| Build and test | a local-cache, ray-only configuration builds the Intel Arc smoke and its focused CTest passes |
+| Scope boundary | this is an O(N²), one-invocation correctness baseline; it does not trace rays, intersect geometry, sample particles, or route production fluxes |
+
 ## Next slice
 
 The segmented rebuild adapter is installed by the level-set controller, the
@@ -1642,8 +1672,9 @@ RK2/RK3 remain deliberately CPU-only until a multi-stage device state machine
 is proven. The first surface velocity formula is now exact but intentionally
 unwired to process selection. Direct negative/non-finite time injection and
 the optional VTK-enabled install/export conflict remain validation gaps. The
-next implementation slices are surface coverage integration, then deterministic
-ray reduction, without weakening the current fail-closed gate.
+next implementation slices are surface coverage integration and bounded ray
+geometry traversal, followed by a scalable deterministic sort/reduce design,
+without weakening the current fail-closed gate.
 
 After those production-seam gates, the Level Set work advances to HRLE
 sparse rebuild integration, followed by particle/ray and surface/oxidation

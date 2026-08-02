@@ -50,6 +50,8 @@ public:
       typename ProcessContext<NumericType, D>::LevelSetUpdateExecutor;
   using LevelSetRebuildExecutor =
       typename ProcessContext<NumericType, D>::LevelSetRebuildExecutor;
+  using SurfaceDiffusionExecutor =
+      typename ProcessContext<NumericType, D>::SurfaceDiffusionExecutor;
   using LevelSetUpdateFailurePolicy = viennaps::LevelSetUpdateFailurePolicy;
 
   Process() { initializeStrategies(); }
@@ -135,6 +137,19 @@ public:
   void clearLevelSetUpdateExecutor() { context_.levelSetUpdateExecutor = {}; }
 
   void clearLevelSetRebuildExecutor() { context_.levelSetRebuildExecutor = {}; }
+
+  void setSurfaceDiffusionExecutor(SurfaceDiffusionExecutor executor) {
+    context_.surfaceDiffusionExecutor = std::move(executor);
+  }
+
+  [[nodiscard]] SurfaceDiffusionExecutor
+  getSurfaceDiffusionExecutor() const {
+    return context_.surfaceDiffusionExecutor;
+  }
+
+  void clearSurfaceDiffusionExecutor() {
+    context_.surfaceDiffusionExecutor = {};
+  }
 
   [[nodiscard]] ProcessResult getLastProcessResult() const {
     return lastProcessResult_;

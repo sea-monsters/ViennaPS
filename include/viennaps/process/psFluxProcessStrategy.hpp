@@ -9,6 +9,9 @@
 
 #include <lsToDiskMesh.hpp>
 
+#include <exception>
+#include <limits>
+
 namespace viennaps {
 
 VIENNAPS_TEMPLATE_ND(NumericType, D)
@@ -518,6 +521,40 @@ private:
 
     Solver solver(Stencil(std::move(cloud), context.surfaceDiffusionParams));
 
+    std::vector<std::uint32_t> rowOffsets;
+    std::vector<std::uint32_t> columnIndices;
+    std::vector<NumericType> weights;
+    if (context.surfaceDiffusionExecutor) {
+      const auto &matrix = solver.stencil().matrix();
+      if (matrix.size() > std::numeric_limits<std::uint32_t>::max()) {
+        VIENNACORE_LOG_ERROR(
+            "Surface diffusion executor row count exceeds its ABI limit.");
+        return ProcessResult::FAILURE;
+      }
+      rowOffsets.reserve(matrix.size() + 1U);
+      rowOffsets.push_back(0U);
+      for (const auto &row : matrix) {
+        if (row.size() > std::numeric_limits<std::uint32_t>::max() ||
+            columnIndices.size() >
+                std::numeric_limits<std::uint32_t>::max() - row.size()) {
+          VIENNACORE_LOG_ERROR(
+              "Surface diffusion executor CSR exceeds its ABI limit.");
+          return ProcessResult::FAILURE;
+        }
+        for (const auto &[column, weight] : row) {
+          if (column > std::numeric_limits<std::uint32_t>::max()) {
+            VIENNACORE_LOG_ERROR(
+                "Surface diffusion executor column exceeds its ABI limit.");
+            return ProcessResult::FAILURE;
+          }
+          columnIndices.push_back(static_cast<std::uint32_t>(column));
+          weights.push_back(weight);
+        }
+        rowOffsets.push_back(
+            static_cast<std::uint32_t>(columnIndices.size()));
+      }
+    }
+
     for (const auto &[name, coefficient] : diffusionCoefficients) {
       if (coefficient <= 0.)
         continue;
@@ -532,7 +569,11 @@ private:
                              std::to_string(coefficient) + " and time step " +
                              std::to_string(dt));
 
-        auto current = std::move(*target);
+        std::vector<NumericType> current;
+        if (context.surfaceDiffusionExecutor)
+          current = *target;
+        else
+          current = std::move(*target);
         double diffusionTime = 0.0;
         while (diffusionTime < context.timeStep) {
 #ifdef VIENNATOOLS_PYTHON_BUILD
@@ -540,7 +581,48 @@ private:
           if (PyErr_CheckSignals() != 0)
             return ProcessResult::USER_INTERRUPTED;
 #endif
-          current = solver.stepExplicit(current, dt, coefficient);
+          if (context.surfaceDiffusionExecutor) {
+            std::vector<NumericType> next(current.size(), NumericType(0.));
+            const NumericType diffusionStep =
+                static_cast<NumericType>(dt) * coefficient;
+            SurfaceDiffusionWork<NumericType> work{
+                rowOffsets,
+                columnIndices,
+                weights,
+                current,
+                next,
+                diffusionStep,
+                0U,
+                false};
+            std::string dispatchError;
+            ProcessResult dispatchResult = ProcessResult::FAILURE;
+            try {
+              dispatchResult =
+                  context.surfaceDiffusionExecutor(work, dispatchError);
+            } catch (const std::exception &exception) {
+              dispatchError = exception.what();
+              dispatchResult = ProcessResult::FAILURE;
+            } catch (...) {
+              dispatchError = "unknown surface diffusion executor exception";
+              dispatchResult = ProcessResult::FAILURE;
+            }
+            if (dispatchResult != ProcessResult::SUCCESS) {
+              VIENNACORE_LOG_ERROR(
+                  "Surface diffusion executor failed" +
+                  (dispatchError.empty() ? std::string{} :
+                                             ": " + dispatchError));
+              return dispatchResult;
+            }
+            if (!work.complete || work.writtenCount != next.size()) {
+              VIENNACORE_LOG_ERROR(
+                  "Surface diffusion executor returned incomplete output.");
+              return ProcessResult::FAILURE;
+            }
+            current = std::move(next);
+          } else {
+            current = solver.stepExplicit(current, static_cast<NumericType>(dt),
+                                          coefficient);
+          }
           diffusionTime += dt;
           dt = std::min(dt, context.timeStep - diffusionTime);
         }

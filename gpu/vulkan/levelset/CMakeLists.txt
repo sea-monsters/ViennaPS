@@ -367,6 +367,20 @@ else()
 endif()
 
 if(VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE AND TARGET ViennaPS)
+  add_executable(viennaps-vulkan-levelset-surface-composition-smoke
+                 levelset_surface_composition_smoke.cpp)
+  target_link_libraries(viennaps-vulkan-levelset-surface-composition-smoke
+                        PRIVATE ViennaPS viennaps_vulkan_compute_runtime)
+  target_compile_features(viennaps-vulkan-levelset-surface-composition-smoke
+                          PRIVATE cxx_std_20)
+  if(MSVC)
+    target_compile_options(viennaps-vulkan-levelset-surface-composition-smoke
+                            PRIVATE /W4)
+  else()
+    target_compile_options(viennaps-vulkan-levelset-surface-composition-smoke
+                           PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+
   add_executable(viennaps-vulkan-levelset-deployment-session-smoke
                  levelset_deployment_session_smoke.cpp)
   target_link_libraries(viennaps-vulkan-levelset-deployment-session-smoke
@@ -405,6 +419,10 @@ if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
   if(TARGET viennaps-vulkan-levelset-deployment-session-smoke)
     add_test(NAME viennaps-vulkan-levelset-deployment-session-smoke
              COMMAND viennaps-vulkan-levelset-deployment-session-smoke)
+  endif()
+  if(TARGET viennaps-vulkan-levelset-surface-composition-smoke)
+    add_test(NAME viennaps-vulkan-levelset-surface-composition-smoke
+             COMMAND viennaps-vulkan-levelset-surface-composition-smoke)
   endif()
   if(TARGET viennaps-vulkan-levelset-process-controller-smoke)
     add_test(NAME viennaps-vulkan-levelset-process-controller-smoke

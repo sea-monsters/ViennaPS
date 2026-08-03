@@ -109,6 +109,24 @@ public:
         state.request.configuredProfilePath, state.request.rebuildSpirvPaths);
   }
 
+  [[nodiscard]] typename Controller::Result configure(
+      ProcessType &process,
+      const std::shared_ptr<runtime::DeploymentComputeContext> &borrowedContext) {
+    if (!state_.has_value()) {
+      typename Controller::Result result;
+      result.message =
+          "Vulkan level-set deployment must be provisioned before configure.";
+      return result;
+    }
+    const auto &state = *state_;
+    return controller_.configureResolved(
+        process, state.request.selection, state.provision.hardware,
+        state.request.workload, state.provision.decision,
+        state.request.manualDevice, state.request.levelSetSpirvPath,
+        state.request.configuredProfilePath, state.request.rebuildSpirvPaths,
+        borrowedContext);
+  }
+
   void resetDeployment() { state_.reset(); }
 
   [[nodiscard]] bool isProvisioned() const { return state_.has_value(); }

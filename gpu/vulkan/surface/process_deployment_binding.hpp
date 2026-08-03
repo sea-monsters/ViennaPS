@@ -358,6 +358,10 @@ public:
   [[nodiscard]] const runtime::DeploymentComputeContext *context() const {
     return context_.get();
   }
+  [[nodiscard]] std::shared_ptr<runtime::DeploymentComputeContext>
+  sharedContext() const {
+    return context_;
+  }
 
 private:
   struct CallbackHolder {

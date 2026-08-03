@@ -55,7 +55,8 @@ public:
       const std::string_view configuredSpirvPath = {},
       const std::string_view configuredProfilePath = {},
       const RebuildSpirvPaths &configuredRebuildSpirvPaths = {},
-      const compute::DeploymentProfileDecision *resolvedDecision = nullptr) {
+      const compute::DeploymentProfileDecision *resolvedDecision = nullptr,
+      std::shared_ptr<runtime::DeploymentComputeContext> borrowedContext = {}) {
     const auto previousUpdateExecutor = process.getLevelSetUpdateExecutor();
     const auto previousRebuildExecutor = process.getLevelSetRebuildExecutor();
     const auto previousFailurePolicy = process.getLevelSetUpdateFailurePolicy();
@@ -73,6 +74,7 @@ public:
         selection.selectionMode == compute::SelectionMode::MANUAL;
 
     const auto state = std::make_shared<RuntimeState>();
+    state->borrowedComputeContext = std::move(borrowedContext);
     const auto requestedBackend = resolveRequestedBackend(selection);
     const bool wantVulkan = requestedBackend == compute::ComputeBackend::VULKAN;
 
@@ -153,18 +155,34 @@ public:
     const std::array workloads{workload};
 
     std::string prepareError;
-    result.prepared =
-        resolvedDecision != nullptr
-            ? state->computeContext.prepare(*resolvedDecision, currentHardware,
-                                            workloads, selection, prepareError,
-                                            manualDevice)
-            : state->computeContext.prepare(currentHardware, workloads,
-                                            selection, configuredProfilePath,
-                                            prepareError, manualDevice);
-    result.selectedBackend =
-        result.prepared
-            ? state->computeContext.backendFor(compute::Stage::LEVEL_SET)
-            : compute::ComputeBackend::CPU;
+    auto &computeContext = state->activeContext();
+    if (state->borrowedComputeContext) {
+      result.prepared = computeContext.isPrepared() &&
+                        computeContext.session() != nullptr;
+      if (!result.prepared)
+        prepareError = "Borrowed Vulkan deployment context is not prepared.";
+    } else {
+      result.prepared =
+          resolvedDecision != nullptr
+              ? computeContext.prepare(*resolvedDecision, currentHardware,
+                                       workloads, selection, prepareError,
+                                       manualDevice)
+              : computeContext.prepare(currentHardware, workloads, selection,
+                                       configuredProfilePath, prepareError,
+                                       manualDevice);
+    }
+    result.selectedBackend = compute::ComputeBackend::CPU;
+    if (result.prepared && resolvedDecision != nullptr) {
+      for (const auto &stage : resolvedDecision->plan.stages) {
+        if (stage.stage == compute::Stage::LEVEL_SET) {
+          result.selectedBackend = stage.selectedBackend;
+          break;
+        }
+      }
+    } else if (result.prepared) {
+      result.selectedBackend =
+          computeContext.backendFor(compute::Stage::LEVEL_SET);
+    }
     result.message = prepareError;
 
     if (!result.prepared) {
@@ -250,7 +268,7 @@ public:
         return result;
       }
 
-      auto *session = state->computeContext.session();
+      auto *session = state->activeContext().session();
       if (session == nullptr) {
         if (result.manualMode) {
           restoreManualState();
@@ -326,7 +344,7 @@ public:
               viennals::Advect<float, D>::LevelSetUpdateOutput &output,
               std::string &error) {
             auto *activeSession =
-                state ? state->computeContext.session() : nullptr;
+                state ? state->activeContext().session() : nullptr;
             if (!state || !state->program || !activeSession ||
                 !activeSession->isValid()) {
               error =
@@ -383,7 +401,7 @@ public:
     result.ok = true;
     result.usingVulkan = false;
     result.degraded =
-        !result.manualMode && state->computeContext.decision().requiresProbe;
+        !result.manualMode && state->activeContext().decision().requiresProbe;
     return result;
   }
 
@@ -398,10 +416,13 @@ public:
                     const runtime::ComputeSessionOptions &manualDevice = {},
                     const std::string_view configuredSpirvPath = {},
                     const std::string_view configuredProfilePath = {},
-                    const RebuildSpirvPaths &configuredRebuildSpirvPaths = {}) {
+                    const RebuildSpirvPaths &configuredRebuildSpirvPaths = {},
+                    std::shared_ptr<runtime::DeploymentComputeContext>
+                        borrowedContext = {}) {
     return configure(process, selection, currentHardware, workload,
                      manualDevice, configuredSpirvPath, configuredProfilePath,
-                     configuredRebuildSpirvPaths, &resolvedDecision);
+                     configuredRebuildSpirvPaths, &resolvedDecision,
+                     std::move(borrowedContext));
   }
 
   void clear(ProcessType &process) const {
@@ -414,11 +435,16 @@ public:
 private:
   struct RuntimeState {
     runtime::DeploymentComputeContext computeContext{};
+    std::shared_ptr<runtime::DeploymentComputeContext> borrowedComputeContext{};
     std::shared_ptr<runtime::SpirvProgram> program{};
     std::shared_ptr<primitives::ReductionScanPrimitives> rebuildPrimitives{};
     std::shared_ptr<runtime::SpirvProgram> rebuildClassificationProgram{};
     std::shared_ptr<runtime::SpirvProgram> rebuildActionFlagsProgram{};
     std::shared_ptr<runtime::SpirvProgram> rebuildCompactProgram{};
+
+    [[nodiscard]] runtime::DeploymentComputeContext &activeContext() {
+      return borrowedComputeContext ? *borrowedComputeContext : computeContext;
+    }
   };
 
   [[nodiscard]] static compute::ComputeBackend

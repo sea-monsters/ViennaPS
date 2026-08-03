@@ -2876,3 +2876,26 @@ uses no session; existing automatic/manual rollback paths are unchanged.
 | RED | No pre-change session identity hook exists; a compile-failure oracle was not invented. The focused assertions were added with the narrow observability needed to exercise the former duplicate-session behavior. |
 | GREEN | A fresh root build with the cached, patched ViennaLS source compiled both controller targets. `ctest -C Debug -R '^viennaps-vulkan-levelset-process-controller(-execution)?-smoke$'` passed 2/2 on Intel Arc in 2.56 s. Both paths asserted a nonzero equal generation and matching nonempty device name. The controller fixture now carries the existing strict-FP32 smoke evidence, so its automatic Vulkan selection exercises the policy instead of weakening it. |
 | Scope boundary | Only `levelset_process_controller.hpp`, its two focused smoke sources, their CTest registration, and this status entry changed; runtime/session types, Process APIs, rebuild executor interfaces, shaders, CUDA, dependencies, and fixed local SDK paths remain untouched. |
+
+### PD3-SESSION-COMPOSE
+
+- Status: `RUN` — shared-context API seam is compiled; five-stage execution
+  smoke remains the next acceptance exit
+- Date: 2026-08-03
+
+`ProcessDeploymentBinding<D>` now exposes its owning
+`shared_ptr<DeploymentComputeContext>`. `LevelSetDeploymentSession<D>` and
+`LevelSetProcessController<D>` accept that context as an explicit borrowed
+dependency. The borrowed path requires an already prepared session, skips
+Level Set context preparation, and derives the selected backend from the
+Level Set decision rather than the surface-only context plan. Runtime state
+retains the borrowed context; its rebuild callback retains runtime state via
+the existing aliasing pointer, so neither path adds a session initialization or
+ownership cycle.
+
+| Gate | Result |
+|---|---|
+| RED / compile contract | New `viennaps-vulkan-levelset-surface-composition-smoke` statically verifies the surface shared-context return type and Level Set borrowed-context configure result. |
+| GREEN (partial) | Fresh Visual Studio configuration with cached, patched ViennaLS compiled the smoke. `ctest -C Debug -R '^viennaps-vulkan-levelset-surface-composition-smoke$'` passed 1/1 in 1.29 s. |
+| Remaining exit | Add and run the execution fixture that provisions all surface and Level Set stages, proves identical nonzero generation/device across five callbacks, compares its simple CPU oracle, and checks copied-callback lifetime plus atomic AUTO/MANUAL behavior. Until then this card remains `RUN`. |
+| Scope boundary | Only the surface shared-context accessor, Level Set borrowed-context overload/controller seam, focused composition smoke/CMake registration, and this status entry changed. Probe/profile policy, CUDA, shaders, global CMake, fixed local paths, and the PD4 worktree remain untouched. |

@@ -2845,7 +2845,7 @@ failure is fail-closed.
 | `PD3-LS-SHARED-SESSION` | `DONE` — accepted 2026-08-03; the implementation claim is released. | `levelset_process_controller.hpp`, its focused smoke/CMake wiring, and this status record. Runtime interface expansion requires a recorded re-card first. | Serial prerequisite is accepted; `PD3-SESSION-COMPOSE` may now be claimed. | Intel Arc controller CTests 2/2 confirm equal nonzero update/rebuild generation and identical device name; no second session initialization; CPU-oracle, Manual-CPU bypass, teardown/reconfigure gates remain covered. |
 | `PD3-SESSION-COMPOSE` | `DONE` — accepted 2026-08-03; five-stage composition uses one shared session. | Exclusive: a composition orchestrator, its focused execution smoke, narrow Process-binding adapters, and this status evidence only. | Accepted serial prerequisite; `PD3-ROOT-INTEGRATION` and `PD4-PERF-BASELINE` may proceed. | One session across coverage, diffusion, neutral velocity, Level Set update/rebuild; copied-callback lifetime; atomic mixed AUTO/MANUAL fallback matrix. |
 | `PD3-ROOT-INTEGRATION` | `READY-S`: requires `PD3-SESSION-COMPOSE` and available patched ViennaLS/CS/VTK prerequisites. | Root integration tests and process/trench fixtures only; no algorithm rewrite. | Serial integration gate. | Root configure/build, focused executor and deployment tests, then non-benchmark CTest/trench CPU oracle; record any host-path blocker exactly. |
-| `PD4-HW-MATRIX` | `RUN — acceptance blocked`: the recorded worktree is prunable/missing and the card/tests remain uncommitted in main; focused CPU CTests and real Intel Arc evidence are not yet recorded. | Exclusive: `docs/design/pd4-hw-matrix-card.md`, `gpu/vulkan/VulkanProbe.cpp`, `tests/vulkanDeploymentProbe/`, `tests/probeProfileAdapter/`, `tests/vulkanDeploymentBootstrap/`, `tests/capabilityProfileIO/`. No production routing changes; no Level Set code. | Recover and verify the worktree before another role edits or validates this card; it may otherwise run beside PD3 composition. | First recover isolation; then record No-SDK disabled, missing/stale/unknown profile fail-closed, focused CPU CTests, strict-FP32 Intel Arc smoke, adapter UUID/driver/queue evidence, and CPU fallback coverage. |
+| `PD4-HW-MATRIX` | `DONE` — accepted 2026-08-03: valid isolated worktree; no-SDK disabled contract, profile/CPU fail-closed fixtures, strict-FP32 Intel Arc success and forced-failure behavior, and fingerprint/queue evidence recorded. | Exclusive: `docs/design/pd4-hw-matrix-card.md`, `gpu/vulkan/VulkanProbe.cpp`, `tests/vulkanDeploymentProbe/`, `tests/probeProfileAdapter/`, `tests/vulkanDeploymentBootstrap/`, `tests/capabilityProfileIO/`. No production routing changes; no Level Set code. | Evidence accepted; future changes require a new defect/extension card. | No-SDK probe exit 0; four focused CPU CTests 4/4; Intel Arc strict PASS with matching identity/queue; forced strict failure exits nonzero and remains fail-closed. |
 | `PD4-PERF-BASELINE` | `READY-S`: requires `PD3-SESSION-COMPOSE` so session-overhead measurements are meaningful. | Benchmark harness/scripts and status evidence only. | May run beside the hardware matrix after its predecessor. | Repeated deterministic CPU/Vulkan runs; submit/dispatch/buffer metrics for coverage, diffusion, neutral, Level Set; CPU correctness check before any performance claim. |
 | `PD5-CI-DOCS-INTEGRATION` | Docs drafting is `READY-P`; CI merge gate is `READY-S` after PD3 root integration and PD4 evidence. | CI workflow/CMake focused options and this status record. | Documentation can proceed in parallel; CI changes wait for evidence. | CPU/no-SDK CI lane, optional self-hosted Vulkan lane, path-hygiene check, linked matrix evidence; CI never requires an SDK. |
 | `PD5-INSTALL-EXPORT` | `READY-S`: requires root integration; optional release gate. | CMake install/export, consumer smoke, and deployment documentation. | Serial release-facing gate. | Install/export consumer compile; CPU configure required; optional Vulkan/VTK cases recorded without absolute local paths. |
@@ -2857,7 +2857,38 @@ lifecycle composition. `PD4` cards are observational until their acceptance
 evidence exists. Every implementation card must use CPU results as its
 correctness oracle on non-CUDA hosts.
 
-### PD3-LS-SHARED-SESSION
+### PD4-HW-MATRIX
+
+- Status: `DONE` — accepted on Intel Arc; claim released
+- Date: 2026-08-03
+
+The card was recovered into the registered `claude/pd4-f84f7c` worktree; no
+prunable legacy worktree or root-level build directory was used. The
+no-SDK standalone probe built and returned the disabled build-time fallback
+contract with exit code 0. In the focused Debug configuration,
+`capabilityProfileIO`, `probeProfileAdapter`, `vulkanDeploymentBootstrap`, and
+`vulkanDeploymentProbe` passed 4/4. Those fixtures cover missing, stale,
+malformed, duplicate/type-invalid, and unknown-schema profiles; CPU
+fail-closed behavior; Manual CPU bypass; and strict child nonzero, timeout,
+malformed-output, mismatched-hardware, invalid-evidence, and cleanup paths.
+
+On the Intel Arc device, strict FP32 succeeded under
+`fp32-bitwise-watchdog-v1` with 18 cases, zero mismatches, zero ULP, 130 ms
+within the 60 s watchdog, and a unique matching device UUID. Profile validation
+passed; the selected compute queue was family 1 with a dedicated queue, and
+compute families were `[0,1]`. The forced strict failure exited nonzero with
+an explicit diagnostic and did not promote Vulkan. The complete raw hardware
+profile and JSON evidence remain local to the validation environment; no local
+SDK, VTK, cache, or profile path is tracked.
+
+| Gate | Result |
+|---|---|
+| No-SDK contract | Standalone diagnostic probe: PASS; exit 0; `status=disabled`, empty devices, and `source=build-time-fallback`. |
+| CPU control plane | Focused CTest: PASS 4/4 in 1.35 s. |
+| Strict success | Intel Arc strict child: PASS; exact FP32 contract and matching deployment profile identity. |
+| Strict negative path | Forced strict failure: PASS; parent exited nonzero, diagnostic retained, and fixture cleanup/adoption coverage passed. |
+| Scope boundary | Only PD4 acceptance documentation changed; production routing, Level Set, global CMake, and local environment paths remain untouched. |
+
 
 - Status: `DONE` — accepted on Intel Arc; claim released
 - Date: 2026-08-03

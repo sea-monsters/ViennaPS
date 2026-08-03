@@ -108,6 +108,9 @@ add_custom_target(viennaps-vulkan-neutral-transport-surface-spv
 
 add_library(viennaps_vulkan_surface neutral_transport_surface.cpp
             neutral_transport_velocity_executor.cpp)
+set_property(TARGET viennaps_vulkan_surface
+             PROPERTY VIENNAPS_VULKAN_NEUTRAL_TRANSPORT_SPV
+                      "${VIENNAPS_VULKAN_SURFACE_SPV}")
 add_dependencies(viennaps_vulkan_surface
                  viennaps-vulkan-neutral-transport-surface-spv)
 target_link_libraries(viennaps_vulkan_surface
@@ -124,6 +127,9 @@ else()
 endif()
 
 add_library(viennaps_vulkan_graph_diffusion graph_diffusion.cpp)
+set_property(TARGET viennaps_vulkan_graph_diffusion
+             PROPERTY VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV
+                      "${VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV}")
 add_dependencies(viennaps_vulkan_graph_diffusion
                  viennaps-vulkan-graph-diffusion-spv)
 target_link_libraries(viennaps_vulkan_graph_diffusion
@@ -155,6 +161,9 @@ endif()
 
 add_library(viennaps_vulkan_coverage_delta_metric
             coverage_delta_metric.cpp coverage_delta_executor.cpp)
+set_property(TARGET viennaps_vulkan_coverage_delta_metric
+             PROPERTY VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV
+                      "${VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV}")
 add_dependencies(viennaps_vulkan_coverage_delta_metric
                  viennaps-vulkan-coverage-delta-metric-spv)
 target_link_libraries(viennaps_vulkan_coverage_delta_metric

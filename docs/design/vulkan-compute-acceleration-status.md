@@ -2843,7 +2843,7 @@ failure is fail-closed.
 | `BASE` through `PD1-B` | `DONE`: profile cache/probe, primitives/BVH, Level Set seam, CPU executor seams, coverage/surface bridges, and two-stage Process binding are accepted. | Existing runtime, primitives, profile I/O, coverage, and surface-diffusion code; no compatibility rewrite. | Baseline only; do not reopen without a defect card. | Existing focused CPU differentials and Intel Arc smoke records in this document. |
 | `PD2-A` / `PD2-B` / `PD2-C` | `DONE`: neutral stage policy, borrowed neutral bridge, and three-stage Process binding accepted. | `backendPolicy.hpp`; neutral surface/executor; Process binding and its smoke/CMake target. | Baseline only; later cards consume these interfaces. | Policy CTest; neutral bridge CTests 2/2; Process-binding CTest 1/1 with CPU raw-bit oracle. |
 | `PD3-LS-SHARED-SESSION` | `DONE` — accepted 2026-08-03; the implementation claim is released. | `levelset_process_controller.hpp`, its focused smoke/CMake wiring, and this status record. Runtime interface expansion requires a recorded re-card first. | Serial prerequisite is accepted; `PD3-SESSION-COMPOSE` may now be claimed. | Intel Arc controller CTests 2/2 confirm equal nonzero update/rebuild generation and identical device name; no second session initialization; CPU-oracle, Manual-CPU bypass, teardown/reconfigure gates remain covered. |
-| `PD3-SESSION-COMPOSE` | `RUN` — claimed 2026-08-03 by `root/PD3-SESSION-COMPOSE`; `PD3-LS-SHARED-SESSION` is accepted. | Exclusive: a new composition smoke/orchestrator and narrow adapters between Process binding and Level Set deployment session; this status record only for this card's evidence. | Sole cross-surface/Level Set owner; do not duplicate bridge ownership or edit PD4 probe/profile files. | One session across coverage, diffusion, neutral velocity, Level Set update/rebuild; copied-callback lifetime; atomic mixed AUTO/MANUAL fallback matrix. |
+| `PD3-SESSION-COMPOSE` | `DONE` — accepted 2026-08-03; five-stage composition uses one shared session. | Exclusive: a composition orchestrator, its focused execution smoke, narrow Process-binding adapters, and this status evidence only. | Accepted serial prerequisite; `PD3-ROOT-INTEGRATION` and `PD4-PERF-BASELINE` may proceed. | One session across coverage, diffusion, neutral velocity, Level Set update/rebuild; copied-callback lifetime; atomic mixed AUTO/MANUAL fallback matrix. |
 | `PD3-ROOT-INTEGRATION` | `READY-S`: requires `PD3-SESSION-COMPOSE` and available patched ViennaLS/CS/VTK prerequisites. | Root integration tests and process/trench fixtures only; no algorithm rewrite. | Serial integration gate. | Root configure/build, focused executor and deployment tests, then non-benchmark CTest/trench CPU oracle; record any host-path blocker exactly. |
 | `PD4-HW-MATRIX` | `RUN — acceptance blocked`: the recorded worktree is prunable/missing and the card/tests remain uncommitted in main; focused CPU CTests and real Intel Arc evidence are not yet recorded. | Exclusive: `docs/design/pd4-hw-matrix-card.md`, `gpu/vulkan/VulkanProbe.cpp`, `tests/vulkanDeploymentProbe/`, `tests/probeProfileAdapter/`, `tests/vulkanDeploymentBootstrap/`, `tests/capabilityProfileIO/`. No production routing changes; no Level Set code. | Recover and verify the worktree before another role edits or validates this card; it may otherwise run beside PD3 composition. | First recover isolation; then record No-SDK disabled, missing/stale/unknown profile fail-closed, focused CPU CTests, strict-FP32 Intel Arc smoke, adapter UUID/driver/queue evidence, and CPU fallback coverage. |
 | `PD4-PERF-BASELINE` | `READY-S`: requires `PD3-SESSION-COMPOSE` so session-overhead measurements are meaningful. | Benchmark harness/scripts and status evidence only. | May run beside the hardware matrix after its predecessor. | Repeated deterministic CPU/Vulkan runs; submit/dispatch/buffer metrics for coverage, diffusion, neutral, Level Set; CPU correctness check before any performance claim. |
@@ -2879,23 +2879,25 @@ uses no session; existing automatic/manual rollback paths are unchanged.
 
 ### PD3-SESSION-COMPOSE
 
-- Status: `RUN` — shared-context API seam is compiled; five-stage execution
-  smoke remains the next acceptance exit
+- Status: `DONE` — accepted on Intel Arc; claim released
 - Date: 2026-08-03
 
-`ProcessDeploymentBinding<D>` now exposes its owning
-`shared_ptr<DeploymentComputeContext>`. `LevelSetDeploymentSession<D>` and
-`LevelSetProcessController<D>` accept that context as an explicit borrowed
-dependency. The borrowed path requires an already prepared session, skips
-Level Set context preparation, and derives the selected backend from the
-Level Set decision rather than the surface-only context plan. Runtime state
-retains the borrowed context; its rebuild callback retains runtime state via
-the existing aliasing pointer, so neither path adds a session initialization or
-ownership cycle.
+`LevelSetSurfaceDeploymentComposition<D>` is now the sole deployment-time
+owner coordinating the Process surface binding and Level Set controller. It
+prepares the exact four-stage workload plan once, then passes the Process
+binding's `DeploymentComputeContext` to Level Set as a borrowed dependency.
+Coverage, surface diffusion, neutral velocity, Level Set update, and Level Set
+rebuild therefore execute through one `ComputeSession`. The composition clears
+all installed callbacks before releasing state; copied callbacks retain their
+shared holders and remain usable until their copies are released. A partial
+AUTO configuration degrades atomically to CPU, while Manual Vulkan failure
+remains explicit and Manual CPU provisions no Vulkan state.
 
 | Gate | Result |
 |---|---|
-| RED / compile contract | New `viennaps-vulkan-levelset-surface-composition-smoke` statically verifies the surface shared-context return type and Level Set borrowed-context configure result. |
-| GREEN (partial) | Fresh Visual Studio configuration with cached, patched ViennaLS compiled the smoke. `ctest -C Debug -R '^viennaps-vulkan-levelset-surface-composition-smoke$'` passed 1/1 in 1.29 s. |
-| Remaining exit | Add and run the execution fixture that provisions all surface and Level Set stages, proves identical nonzero generation/device across five callbacks, compares its simple CPU oracle, and checks copied-callback lifetime plus atomic AUTO/MANUAL behavior. Until then this card remains `RUN`. |
-| Scope boundary | Only the surface shared-context accessor, Level Set borrowed-context overload/controller seam, focused composition smoke/CMake registration, and this status entry changed. Probe/profile policy, CUDA, shaders, global CMake, fixed local paths, and the PD4 worktree remain untouched. |
+| Build | Fresh task-local Visual Studio Debug build compiled the new five-stage execution fixture and its three companion PD3 smoke targets with `cmake --build .build-pd3-session-compose --config Debug --parallel 8`. The build reused validated local dependency inputs only through ignored CMake cache settings. |
+| Focused CTest | `ctest --test-dir .build-pd3-session-compose -C Debug --output-on-failure -R 'viennaps-vulkan-levelset-(surface-composition|surface-composition-execution|process-controller|process-controller-execution)-smoke'` passed 4/4 in 2.21 s. |
+| Five-stage execution | On Intel Arc, the execution fixture reported `five callbacks share one generation/device with CPU oracle PASS`: coverage and diffusion raw-bit oracles, neutral velocity raw-bit CPU/GPU oracle, and CPU/Vulkan Level Set advection comparison all passed. It asserted a nonzero common generation and identical device identity for surface, update, and rebuild. |
+| Lifetime and policy matrix | The fixture invokes copied coverage, diffusion, neutral, update, and rebuild callbacks after `clear(process)`. It also verifies valid mixed Manual Vulkan-surface/Manual-CPU-Level-Set selection, atomic AUTO degradation with a missing surface shader, explicit Manual Vulkan failure with no silent CPU callback set, and Manual CPU success without a context or GPU callbacks. |
+| Companion regressions | The API smoke and both Level Set controller smokes passed. The controller execution fixture also exercised its existing strict callback failure paths and completed successfully. |
+| Scope boundary | Only the narrow composition owner/execution fixture, Process binding/CMake artifact wiring required for the exact full plan and neutral callback retention, and this status record changed. Probe/profile policy, CUDA, shaders, global CMake, fixed local paths, and PD4-owned files remain untouched. |

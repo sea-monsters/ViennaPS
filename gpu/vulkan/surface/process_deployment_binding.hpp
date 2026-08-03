@@ -24,6 +24,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace viennaps::vulkan::surface {
 
@@ -129,11 +130,13 @@ private:
     for (const auto &workload : workloads) {
       if (workload.stage != compute::Stage::COVERAGE &&
           workload.stage != compute::Stage::SURFACE_DIFFUSION &&
+          workload.stage != compute::Stage::LEVEL_SET &&
           (!allowNeutral ||
            workload.stage != compute::Stage::NEUTRAL_TRANSPORT_VELOCITY)) {
         result.message =
             "Process surface binding supports only COVERAGE, "
-            "SURFACE_DIFFUSION, and NEUTRAL_TRANSPORT_VELOCITY workloads";
+            "SURFACE_DIFFUSION, NEUTRAL_TRANSPORT_VELOCITY, and "
+            "composition-owned LEVEL_SET workloads";
         return result;
       }
     }
@@ -361,6 +364,17 @@ public:
   [[nodiscard]] std::shared_ptr<runtime::DeploymentComputeContext>
   sharedContext() const {
     return context_;
+  }
+
+  [[nodiscard]] typename NeutralSurfaceModel::VelocityExecutor
+  neutralVelocityExecutor() const {
+    const auto holder = holder_;
+    if (holder == nullptr)
+      return {};
+    return [holder](viennaps::NeutralTransportVelocityWork<float> &work,
+                    std::string &invokeError) {
+      return holder->neutralTransportVelocity.makeExecutor()(work, invokeError);
+    };
   }
 
 private:

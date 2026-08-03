@@ -381,6 +381,56 @@ if(VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE AND TARGET ViennaPS)
                            PRIVATE -Wall -Wextra -Wpedantic)
   endif()
 
+  add_executable(viennaps-vulkan-levelset-surface-composition-execution-smoke
+                 levelset_surface_composition_execution_smoke.cpp)
+  add_dependencies(
+    viennaps-vulkan-levelset-surface-composition-execution-smoke
+    viennaps-vulkan-levelset-update-spv
+    viennaps-vulkan-hrle-classification-spv
+    viennaps-vulkan-reduction-scan-smoke-spv
+    viennaps-vulkan-hrle-compaction-spv
+    viennaps-vulkan-coverage-delta-metric-spv
+    viennaps-vulkan-graph-diffusion-spv
+    viennaps-vulkan-neutral-transport-surface-spv)
+  target_compile_definitions(
+    viennaps-vulkan-levelset-surface-composition-execution-smoke PRIVATE
+    "VIENNAPS_LEVELSET_UPDATE_SPV_PATH=\"${_VIENNAPS_LEVELSET_UPDATE_SPV_PATH}\""
+    "VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH=\"${_VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH}\""
+    "VIENNAPS_REDUCTION_SCAN_SPV_PATH=\"${_VIENNAPS_REDUCTION_SCAN_SPV_PATH}\""
+    "VIENNAPS_HRLE_ACTION_FLAGS_SPV_PATH=\"${_VIENNAPS_HRLE_ACTION_FLAGS_SPV_PATH}\""
+    "VIENNAPS_HRLE_COMPACT_SPV_PATH=\"${_VIENNAPS_HRLE_COMPACT_SPV_PATH}\""
+    "VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV_PATH=\"$<TARGET_PROPERTY:viennaps_vulkan_coverage_delta_metric,VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV>\""
+    "VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH=\"$<TARGET_PROPERTY:viennaps_vulkan_graph_diffusion,VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV>\""
+    "VIENNAPS_VULKAN_NEUTRAL_TRANSPORT_SPV_PATH=\"$<TARGET_PROPERTY:viennaps_vulkan_surface,VIENNAPS_VULKAN_NEUTRAL_TRANSPORT_SPV>\"")
+  target_link_libraries(
+    viennaps-vulkan-levelset-surface-composition-execution-smoke
+    PRIVATE ViennaPS viennaps_vulkan_levelset_update
+            viennaps_vulkan_hrle_compaction
+            viennaps_vulkan_surface_diffusion
+            viennaps_vulkan_coverage_delta_metric
+            viennaps_vulkan_surface)
+  target_compile_features(
+    viennaps-vulkan-levelset-surface-composition-execution-smoke PRIVATE cxx_std_20)
+  if(WIN32)
+    find_package(TBB CONFIG REQUIRED COMPONENTS tbb)
+    add_custom_command(
+      TARGET viennaps-vulkan-levelset-surface-composition-execution-smoke
+      POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              $<TARGET_RUNTIME_DLLS:viennaps-vulkan-levelset-surface-composition-execution-smoke>
+              $<TARGET_FILE:TBB::tbb>
+              $<TARGET_FILE_DIR:viennaps-vulkan-levelset-surface-composition-execution-smoke>
+      COMMAND_EXPAND_LISTS)
+  endif()
+  if(MSVC)
+    target_compile_options(
+      viennaps-vulkan-levelset-surface-composition-execution-smoke PRIVATE /W4)
+  else()
+    target_compile_options(
+      viennaps-vulkan-levelset-surface-composition-execution-smoke
+      PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+
   add_executable(viennaps-vulkan-levelset-deployment-session-smoke
                  levelset_deployment_session_smoke.cpp)
   target_link_libraries(viennaps-vulkan-levelset-deployment-session-smoke
@@ -423,6 +473,10 @@ if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
   if(TARGET viennaps-vulkan-levelset-surface-composition-smoke)
     add_test(NAME viennaps-vulkan-levelset-surface-composition-smoke
              COMMAND viennaps-vulkan-levelset-surface-composition-smoke)
+  endif()
+  if(TARGET viennaps-vulkan-levelset-surface-composition-execution-smoke)
+    add_test(NAME viennaps-vulkan-levelset-surface-composition-execution-smoke
+             COMMAND viennaps-vulkan-levelset-surface-composition-execution-smoke)
   endif()
   if(TARGET viennaps-vulkan-levelset-process-controller-smoke)
     add_test(NAME viennaps-vulkan-levelset-process-controller-smoke

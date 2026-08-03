@@ -1,0 +1,206 @@
+{
+  "schema": "pd4-perf-baseline.v1",
+  "recorded_at_utc": "2026-08-03T14:33:27.1062266Z",
+  "build_directory": ".tmp_pd3_vulkan_final_20260803",
+  "iterations": 3,
+  "correctness_gate": "all selected CPU/Vulkan smoke runs exit 0 and emit their oracle PASS marker",
+  "metric_boundary": "contract-site counts are source inventories; elapsed_ms is measured per process run; no runtime counter is inferred",
+  "deterministic_correctness": true,
+  "results": [
+    {
+      "suite": "coverage",
+      "iteration": 1,
+      "exit_code": 0,
+      "cpu_correctness": true,
+      "elapsed_ms": 366.3,
+      "observed": "[CoverageDeltaMetric] CPU/Vulkan exact PASS for N=1,16,257",
+      "contract_metrics": {
+        "dispatch_sites": 2,
+        "submit_sites": 2,
+        "buffer_create_sites": 3
+      }
+    },
+    {
+      "suite": "coverage",
+      "iteration": 2,
+      "exit_code": 0,
+      "cpu_correctness": true,
+      "elapsed_ms": 344.848,
+      "observed": "[CoverageDeltaMetric] CPU/Vulkan exact PASS for N=1,16,257",
+      "contract_metrics": {
+        "dispatch_sites": 2,
+        "submit_sites": 2,
+        "buffer_create_sites": 3
+      }
+    },
+    {
+      "suite": "coverage",
+      "iteration": 3,
+      "exit_code": 0,
+      "cpu_correctness": true,
+      "elapsed_ms": 333.367,
+      "observed": "[CoverageDeltaMetric] CPU/Vulkan exact PASS for N=1,16,257",
+      "contract_metrics": {
+        "dispatch_sites": 2,
+        "submit_sites": 2,
+        "buffer_create_sites": 3
+      }
+    },
+    {
+      "suite": "diffusion",
+      "iteration": 1,
+      "exit_code": 0,
+      "cpu_correctness": true,
+      "elapsed_ms": 468.748,
+      "observed": "[GraphDiffusion] CPU/Vulkan exact PASS, N=5 nnz=11",
+      "contract_metrics": {
+        "dispatch_sites": 2,
+        "submit_sites": 2,
+        "buffer_create_sites": 4
+      }
+    },
+    {
+      "suite": "diffusion",
+      "iteration": 2,
+      "exit_code": 0,
+      "cpu_correctness": true,
+      "elapsed_ms": 410.629,
+      "observed": "[GraphDiffusion] CPU/Vulkan exact PASS, N=5 nnz=11",
+      "contract_metrics": {
+        "dispatch_sites": 2,
+        "submit_sites": 2,
+        "buffer_create_sites": 4
+      }
+    },
+    {
+      "suite": "diffusion",
+      "iteration": 3,
+      "exit_code": 0,
+      "cpu_correctness": true,
+      "elapsed_ms": 451.357,
+      "observed": "[GraphDiffusion] CPU/Vulkan exact PASS, N=5 nnz=11",
+      "contract_metrics": {
+        "dispatch_sites": 2,
+        "submit_sites": 2,
+        "buffer_create_sites": 4
+      }
+    },
+    {
+      "suite": "neutral",
+      "iteration": 1,
+      "exit_code": 0,
+      "cpu_correctness": true,
+      "elapsed_ms": 441.604,
+      "observed": "[NeutralTransportSurface] lengths=0,1,16,257,1025 CPU/Vulkan bit-exact PASS; exact=1299/1299 maxULP=0; strict/boundary bit-exact PASS; nonnormal rejection PASS; device=Intel(R) Arc(TM) Graphics",
+      "contract_metrics": {
+        "dispatch_sites": 1,
+        "submit_sites": 1,
+        "buffer_create_sites": 2
+      }
+    },
+    {
+      "suite": "neutral",
+      "iteration": 2,
+      "exit_code": 0,
+      "cpu_correctness": true,
+      "elapsed_ms": 479.165,
+      "observed": "[NeutralTransportSurface] lengths=0,1,16,257,1025 CPU/Vulkan bit-exact PASS; exact=1299/1299 maxULP=0; strict/boundary bit-exact PASS; nonnormal rejection PASS; device=Intel(R) Arc(TM) Graphics",
+      "contract_metrics": {
+        "dispatch_sites": 1,
+        "submit_sites": 1,
+        "buffer_create_sites": 2
+      }
+    },
+    {
+      "suite": "neutral",
+      "iteration": 3,
+      "exit_code": 0,
+      "cpu_correctness": true,
+      "elapsed_ms": 452.061,
+      "observed": "[NeutralTransportSurface] lengths=0,1,16,257,1025 CPU/Vulkan bit-exact PASS; exact=1299/1299 maxULP=0; strict/boundary bit-exact PASS; nonnormal rejection PASS; device=Intel(R) Arc(TM) Graphics",
+      "contract_metrics": {
+        "dispatch_sites": 1,
+        "submit_sites": 1,
+        "buffer_create_sites": 2
+      }
+    },
+    {
+      "suite": "levelset-update",
+      "iteration": 1,
+      "exit_code": 0,
+      "cpu_correctness": true,
+      "elapsed_ms": 250.957,
+      "observed": "[LevelSetUpdate] count=0 exact PASS",
+      "contract_metrics": {
+        "dispatch_sites": 1,
+        "submit_sites": 1,
+        "buffer_create_sites": 1
+      }
+    },
+    {
+      "suite": "levelset-update",
+      "iteration": 2,
+      "exit_code": 0,
+      "cpu_correctness": true,
+      "elapsed_ms": 246.07,
+      "observed": "[LevelSetUpdate] count=0 exact PASS",
+      "contract_metrics": {
+        "dispatch_sites": 1,
+        "submit_sites": 1,
+        "buffer_create_sites": 1
+      }
+    },
+    {
+      "suite": "levelset-update",
+      "iteration": 3,
+      "exit_code": 0,
+      "cpu_correctness": true,
+      "elapsed_ms": 260.263,
+      "observed": "[LevelSetUpdate] count=0 exact PASS",
+      "contract_metrics": {
+        "dispatch_sites": 1,
+        "submit_sites": 1,
+        "buffer_create_sites": 1
+      }
+    },
+    {
+      "suite": "levelset-composition",
+      "iteration": 1,
+      "exit_code": 0,
+      "cpu_correctness": true,
+      "elapsed_ms": 4458.091,
+      "observed": "\u001b[0m[LevelSetSurfaceCompositionExecution] five callbacks share one generation/device with CPU oracle PASS",
+      "contract_metrics": {
+        "dispatch_sites": 8,
+        "submit_sites": 8,
+        "buffer_create_sites": 16
+      }
+    },
+    {
+      "suite": "levelset-composition",
+      "iteration": 2,
+      "exit_code": 0,
+      "cpu_correctness": true,
+      "elapsed_ms": 4332.262,
+      "observed": "\u001b[0m[LevelSetSurfaceCompositionExecution] five callbacks share one generation/device with CPU oracle PASS",
+      "contract_metrics": {
+        "dispatch_sites": 8,
+        "submit_sites": 8,
+        "buffer_create_sites": 16
+      }
+    },
+    {
+      "suite": "levelset-composition",
+      "iteration": 3,
+      "exit_code": 0,
+      "cpu_correctness": true,
+      "elapsed_ms": 3442.134,
+      "observed": "\u001b[0m[LevelSetSurfaceCompositionExecution] five callbacks share one generation/device with CPU oracle PASS",
+      "contract_metrics": {
+        "dispatch_sites": 8,
+        "submit_sites": 8,
+        "buffer_create_sites": 16
+      }
+    }
+  ]
+}

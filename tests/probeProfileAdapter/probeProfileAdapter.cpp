@@ -157,12 +157,42 @@ void TestAdapterInvalidValidationStatusFailsClosed() {
   auto facts = defaultFacts();
   facts.validationEvidence.primitiveSuite =
       static_cast<VulkanProbeSuiteStatus>(99);
+  facts.validationEvidence.fp32Suite = static_cast<VulkanProbeSuiteStatus>(99);
   facts.validationEvidence.fp64Suite = static_cast<VulkanProbeSuiteStatus>(99);
   const auto result =
       adaptVulkanProbeFactsToCapabilityProfile(facts, "2026-01-01T00:00:00Z");
   VC_TEST_ASSERT(result.ok);
   VC_TEST_ASSERT(!result.record.capabilityProfile.vulkanPrimitiveSuitePass);
   VC_TEST_ASSERT(!result.record.capabilityProfile.vulkanFp64SuitePass);
+}
+
+void TestAdapterUnknownNumericalEvidenceFallsBackToCpu() {
+  auto facts = defaultFacts();
+  facts.memoryBudgetExtensionAvailable = true;
+  facts.memoryBudgetBytes = {miB(2048)};
+  facts.validationEvidence.primitiveSuite = VulkanProbeSuiteStatus::PASS;
+  facts.validationEvidence.fp32Suite = VulkanProbeSuiteStatus::PASS;
+  facts.validationEvidence.fp32NumericalSmoke.status =
+      static_cast<VulkanNumericalSmokeStatus>(99);
+  facts.validationEvidence.fp32NumericalSmoke.contractId =
+      std::string(kVulkanFp32NumericalSmokeContract);
+  facts.validationEvidence.fp32NumericalSmoke.caseCount = 1U;
+  facts.validationEvidence.fp32NumericalSmoke.maxUlp = 0U;
+  facts.validationEvidence.fp32NumericalSmoke.watchdogMs =
+      kVulkanFp32NumericalSmokeWatchdogMs;
+
+  const auto result =
+      adaptVulkanProbeFactsToCapabilityProfile(facts, "2026-01-01T00:00:00Z");
+  VC_TEST_ASSERT(result.ok);
+  VC_TEST_ASSERT(result.record.capabilityProfile.vulkanPrimitiveSuitePass);
+  VC_TEST_ASSERT(
+      result.record.capabilityProfile.vulkanFp32NumericalSmoke.status ==
+      static_cast<VulkanNumericalSmokeStatus>(99));
+
+  const std::vector<StageWorkload> workloads = {
+      {Stage::LEVEL_SET, Precision::FP32, miB(1), false, RayMode::NONE, true}};
+  const auto plan = buildSelectionPlan(result.record.capabilityProfile, workloads);
+  VC_TEST_ASSERT(plan.stages[0].selectedBackend == ComputeBackend::CPU);
 }
 
 void TestAdapterFp64SuiteRequiresShaderFloat64Feature() {

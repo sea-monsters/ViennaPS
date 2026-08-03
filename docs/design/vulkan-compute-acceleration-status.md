@@ -2843,10 +2843,10 @@ failure is fail-closed.
 | `BASE` through `PD1-B` | `DONE`: profile cache/probe, primitives/BVH, Level Set seam, CPU executor seams, coverage/surface bridges, and two-stage Process binding are accepted. | Existing runtime, primitives, profile I/O, coverage, and surface-diffusion code; no compatibility rewrite. | Baseline only; do not reopen without a defect card. | Existing focused CPU differentials and Intel Arc smoke records in this document. |
 | `PD2-A` / `PD2-B` / `PD2-C` | `DONE`: neutral stage policy, borrowed neutral bridge, and three-stage Process binding accepted. | `backendPolicy.hpp`; neutral surface/executor; Process binding and its smoke/CMake target. | Baseline only; later cards consume these interfaces. | Policy CTest; neutral bridge CTests 2/2; Process-binding CTest 1/1 with CPU raw-bit oracle. |
 | `PD3-LS-SHARED-SESSION` | `DONE` — accepted 2026-08-03; the implementation claim is released. | `levelset_process_controller.hpp`, its focused smoke/CMake wiring, and this status record. Runtime interface expansion requires a recorded re-card first. | Serial prerequisite is accepted; `PD3-SESSION-COMPOSE` may now be claimed. | Intel Arc controller CTests 2/2 confirm equal nonzero update/rebuild generation and identical device name; no second session initialization; CPU-oracle, Manual-CPU bypass, teardown/reconfigure gates remain covered. |
-| `PD3-SESSION-COMPOSE` | `DONE` — accepted 2026-08-03; five-stage composition uses one shared session. | Exclusive: a composition orchestrator, its focused execution smoke, narrow Process-binding adapters, and this status evidence only. | Accepted serial prerequisite; `PD3-ROOT-INTEGRATION` and `PD4-PERF-BASELINE` may proceed. | One session across coverage, diffusion, neutral velocity, Level Set update/rebuild; copied-callback lifetime; atomic mixed AUTO/MANUAL fallback matrix. |
-| `PD3-ROOT-INTEGRATION` | `READY-S`: requires `PD3-SESSION-COMPOSE` and available patched ViennaLS/CS/VTK prerequisites. | Root integration tests and process/trench fixtures only; no algorithm rewrite. | Serial integration gate. | Root configure/build, focused executor and deployment tests, then non-benchmark CTest/trench CPU oracle; record any host-path blocker exactly. |
-| `PD4-HW-MATRIX` | `DONE` — accepted 2026-08-03: valid isolated worktree; no-SDK disabled contract, profile/CPU fail-closed fixtures, strict-FP32 Intel Arc success and forced-failure behavior, and fingerprint/queue evidence recorded. | Exclusive: `docs/design/pd4-hw-matrix-card.md`, `gpu/vulkan/VulkanProbe.cpp`, `tests/vulkanDeploymentProbe/`, `tests/probeProfileAdapter/`, `tests/vulkanDeploymentBootstrap/`, `tests/capabilityProfileIO/`. No production routing changes; no Level Set code. | Evidence accepted; future changes require a new defect/extension card. | No-SDK probe exit 0; four focused CPU CTests 4/4; Intel Arc strict PASS with matching identity/queue; forced strict failure exits nonzero and remains fail-closed. |
-| `PD4-PERF-BASELINE` | `READY-S`: requires `PD3-SESSION-COMPOSE` so session-overhead measurements are meaningful. | Benchmark harness/scripts and status evidence only. | May run beside the hardware matrix after its predecessor. | Repeated deterministic CPU/Vulkan runs; submit/dispatch/buffer metrics for coverage, diffusion, neutral, Level Set; CPU correctness check before any performance claim. |
+| `PD3-SESSION-COMPOSE` | `DONE` — accepted on main 2026-08-03 after root rebuild and focused execution evidence. | Exclusive: a composition orchestrator, its focused execution smoke, narrow Process-binding adapters, and this status evidence only. | Follow-up work may continue on `PD4-PERF-BASELINE`; do not treat this row as a release gate. | One session across coverage, diffusion, neutral velocity, Level Set update/rebuild; copied-callback lifetime; atomic mixed AUTO/MANUAL fallback matrix. |
+| `PD3-ROOT-INTEGRATION` | `DONE` — accepted on main 2026-08-03; full targeted integration evidence is recorded below. | Root integration tests and process/trench fixtures only; no algorithm rewrite. | Serial integration gate is released. | Root configure/build, focused executor and deployment tests, 96/96 non-benchmark CTest excluding the pre-existing long `vulkanCpuBaseline`, and trench CPU oracle. |
+| `PD4-HW-MATRIX` | `RUN` — implementation/evidence snapshot merged 2026-08-03; completion is not claimed. | Exclusive: `docs/design/pd4-hw-matrix-card.md`, `gpu/vulkan/VulkanProbe.cpp`, `tests/vulkanDeploymentProbe/`, `tests/probeProfileAdapter/`, `tests/vulkanDeploymentBootstrap/`, `tests/capabilityProfileIO/`. No production routing changes; no Level Set code. | Continue from the recorded evidence; do not treat this row as a release gate. | No-SDK probe exit 0; four focused CPU CTests 4/4; Intel Arc strict PASS with matching identity/queue; forced strict failure exits nonzero and remains fail-closed. |
+| `PD4-PERF-BASELINE` | `DONE` — accepted on main 2026-08-03 as a reproducible baseline evidence card; no optimization claim is implied. | `cmake/run-pd4-perf-baseline.ps1` and its dated JSON evidence only. | Baseline is available to PD5 and later optimization cards. | Five selected CPU/Vulkan smoke suites, three repetitions each, all oracle gates PASS; dispatch/submit/buffer contract metrics and wall-time samples recorded. |
 | `PD5-CI-DOCS-INTEGRATION` | Docs drafting is `READY-P`; CI merge gate is `READY-S` after PD3 root integration and PD4 evidence. | CI workflow/CMake focused options and this status record. | Documentation can proceed in parallel; CI changes wait for evidence. | CPU/no-SDK CI lane, optional self-hosted Vulkan lane, path-hygiene check, linked matrix evidence; CI never requires an SDK. |
 | `PD5-INSTALL-EXPORT` | `READY-S`: requires root integration; optional release gate. | CMake install/export, consumer smoke, and deployment documentation. | Serial release-facing gate. | Install/export consumer compile; CPU configure required; optional Vulkan/VTK cases recorded without absolute local paths. |
 
@@ -2859,7 +2859,7 @@ correctness oracle on non-CUDA hosts.
 
 ### PD4-HW-MATRIX
 
-- Status: `DONE` — accepted on Intel Arc; claim released
+- Status: `RUN` — implementation/evidence snapshot recorded; completion is not claimed
 - Date: 2026-08-03
 
 The card was recovered into the registered `claude/pd4-f84f7c` worktree; no
@@ -2887,10 +2887,12 @@ SDK, VTK, cache, or profile path is tracked.
 | CPU control plane | Focused CTest: PASS 4/4 in 1.35 s. |
 | Strict success | Intel Arc strict child: PASS; exact FP32 contract and matching deployment profile identity. |
 | Strict negative path | Forced strict failure: PASS; parent exited nonzero, diagnostic retained, and fixture cleanup/adoption coverage passed. |
-| Scope boundary | Only PD4 acceptance documentation changed; production routing, Level Set, global CMake, and local environment paths remain untouched. |
+| Scope boundary | PD4 acceptance documentation and focused test evidence are being carried forward; production routing, Level Set, global CMake, and local environment paths remain untouched. |
+
+### PD3-LS-SHARED-SESSION
 
 
-- Status: `DONE` — accepted on Intel Arc; claim released
+- Status: `DONE` — accepted on main 2026-08-03; the implementation claim is released
 - Date: 2026-08-03
 
 `LevelSetProcessController<D>` now provisions the update and rebuild paths from
@@ -2910,7 +2912,7 @@ uses no session; existing automatic/manual rollback paths are unchanged.
 
 ### PD3-SESSION-COMPOSE
 
-- Status: `DONE` — accepted on Intel Arc; claim released
+- Status: `DONE` — accepted on main after root rebuild and focused execution evidence
 - Date: 2026-08-03
 
 `LevelSetSurfaceDeploymentComposition<D>` is now the sole deployment-time
@@ -2926,9 +2928,79 @@ remains explicit and Manual CPU provisions no Vulkan state.
 
 | Gate | Result |
 |---|---|
-| Build | Fresh task-local Visual Studio Debug build compiled the new five-stage execution fixture and its three companion PD3 smoke targets with `cmake --build .build-pd3-session-compose --config Debug --parallel 8`. The build reused validated local dependency inputs only through ignored CMake cache settings. |
-| Focused CTest | `ctest --test-dir .build-pd3-session-compose -C Debug --output-on-failure -R 'viennaps-vulkan-levelset-(surface-composition|surface-composition-execution|process-controller|process-controller-execution)-smoke'` passed 4/4 in 2.21 s. |
+| Build | Fresh root Vulkan/Ninja configuration with the repository CPM cache succeeded; `cmake --build .tmp_pd3_vulkan_final_20260803 --parallel 4` compiled the root targets and the five-stage execution fixture. |
+| Focused CTest | `ctest --test-dir .tmp_pd3_vulkan_final_20260803 --output-on-failure -R 'viennaps-vulkan-(levelset-(deployment-session|surface-composition|process-controller)|process-deployment-binding)'` passed 6/6 in 7.30 s. |
 | Five-stage execution | On Intel Arc, the execution fixture reported `five callbacks share one generation/device with CPU oracle PASS`: coverage and diffusion raw-bit oracles, neutral velocity raw-bit CPU/GPU oracle, and CPU/Vulkan Level Set advection comparison all passed. It asserted a nonzero common generation and identical device identity for surface, update, and rebuild. |
 | Lifetime and policy matrix | The fixture invokes copied coverage, diffusion, neutral, update, and rebuild callbacks after `clear(process)`. It also verifies valid mixed Manual Vulkan-surface/Manual-CPU-Level-Set selection, atomic AUTO degradation with a missing surface shader, explicit Manual Vulkan failure with no silent CPU callback set, and Manual CPU success without a context or GPU callbacks. |
 | Companion regressions | The API smoke and both Level Set controller smokes passed. The controller execution fixture also exercised its existing strict callback failure paths and completed successfully. |
-| Scope boundary | Only the narrow composition owner/execution fixture, Process binding/CMake artifact wiring required for the exact full plan and neutral callback retention, and this status record changed. Probe/profile policy, CUDA, shaders, global CMake, fixed local paths, and PD4-owned files remain untouched. |
+| Scope boundary | The composition owner/execution fixture, Process binding/CMake artifact wiring required for the exact full plan and neutral callback retention are complete. Probe/profile policy, CUDA, and production routing remain outside this card. |
+
+### PD3-ROOT-INTEGRATION
+
+- Status: `DONE` — accepted on main 2026-08-03; the targeted integration claim is released
+- Date: 2026-08-03
+
+The root checkout now has a reproducible Vulkan-enabled configuration using the
+repository-local CPM cache and the Visual Studio developer environment. The
+root build compiles the PD3 deployment session, Process binding, Level Set
+controller, surface composition, surface executors, and the existing CPU test
+suite without changing production routing or requiring VTK.
+
+| Gate | Result |
+|---|---|
+| Root configure | `cmake -S D:\\Codex_lib\\ViennaPSMod -B .tmp_pd3_vulkan_final_20260803 -G Ninja -DVIENNAPS_USE_VTK=OFF -DVIENNAPS_VTK_RENDERING=OFF -DVIENNAPS_ENABLE_VULKAN=ON -DVIENNAPS_BUILD_TESTS=ON` passed with the local CPM cache. |
+| Root build | `cmake --build .tmp_pd3_vulkan_final_20260803 --parallel 4` passed; all configured targets were compiled. |
+| Focused deployment/composition gate | Six tests passed in 7.30 s: deployment session, surface composition, composition execution, Process controller, controller execution, and Process deployment binding. |
+| CPU oracle | `ctest --test-dir .tmp_pd3_vulkan_final_20260803 --output-on-failure -R '^trench$'` passed 1/1 in 8.67 s. |
+| Non-benchmark regression | `ctest --test-dir .tmp_pd3_vulkan_final_20260803 --output-on-failure -E "Benchmark|Performance|vulkanCpuBaseline"` passed 96/96 in 423.90 s. |
+| Host-path note | The broader 97-test command reached 89/97 before the existing `vulkanCpuBaseline` exceeded the 600 s command limit; this unrelated long-running test is not silently counted as a pass. |
+| Scope boundary | Root integration and CPU fixtures are accepted; no algorithm rewrite, production backend promotion, CUDA change, or VTK dependency change is included. |
+
+### PD4-PERF-BASELINE
+
+- Status: `DONE` — reproducible baseline evidence accepted on main 2026-08-03; no optimization or speedup claim is made
+- Date: 2026-08-03
+
+`cmake/run-pd4-perf-baseline.ps1` is the checked-in harness. It repeats the
+already-gated CPU/Vulkan smoke executable for coverage, graph diffusion,
+neutral transport, Level Set update, and the five-stage Level Set composition
+path three times each. Every run must exit 0 and emit its CPU/Vulkan oracle
+marker before the result is written. The captured evidence is
+`docs/design/pd4-perf-baseline-20260803.json`.
+
+| Suite | Runs | Elapsed ms (min / median / max) | Dispatch / submit / buffer contract sites |
+|---|---:|---:|---:|
+| coverage | 3 | 333.37 / 344.85 / 366.30 | 2 / 2 / 3 |
+| diffusion | 3 | 410.63 / 451.36 / 468.75 | 2 / 2 / 4 |
+| neutral | 3 | 441.60 / 452.06 / 479.17 | 1 / 1 / 2 |
+| levelset-update | 3 | 246.07 / 250.96 / 260.26 | 1 / 1 / 1 |
+| levelset-composition | 3 | 3442.13 / 4332.26 / 4458.09 | 8 / 8 / 16 |
+
+The exact command was:
+`pwsh -NoProfile -File .\\cmake\\run-pd4-perf-baseline.ps1 -BuildDir .tmp_pd3_vulkan_final_20260803 -Iterations 3 -OutputPath docs/design/pd4-perf-baseline-20260803.json`.
+All 15 runs passed their CPU/Vulkan correctness gate and the JSON records
+`deterministic_correctness: true`. Dispatch, submit, and buffer values are
+explicitly source-contract site inventories, while `elapsed_ms` is measured
+per process run; the harness does not infer a runtime counter or claim a
+speedup. A future optimization card may replace these contract inventories
+with runtime instrumentation without reopening the correctness baseline.
+
+### Mainline continuation snapshot: 2026-08-03
+
+- Status: `RUN` — progress was merged for continued development; this entry is
+  not a completion or release declaration.
+- Mainline commits: `4d96298` (`test: compose Vulkan deployment session`) and
+  `b4f39b7` (`docs: record PD4 hardware matrix acceptance`).
+- PD3 progress now present on `main`: the cross-surface/Level Set composition
+  owner, borrowed deployment-context seam, five-stage execution fixture, and
+  focused CMake registration.
+- PD4 progress retained on `main`: the hardware-matrix card plus focused test
+  hardening for profile fail-closed behavior, numerical-evidence fallback,
+  selected-device propagation, probe-failure cleanup, and strict probe-device
+  argument propagation.
+- Current continuation: `PD3-SESSION-COMPOSE`, `PD3-ROOT-INTEGRATION`, and
+  `PD4-PERF-BASELINE` are now accepted; `PD4-HW-MATRIX` remains RUN and the
+  later PD5 cards remain gated by their own evidence.
+- The snapshot remains historical and is intentionally not rewritten as a
+  completion declaration. No production-routing promotion, optimization
+  claim, or release gate is implied by that historical entry.

@@ -63,6 +63,7 @@ void TestSuccessInvokesStrictProbeOnceAndCleansOutput() {
   VulkanDeploymentProbeOptions options;
   options.executable = "fake-viennaps-device-probe";
   options.outputPath = temp.path / "probe-output" / "strict-profile.json";
+  options.strictFp32DeviceIndex = 7U;
   std::filesystem::create_directories(options.outputPath.parent_path());
   options.launcher = [&](const std::vector<std::string> &args,
                          std::chrono::milliseconds, std::string &error) {
@@ -84,10 +85,18 @@ void TestSuccessInvokesStrictProbeOnceAndCleansOutput() {
                              provisioned.error);
   }
   const auto result = loadCapabilityProfileRecordFromFile(persisted.string());
-  VC_TEST_ASSERT(result.ok && result.record.hardware.deviceUuid == "device-1");
-  VC_TEST_ASSERT(argv.size() == 5U && argv[1] == "--strict-fp32-smoke" &&
+  VC_TEST_ASSERT(
+      result.ok && result.record.hardware.deviceUuid == "device-1" &&
+      result.record.hardware.driverUuid == "driver-1" &&
+      result.record.hardware.vendorId == 1U &&
+      result.record.hardware.deviceId == 2U &&
+      result.record.hardware.deviceName == "fixture" &&
+      result.record.hardware.driverVersion == "1.0" &&
+      result.record.hardware.driverDate == "2026");
+  VC_TEST_ASSERT(argv.size() == 7U && argv[1] == "--strict-fp32-smoke" &&
                  argv[2] == "--write-deployment-profile" &&
-                 argv[4] == "--validate-profile");
+                 argv[4] == "--validate-profile" &&
+                 argv[5] == "--strict-fp32-device-index" && argv[6] == "7");
   VC_TEST_ASSERT(std::distance(std::filesystem::directory_iterator(
                                    options.outputPath.parent_path()),
                                std::filesystem::directory_iterator{}) == 0);

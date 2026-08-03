@@ -491,6 +491,7 @@ void TestDeploymentCorruptedOrUnknownProfileFallsClosedToCpu() {
   std::filesystem::create_directories(dir);
   const auto corruptedPath = (dir / "corrupt.json").string();
   const auto schemaPath = (dir / "schema.json").string();
+  const auto evidencePath = (dir / "evidence.json").string();
 
   {
     std::ofstream badFile(corruptedPath, std::ios::binary);
@@ -501,6 +502,11 @@ void TestDeploymentCorruptedOrUnknownProfileFallsClosedToCpu() {
     schemaFile
         << R"({"schemaVersion":99,"recordedAt":"2026-08-01T00:00:00Z","hardwareFingerprint":{"deviceUuid":"X","driverUuid":"Y","vendorId":1,"deviceId":2,"deviceName":"x","driverVersion":"1","driverDate":"2026-01-01"},"capabilityProfile":{"cpuAvailable":true,"cudaAvailable":false,"vulkanAvailable":true,"vulkanPrimitiveSuitePass":true,"vulkanFp64SuitePass":true,"vulkanCompute":true,"vulkanRayQuery":false,"vulkanRayTracingPipeline":false,"shaderFloat64":true,"safeVulkanWorkingSetBytes":1024}})";
   }
+  {
+    std::ofstream evidenceFile(evidencePath, std::ios::binary);
+    evidenceFile
+        << R"({"schemaVersion":3,"recordedAt":"2026-08-01T00:00:00Z","hardwareFingerprint":{"deviceUuid":"DEV-DEP-004","driverUuid":"DRV-DEP-004","vendorId":1,"deviceId":1,"deviceName":"device","driverVersion":"1.0.0","driverDate":"2026-01-01"},"capabilityProfile":{"cpuAvailable":true,"cudaAvailable":false,"vulkanAvailable":true,"vulkanPrimitiveSuitePass":true,"vulkanFp64SuitePass":false,"vulkanCompute":true,"vulkanRayQuery":false,"vulkanRayTracingPipeline":false,"shaderFloat64":false,"vulkanFp32NumericalSmoke":{"status":"UNKNOWN","contractId":"fp32-bitwise-watchdog-v1","caseCount":1,"mismatchCount":0,"maxUlp":0,"watchdogMs":60000,"elapsedMs":1,"failureDiagnostic":""},"safeVulkanWorkingSetBytes":1024}})";
+  }
 
   const std::vector<StageWorkload> workloads = {
       {Stage::LEVEL_SET, Precision::FP64, 1024ULL, false, RayMode::NONE, true}};
@@ -508,6 +514,9 @@ void TestDeploymentCorruptedOrUnknownProfileFallsClosedToCpu() {
       runtimeFingerprint, workloads, ManualSelectionConfig{}, corruptedPath);
   VC_TEST_ASSERT(corruptDecision.requiresProbe);
   VC_TEST_ASSERT(corruptDecision.state == DeploymentProfileState::INVALID);
+  VC_TEST_ASSERT(!corruptDecision.hasProfile);
+  VC_TEST_ASSERT(corruptDecision.profileReadResult.error ==
+                 CapabilityProfileIOError::JSON_SYNTAX_ERROR);
   VC_TEST_ASSERT(corruptDecision.plan.stages[0].selectedBackend ==
                  ComputeBackend::CPU);
 
@@ -515,12 +524,26 @@ void TestDeploymentCorruptedOrUnknownProfileFallsClosedToCpu() {
       runtimeFingerprint, workloads, ManualSelectionConfig{}, schemaPath);
   VC_TEST_ASSERT(schemaDecision.requiresProbe);
   VC_TEST_ASSERT(schemaDecision.state == DeploymentProfileState::INVALID);
+  VC_TEST_ASSERT(!schemaDecision.hasProfile);
+  VC_TEST_ASSERT(schemaDecision.profileReadResult.error ==
+                 CapabilityProfileIOError::SCHEMA_MISMATCH);
   VC_TEST_ASSERT(schemaDecision.plan.stages[0].selectedBackend ==
+                 ComputeBackend::CPU);
+
+  const auto evidenceDecision = selectDeploymentProfile(
+      runtimeFingerprint, workloads, ManualSelectionConfig{}, evidencePath);
+  VC_TEST_ASSERT(evidenceDecision.requiresProbe);
+  VC_TEST_ASSERT(evidenceDecision.state == DeploymentProfileState::INVALID);
+  VC_TEST_ASSERT(!evidenceDecision.hasProfile);
+  VC_TEST_ASSERT(evidenceDecision.profileReadResult.error ==
+                 CapabilityProfileIOError::TYPE_MISMATCH);
+  VC_TEST_ASSERT(evidenceDecision.plan.stages[0].selectedBackend ==
                  ComputeBackend::CPU);
 
   std::error_code removeError;
   std::filesystem::remove(corruptedPath, removeError);
   std::filesystem::remove(schemaPath, removeError);
+  std::filesystem::remove(evidencePath, removeError);
 }
 
 void TestDeploymentManualAlwaysAppliedOverAuto() {

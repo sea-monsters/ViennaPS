@@ -17,10 +17,10 @@ HardwareFingerprint hardware() {
       "device-bootstrap", "driver-bootstrap", 1U, 2U, "fixture", "1.0", "2026"};
 }
 
-CapabilityProfileRecord validRecord() {
+CapabilityProfileRecord validRecord(const HardwareFingerprint &fingerprint) {
   CapabilityProfileRecord record;
   record.recordedAt = "2026-08-03T00:00:00Z";
-  record.hardware = hardware();
+  record.hardware = fingerprint;
   record.capabilityProfile.cpuAvailable = true;
   auto &smoke = record.capabilityProfile.vulkanFp32NumericalSmoke;
   smoke.status = VulkanNumericalSmokeStatus::PASS;
@@ -30,6 +30,8 @@ CapabilityProfileRecord validRecord() {
   smoke.elapsedMs = 1U;
   return record;
 }
+
+CapabilityProfileRecord validRecord() { return validRecord(hardware()); }
 
 std::filesystem::path tempDirectory() {
   const auto path = std::filesystem::temp_directory_path() /
@@ -46,6 +48,9 @@ std::vector<StageWorkload> workloads() {
 
 void successAndSingleProbe() {
   const auto temp = tempDirectory();
+  const auto selectedHardware = HardwareFingerprint{
+      "selected-device", "selected-driver", 9U, 10U, "selected-fixture",
+      "2.0", "2026-08-03"};
   std::size_t collectorCalls = 0U;
   std::size_t launcherCalls = 0U;
   VulkanDeploymentBootstrapOptions options;
@@ -56,23 +61,46 @@ void successAndSingleProbe() {
   options.collector = [&](HardwareFingerprint &out, std::uint32_t &index,
                           std::string &) {
     ++collectorCalls;
-    out = hardware();
-    index = 0U;
+    out = selectedHardware;
+    index = 7U;
     return true;
   };
   options.launcher = [&](const std::vector<std::string> &argv,
                          std::chrono::milliseconds, std::string &error) {
     ++launcherCalls;
-    VC_TEST_ASSERT(argv.size() == 7U &&
+    VC_TEST_ASSERT(argv.size() == 7U && argv.at(0) == "fake-probe" &&
+                   argv.at(1) == "--strict-fp32-smoke" &&
+                   argv.at(2) == "--write-deployment-profile" &&
+                   argv.at(4) == "--validate-profile" &&
                    argv.at(5) == "--strict-fp32-device-index" &&
-                   argv.at(6) == "0");
-    return writeCapabilityProfileRecordToFile(argv.at(3), validRecord(),
+                   argv.at(6) == "7");
+    return writeCapabilityProfileRecordToFile(argv.at(3),
+                                              validRecord(selectedHardware),
                                               &error);
   };
   const auto result = bootstrapVulkanDeploymentProfile(
       workloads(), ManualSelectionConfig{}, std::move(options));
   VC_TEST_ASSERT(result.ok && result.probeInvoked && collectorCalls == 1U &&
                  launcherCalls == 1U);
+  VC_TEST_ASSERT(
+      result.hardware.deviceUuid == "selected-device" &&
+      result.hardware.driverUuid == "selected-driver" &&
+      result.hardware.vendorId == 9U && result.hardware.deviceId == 10U &&
+      result.hardware.deviceName == "selected-fixture" &&
+      result.hardware.driverVersion == "2.0" &&
+      result.hardware.driverDate == "2026-08-03");
+  VC_TEST_ASSERT(
+      result.provisioning.decision.activeRecord.hardware.deviceUuid ==
+          "selected-device" &&
+      result.provisioning.decision.activeRecord.hardware.driverUuid ==
+          "selected-driver" &&
+      result.provisioning.decision.activeRecord.hardware.vendorId == 9U &&
+      result.provisioning.decision.activeRecord.hardware.deviceId == 10U &&
+      result.provisioning.decision.activeRecord.hardware.deviceName ==
+          "selected-fixture" &&
+      result.provisioning.decision.activeRecord.hardware.driverVersion == "2.0" &&
+      result.provisioning.decision.activeRecord.hardware.driverDate ==
+          "2026-08-03");
   VC_TEST_ASSERT(std::filesystem::is_directory(temp / "transient") &&
                  std::filesystem::directory_iterator(temp / "transient") ==
                      std::filesystem::directory_iterator{});
@@ -85,7 +113,8 @@ void failureIsCpuFallback() {
   VulkanDeploymentBootstrapOptions options;
   options.profilePath = (temp / "profile.json").string();
   options.probeExecutable = "fake-probe";
-  options.transientOutputDirectory = temp;
+  options.transientOutputDirectory = temp / "transient";
+  std::filesystem::create_directories(options.transientOutputDirectory);
   options.collector = [](HardwareFingerprint &, std::uint32_t &,
                          std::string &error) {
     error = "collector failure";
@@ -94,9 +123,55 @@ void failureIsCpuFallback() {
   const auto result = bootstrapVulkanDeploymentProfile(
       workloads(), ManualSelectionConfig{}, std::move(options));
   VC_TEST_ASSERT(
-      !result.ok && !result.probeInvoked &&
+      !result.ok && result.collectorInvoked && !result.probeInvoked &&
+      result.error == "collector failure" &&
+      result.provisioning.error == "collector failure" &&
       result.provisioning.decision.plan.stages.front().selectedBackend ==
           ComputeBackend::CPU);
+  VC_TEST_ASSERT(std::filesystem::is_directory(temp / "transient") &&
+                 std::filesystem::directory_iterator(temp / "transient") ==
+                     std::filesystem::directory_iterator{});
+  std::error_code ec;
+  std::filesystem::remove_all(temp, ec);
+}
+
+void probeFailureIsCpuFallbackAndCleansOutput() {
+  const auto temp = tempDirectory();
+  const auto selectedHardware = hardware();
+  VulkanDeploymentBootstrapOptions options;
+  options.profilePath = (temp / "profile.json").string();
+  options.probeExecutable = "fake-probe";
+  options.transientOutputDirectory = temp / "transient";
+  std::filesystem::create_directories(options.transientOutputDirectory);
+  options.collector = [&](HardwareFingerprint &out, std::uint32_t &index,
+                          std::string &) {
+    out = selectedHardware;
+    index = 7U;
+    return true;
+  };
+  options.launcher = [&](const std::vector<std::string> &argv,
+                         std::chrono::milliseconds, std::string &error) {
+    std::string writeError;
+    if (!writeCapabilityProfileRecordToFile(argv.at(3),
+                                            validRecord(selectedHardware),
+                                            &writeError)) {
+      error = writeError;
+      return false;
+    }
+    error = "probe failure";
+    return false;
+  };
+  const auto result = bootstrapVulkanDeploymentProfile(
+      workloads(), ManualSelectionConfig{}, std::move(options));
+  VC_TEST_ASSERT(
+      !result.ok && result.collectorInvoked && result.probeInvoked &&
+      result.error == "probe failure" &&
+      result.provisioning.error == "probe failure" &&
+      result.provisioning.decision.plan.stages.front().selectedBackend ==
+          ComputeBackend::CPU);
+  VC_TEST_ASSERT(std::filesystem::is_directory(temp / "transient") &&
+                 std::filesystem::directory_iterator(temp / "transient") ==
+                     std::filesystem::directory_iterator{});
   std::error_code ec;
   std::filesystem::remove_all(temp, ec);
 }
@@ -149,6 +224,7 @@ int main() {
   try {
     successAndSingleProbe();
     failureIsCpuFallback();
+    probeFailureIsCpuFallbackAndCleansOutput();
     manualCpuBypassesEverything();
     missingTransientDirectoryFailsClosed();
   } catch (const std::exception &exception) {

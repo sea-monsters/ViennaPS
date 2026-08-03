@@ -427,6 +427,12 @@ int main() try {
   VC_TEST_ASSERT(configured.prepared);
   VC_TEST_ASSERT(configured.usingVulkan);
   VC_TEST_ASSERT(configured.selectedBackend == ComputeBackend::VULKAN);
+  VC_TEST_ASSERT(configured.updateSessionGeneration != 0U);
+  VC_TEST_ASSERT(configured.updateSessionGeneration ==
+                 configured.rebuildSessionGeneration);
+  VC_TEST_ASSERT(!configured.updateSessionDeviceName.empty());
+  VC_TEST_ASSERT(configured.updateSessionDeviceName ==
+                 configured.rebuildSessionDeviceName);
 
   // The controller is gone here. The callback copied from Process must retain
   // its deployment state and execute one ViennaLS step successfully.

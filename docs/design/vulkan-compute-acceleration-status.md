@@ -2842,10 +2842,10 @@ failure is fail-closed.
 |---|---|---|---|---|
 | `BASE` through `PD1-B` | `DONE`: profile cache/probe, primitives/BVH, Level Set seam, CPU executor seams, coverage/surface bridges, and two-stage Process binding are accepted. | Existing runtime, primitives, profile I/O, coverage, and surface-diffusion code; no compatibility rewrite. | Baseline only; do not reopen without a defect card. | Existing focused CPU differentials and Intel Arc smoke records in this document. |
 | `PD2-A` / `PD2-B` / `PD2-C` | `DONE`: neutral stage policy, borrowed neutral bridge, and three-stage Process binding accepted. | `backendPolicy.hpp`; neutral surface/executor; Process binding and its smoke/CMake target. | Baseline only; later cards consume these interfaces. | Policy CTest; neutral bridge CTests 2/2; Process-binding CTest 1/1 with CPU raw-bit oracle. |
-| `PD3-LS-SHARED-SESSION` | `RUN` — claimed 2026-08-03 by `root/PD3-LS-SHARED-SESSION`; PD2-C and P5-K3E are accepted. | Exclusive: `gpu/vulkan/levelset/levelset_deployment_session.hpp`, `levelset_process_controller.hpp`, their focused smoke/CMake wiring, and this status record. Runtime interface expansion requires a recorded re-card first. | Serial implementation claim; other roles may only prepare read-only design/review. | Level Set and surface stages expose the same generation/device/queue; no second session initialization; CPU oracle, Manual-CPU bypass, teardown/reconfigure smoke. |
+| `PD3-LS-SHARED-SESSION` | `DONE` — accepted 2026-08-03; the implementation claim is released. | `levelset_process_controller.hpp`, its focused smoke/CMake wiring, and this status record. Runtime interface expansion requires a recorded re-card first. | Serial prerequisite is accepted; `PD3-SESSION-COMPOSE` may now be claimed. | Intel Arc controller CTests 2/2 confirm equal nonzero update/rebuild generation and identical device name; no second session initialization; CPU-oracle, Manual-CPU bypass, teardown/reconfigure gates remain covered. |
 | `PD3-SESSION-COMPOSE` | `READY-S`: requires `PD3-LS-SHARED-SESSION`. | New composition smoke/orchestrator plus narrow adapters between Process binding and Level Set deployment session. | Sole cross-surface/Level Set owner; do not duplicate bridge ownership. | One session across coverage, diffusion, neutral velocity, Level Set update/rebuild; copied-callback lifetime; atomic mixed AUTO/MANUAL fallback matrix. |
 | `PD3-ROOT-INTEGRATION` | `READY-S`: requires `PD3-SESSION-COMPOSE` and available patched ViennaLS/CS/VTK prerequisites. | Root integration tests and process/trench fixtures only; no algorithm rewrite. | Serial integration gate. | Root configure/build, focused executor and deployment tests, then non-benchmark CTest/trench CPU oracle; record any host-path blocker exactly. |
-| `PD4-HW-MATRIX` | `READY-P`: PD2-C is accepted and this card does not depend on Level Set code changes. | Probe/profile fixtures and no-SDK/CPU-only test harness; no production routing changes. | Can run beside `PD3-LS-SHARED-SESSION`. | No-SDK disabled status; missing/stale/unknown profile fail-closed; strict-FP32 Intel Arc smoke; adapter UUID/driver/queue evidence; CPU fallback coverage. |
+| `PD4-HW-MATRIX` | `RUN` — claimed 2026-08-03 by `agent/PD4-HW-MATRIX`; PD2-C is accepted and this card does not depend on Level Set code changes. Required expansion re-carded in `docs/design/pd4-hw-matrix-card.md` before this row was edited. | Exclusive: `docs/design/pd4-hw-matrix-card.md`, `gpu/vulkan/VulkanProbe.cpp`, `tests/vulkanDeploymentProbe/`, `tests/probeProfileAdapter/`, `tests/vulkanDeploymentBootstrap/`, `tests/capabilityProfileIO/`. No production routing changes; no Level Set code. | Can run beside `PD3-LS-SHARED-SESSION`. | No-SDK disabled status; missing/stale/unknown profile fail-closed; strict-FP32 Intel Arc smoke; adapter UUID/driver/queue evidence; CPU fallback coverage. |
 | `PD4-PERF-BASELINE` | `READY-S`: requires `PD3-SESSION-COMPOSE` so session-overhead measurements are meaningful. | Benchmark harness/scripts and status evidence only. | May run beside the hardware matrix after its predecessor. | Repeated deterministic CPU/Vulkan runs; submit/dispatch/buffer metrics for coverage, diffusion, neutral, Level Set; CPU correctness check before any performance claim. |
 | `PD5-CI-DOCS-INTEGRATION` | Docs drafting is `READY-P`; CI merge gate is `READY-S` after PD3 root integration and PD4 evidence. | CI workflow/CMake focused options and this status record. | Documentation can proceed in parallel; CI changes wait for evidence. | CPU/no-SDK CI lane, optional self-hosted Vulkan lane, path-hygiene check, linked matrix evidence; CI never requires an SDK. |
 | `PD5-INSTALL-EXPORT` | `READY-S`: requires root integration; optional release gate. | CMake install/export, consumer smoke, and deployment documentation. | Serial release-facing gate. | Install/export consumer compile; CPU configure required; optional Vulkan/VTK cases recorded without absolute local paths. |
@@ -2856,3 +2856,23 @@ owner rather than creating another `ProcessDeploymentBinding` session;
 lifecycle composition. `PD4` cards are observational until their acceptance
 evidence exists. Every implementation card must use CPU results as its
 correctness oracle on non-CUDA hosts.
+
+### PD3-LS-SHARED-SESSION
+
+- Status: `DONE` — accepted on Intel Arc; claim released
+- Date: 2026-08-03
+
+`LevelSetProcessController<D>` now provisions the update and rebuild paths from
+the one `DeploymentComputeContext` session. The rebuild executor stores an
+aliasing `shared_ptr` whose control block retains `RuntimeState` while its
+pointer targets the context-owned `ComputeSession`; this preserves callback
+lifetime without a second initialization or an ownership cycle. Result
+observability reports update/rebuild generation and device name, and both
+controller smokes assert identity. Manual CPU still clears both callbacks and
+uses no session; existing automatic/manual rollback paths are unchanged.
+
+| Gate | Result |
+|---|---|
+| RED | No pre-change session identity hook exists; a compile-failure oracle was not invented. The focused assertions were added with the narrow observability needed to exercise the former duplicate-session behavior. |
+| GREEN | A fresh root build with the cached, patched ViennaLS source compiled both controller targets. `ctest -C Debug -R '^viennaps-vulkan-levelset-process-controller(-execution)?-smoke$'` passed 2/2 on Intel Arc in 2.56 s. Both paths asserted a nonzero equal generation and matching nonempty device name. The controller fixture now carries the existing strict-FP32 smoke evidence, so its automatic Vulkan selection exercises the policy instead of weakening it. |
+| Scope boundary | Only `levelset_process_controller.hpp`, its two focused smoke sources, their CTest registration, and this status entry changed; runtime/session types, Process APIs, rebuild executor interfaces, shaders, CUDA, dependencies, and fixed local SDK paths remain untouched. |

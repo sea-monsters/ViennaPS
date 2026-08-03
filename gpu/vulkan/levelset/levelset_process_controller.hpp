@@ -32,6 +32,11 @@ public:
     bool degraded = false;
     bool prepared = false;
     compute::ComputeBackend selectedBackend = compute::ComputeBackend::CPU;
+    // Narrow observability for focused update/rebuild session-identity tests.
+    std::uint64_t updateSessionGeneration = 0U;
+    std::uint64_t rebuildSessionGeneration = 0U;
+    std::string updateSessionDeviceName;
+    std::string rebuildSessionDeviceName;
     std::string message;
   };
 
@@ -245,18 +250,16 @@ public:
         return result;
       }
 
-      state->rebuildSession = std::make_shared<runtime::ComputeSession>();
-      if (!state->rebuildSession->initialize(spirvError, manualDevice)) {
+      auto *session = state->computeContext.session();
+      if (session == nullptr) {
         if (result.manualMode) {
           restoreManualState();
           result.ok = false;
           result.message =
-              "Manual Vulkan rebuild session initialization failed: " +
-              spirvError;
+              "Manual Vulkan selected, but compute session is absent.";
           return result;
         }
         result.degraded = true;
-        result.message = spirvError;
         result.selectedBackend = compute::ComputeBackend::CPU;
         process.clearLevelSetUpdateExecutor();
         process.clearLevelSetRebuildExecutor();
@@ -264,10 +267,13 @@ public:
         result.usingVulkan = false;
         return result;
       }
+      result.updateSessionGeneration = session->generation();
+      result.updateSessionDeviceName =
+          session->selection().properties.deviceName;
       state->rebuildPrimitives =
           std::make_shared<primitives::ReductionScanPrimitives>();
       if (!state->rebuildPrimitives->initialize(
-              *state->rebuildSession, rebuildPaths.reductionScan, spirvError)) {
+              *session, rebuildPaths.reductionScan, spirvError)) {
         if (result.manualMode) {
           restoreManualState();
           result.ok = false;
@@ -314,24 +320,6 @@ public:
         return result;
       }
 
-      const auto *session = state->computeContext.session();
-      if (session == nullptr) {
-        if (result.manualMode) {
-          restoreManualState();
-          result.ok = false;
-          result.message =
-              "Manual Vulkan selected, but compute session is absent.";
-          return result;
-        }
-        result.degraded = true;
-        result.selectedBackend = compute::ComputeBackend::CPU;
-        process.clearLevelSetUpdateExecutor();
-        process.clearLevelSetRebuildExecutor();
-        result.ok = true;
-        result.usingVulkan = false;
-        return result;
-      }
-
       process.setLevelSetUpdateExecutor(
           [state](
               const viennals::Advect<float, D>::LevelSetUpdateContext &context,
@@ -350,7 +338,14 @@ public:
             return executor(context, output, error);
           });
       auto rebuildState = std::make_shared<ViennaLsRebuildExecutorStateFp32>();
-      rebuildState->session = state->rebuildSession;
+      // The aliasing shared_ptr retains RuntimeState while borrowing the one
+      // ComputeSession owned by DeploymentComputeContext. It creates no
+      // second Vulkan session and no ownership cycle.
+      rebuildState->session = std::shared_ptr<runtime::ComputeSession>(
+          state, session);
+      result.rebuildSessionGeneration = rebuildState->session->generation();
+      result.rebuildSessionDeviceName =
+          rebuildState->session->selection().properties.deviceName;
       rebuildState->primitives = state->rebuildPrimitives;
       rebuildState->classificationProgram = state->rebuildClassificationProgram;
       rebuildState->actionFlagsProgram = state->rebuildActionFlagsProgram;
@@ -420,7 +415,6 @@ private:
   struct RuntimeState {
     runtime::DeploymentComputeContext computeContext{};
     std::shared_ptr<runtime::SpirvProgram> program{};
-    std::shared_ptr<runtime::ComputeSession> rebuildSession{};
     std::shared_ptr<primitives::ReductionScanPrimitives> rebuildPrimitives{};
     std::shared_ptr<runtime::SpirvProgram> rebuildClassificationProgram{};
     std::shared_ptr<runtime::SpirvProgram> rebuildActionFlagsProgram{};

@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
@@ -102,6 +103,16 @@ struct TempDirectoryGuard {
   record.capabilityProfile.vulkanAvailable = true;
   record.capabilityProfile.vulkanPrimitiveSuitePass = true;
   record.capabilityProfile.vulkanCompute = true;
+  record.capabilityProfile.vulkanFp32NumericalSmoke.status =
+      viennaps::compute::VulkanNumericalSmokeStatus::PASS;
+  record.capabilityProfile.vulkanFp32NumericalSmoke.contractId =
+      std::string(viennaps::compute::kVulkanFp32NumericalSmokeContract);
+  record.capabilityProfile.vulkanFp32NumericalSmoke.caseCount = 18U;
+  record.capabilityProfile.vulkanFp32NumericalSmoke.mismatchCount = 0U;
+  record.capabilityProfile.vulkanFp32NumericalSmoke.maxUlp = 0U;
+  record.capabilityProfile.vulkanFp32NumericalSmoke.watchdogMs =
+      viennaps::compute::kVulkanFp32NumericalSmokeWatchdogMs;
+  record.capabilityProfile.vulkanFp32NumericalSmoke.elapsedMs = 1U;
   record.capabilityProfile.safeVulkanWorkingSetBytes =
       128ULL * 1024ULL * 1024ULL;
   const auto profilePath = directory / (hardware.deviceUuid + ".json");
@@ -134,7 +145,7 @@ configure(const ManualSelectionConfig &selection,
 
 } // namespace
 
-int main() {
+int main() try {
   HardwareFingerprint hardware;
   std::string error;
   if (!collectHardware(hardware, error)) {
@@ -172,6 +183,12 @@ int main() {
   VC_TEST_ASSERT(autoVulkan.usingVulkan);
   VC_TEST_ASSERT(!autoVulkan.degraded);
   VC_TEST_ASSERT(autoVulkan.selectedBackend == ComputeBackend::VULKAN);
+  VC_TEST_ASSERT(autoVulkan.updateSessionGeneration != 0U);
+  VC_TEST_ASSERT(autoVulkan.updateSessionGeneration ==
+                 autoVulkan.rebuildSessionGeneration);
+  VC_TEST_ASSERT(!autoVulkan.updateSessionDeviceName.empty());
+  VC_TEST_ASSERT(autoVulkan.updateSessionDeviceName ==
+                 autoVulkan.rebuildSessionDeviceName);
   VC_TEST_ASSERT(autoConfiguration.failurePolicy ==
                  LevelSetUpdateFailurePolicy::FALLBACK);
   VC_TEST_ASSERT(autoConfiguration.updateInstalled);
@@ -351,4 +368,7 @@ int main() {
 
   std::cout << "[LevelSetController] auto/manual/stale/shader/gates PASS\n";
   return EXIT_SUCCESS;
+} catch (const std::exception &error) {
+  std::cerr << "[LevelSetController] " << error.what() << '\n';
+  return EXIT_FAILURE;
 }

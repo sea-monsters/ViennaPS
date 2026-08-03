@@ -406,4 +406,12 @@ if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
     add_test(NAME viennaps-vulkan-levelset-deployment-session-smoke
              COMMAND viennaps-vulkan-levelset-deployment-session-smoke)
   endif()
+  if(TARGET viennaps-vulkan-levelset-process-controller-smoke)
+    add_test(NAME viennaps-vulkan-levelset-process-controller-smoke
+             COMMAND viennaps-vulkan-levelset-process-controller-smoke)
+  endif()
+  if(TARGET viennaps-vulkan-levelset-process-controller-execution-smoke)
+    add_test(NAME viennaps-vulkan-levelset-process-controller-execution-smoke
+             COMMAND viennaps-vulkan-levelset-process-controller-execution-smoke)
+  endif()
 endif()

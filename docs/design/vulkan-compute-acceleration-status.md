@@ -2771,3 +2771,25 @@ is included.
 | GREEN | Focused backend-policy executable passed all existing tests plus automatic strict-FP32 Vulkan selection, global CPU/per-stage neutral Vulkan override, direct neutral CPU override, and stable `toString`. |
 | Fresh root CTest | Fresh Visual Studio 2022 CMake tree under `C:\tmp` (VTK/Vulkan disabled, existing CPM cache) built `backendPolicy`; focused CTest passed 1/1. |
 | Scope boundary | Only `backendPolicy.hpp`, the focused backend-policy test, and this status entry changed; no neutral binding implementation or unrelated policy behavior changed. |
+
+### PD2-B: borrowed neutral-transport velocity session bridge
+
+- Status: implemented at the neutral primitive and executor bridge layer;
+  Process binding remains the next milestone
+- Date: 2026-08-03
+
+`NeutralTransportSurfaceModelFp32` now supports both its existing self-owned
+session lifecycle and a caller-owned `runtime::ComputeSession&` path. Borrowed
+mode retains only a non-owning pointer, uses the caller's device/command
+context, and releases bridge-local Vulkan objects without resetting the caller
+session. `VulkanNeutralTransportVelocityExecutor` exposes the analogous
+borrowed overload while preserving the self-owned overload and callback
+lifetime behavior.
+
+| Gate | Result |
+|---|---|
+| RED | Fresh local Ninja build failed at the frozen borrowed smoke call because the executor had no three-argument `initialize` overload (MSVC C2660). |
+| GREEN | The borrowed executor smoke built and passed with exact CPU raw-bit equality, self-owned compatibility, invalid-session rejection, reset/destruction session survival, and callback use while the caller session remained valid. |
+| Fresh root hardware acceptance | Fresh `C:\tmp\viennaps-pd2-build` configuration used `VULKAN_SDK=D:\VulkanSDK\1.4.357.0` only in the command environment and the local `.cpm-cache`; focused CTest passed 2/2 on the Intel Arc (`viennaps-vulkan-neutral-transport-surface-smoke`, `viennaps-vulkan-neutral-transport-velocity-executor-smoke`). |
+| Scope exception | The necessary low-level `neutral_transport_surface.hpp/.cpp` session-lifetime change was authorized after inspection showed no existing borrowed capability; no CMake, shader, policy, Process, CUDA, or dependency files changed. |
+| Cleanup | Temporary validation trees `C:\tmp\viennaps-pd2-build` and workspace `.tmp_pd2_red_ninja` were removed after validation. |

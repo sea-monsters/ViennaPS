@@ -11,6 +11,8 @@
 
 #include <models/psNeutralTransportVelocityExecutor.hpp>
 
+#include "../runtime/compute_session.hpp"
+
 namespace viennaps::vulkan::surface {
 
 /// Owns an FP32 Vulkan surface primitive and exposes it through the generic
@@ -33,6 +35,12 @@ public:
       VulkanNeutralTransportVelocityExecutor &&) = delete;
 
   [[nodiscard]] bool initialize(std::string_view spirvPath,
+                                std::string &error);
+  /// Initializes against a caller-owned session. The session must remain
+  /// valid until every callback made by makeExecutor() is released; this
+  /// bridge never resets or owns the borrowed session.
+  [[nodiscard]] bool initialize(runtime::ComputeSession &session,
+                                std::string_view spirvPath,
                                 std::string &error);
   void reset();
   [[nodiscard]] bool isInitialized() const;

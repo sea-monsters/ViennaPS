@@ -40,6 +40,12 @@ public:
   operator=(NeutralTransportSurfaceModelFp32 &&) = delete;
 
   [[nodiscard]] bool initialize(std::string_view spirvPath, std::string &error);
+  /// Initializes against a caller-owned session. The session must remain
+  /// valid until this model is reset or destroyed; the model never resets or
+  /// owns the borrowed session.
+  [[nodiscard]] bool initialize(runtime::ComputeSession &session,
+                                std::string_view spirvPath,
+                                std::string &error);
   void reset();
   [[nodiscard]] bool isInitialized() const;
 
@@ -84,7 +90,12 @@ private:
     float lengthToMeter;
   };
 
-  runtime::ComputeSession session_{};
+  [[nodiscard]] bool setup(std::string_view spirvPath,
+                           runtime::ComputeSession *externalSession,
+                           std::string &error);
+
+  runtime::ComputeSession ownedSession_{};
+  runtime::ComputeSession *session_ = nullptr;
   runtime::ShaderModule shaderModule_{};
   runtime::DescriptorSetLayout descriptorSetLayout_{};
   runtime::PipelineLayout pipelineLayout_{};

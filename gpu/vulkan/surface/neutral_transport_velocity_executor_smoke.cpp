@@ -3,6 +3,8 @@
 
 #include "neutral_transport_velocity_executor.hpp"
 
+#include "../runtime/compute_session.hpp"
+
 #include <models/psNeutralTransportVelocityExecutor.hpp>
 
 #include <algorithm>
@@ -58,6 +60,15 @@ int runSmoke() {
 
   Bridge bridge;
   std::string error;
+  viennaps::vulkan::runtime::ComputeSession borrowedSession;
+  if (!borrowedSession.initialize(error))
+    return 1;
+  Bridge borrowedBridge;
+  if (!borrowedBridge.initialize(
+          borrowedSession, VIENNAPS_VULKAN_NEUTRAL_TRANSPORT_SPV_PATH,
+          error))
+    return 1;
+  auto borrowedExecutor = borrowedBridge.makeExecutor();
   if (!bridge.initialize(VIENNAPS_VULKAN_NEUTRAL_TRANSPORT_SPV_PATH, error)) {
     std::cerr << "bridge initialize failed: " << error << '\n';
     return 1;
@@ -76,6 +87,63 @@ int runSmoke() {
                "GPU output differs from the legacy CPU oracle"))
       return 1;
   }
+
+  std::fill(output.begin(), output.end(), -91.0F);
+  Work borrowedWork{coverage, materials, output, parameters};
+  if (!borrowedExecutor(borrowedWork, error) || !borrowedWork.complete ||
+      borrowedWork.writtenCount != output.size())
+    return 1;
+  for (std::size_t index = 0U; index < output.size(); ++index) {
+    if (!check(rawEqual(output[index],
+                        legacyVelocity(coverage[index], materials[index],
+                                       parameters)),
+               "borrowed callback output differs from the legacy CPU oracle"))
+      return 1;
+  }
+
+  viennaps::vulkan::runtime::ComputeSession invalidSession;
+  Bridge invalidBorrowed;
+  error.clear();
+  if (invalidBorrowed.initialize(
+          invalidSession, VIENNAPS_VULKAN_NEUTRAL_TRANSPORT_SPV_PATH,
+          error) || invalidBorrowed.isInitialized() || error.empty())
+    return 1;
+
+  Bridge missingSpirv;
+  error.clear();
+  if (missingSpirv.initialize(borrowedSession, "", error) ||
+      missingSpirv.isInitialized() || error.empty() ||
+      !borrowedSession.isValid())
+    return 1;
+
+  borrowedBridge.reset();
+  if (!check(!borrowedBridge.isInitialized() && borrowedSession.isValid(),
+             "borrowed reset invalidated caller session"))
+    return 1;
+  std::fill(output.begin(), output.end(), -91.0F);
+  Work afterBorrowedReset{coverage, materials, output, parameters};
+  if (borrowedExecutor(afterBorrowedReset, error) ||
+      afterBorrowedReset.complete || !unchanged(output, -91.0F))
+    return 1;
+
+  Bridge::Executor borrowedLifetimeExecutor;
+  {
+    Bridge transient;
+    if (!transient.initialize(
+            borrowedSession, VIENNAPS_VULKAN_NEUTRAL_TRANSPORT_SPV_PATH,
+            error))
+      return 1;
+    borrowedLifetimeExecutor = transient.makeExecutor();
+  }
+  std::fill(output.begin(), output.end(), -91.0F);
+  Work afterBorrowedLifetime{coverage, materials, output, parameters};
+  if (!borrowedLifetimeExecutor(afterBorrowedLifetime, error) ||
+      !afterBorrowedLifetime.complete ||
+      afterBorrowedLifetime.writtenCount != output.size())
+    return 1;
+  if (!check(borrowedSession.isValid(),
+             "borrowed bridge destruction invalidated caller session"))
+    return 1;
 
   std::vector<float> growthCoverage(257U, 0.5F);
   std::vector<float> growthMaterials(257U, 10.0F);

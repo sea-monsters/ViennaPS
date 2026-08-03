@@ -108,6 +108,13 @@ struct VulkanNeutralTransportVelocityExecutor::State {
     return model.initialize(spirvPath, error);
   }
 
+  bool initialize(runtime::ComputeSession &session,
+                  std::string_view spirvPath, std::string &error) {
+    std::lock_guard lock(mutex);
+    resetUnlocked();
+    return model.initialize(session, spirvPath, error);
+  }
+
   void reset() {
     std::lock_guard lock(mutex);
     resetUnlocked();
@@ -225,6 +232,12 @@ VulkanNeutralTransportVelocityExecutor::~VulkanNeutralTransportVelocityExecutor(
 bool VulkanNeutralTransportVelocityExecutor::initialize(
     const std::string_view spirvPath, std::string &error) {
   return state_->initialize(spirvPath, error);
+}
+
+bool VulkanNeutralTransportVelocityExecutor::initialize(
+    runtime::ComputeSession &session, const std::string_view spirvPath,
+    std::string &error) {
+  return state_->initialize(session, spirvPath, error);
 }
 
 void VulkanNeutralTransportVelocityExecutor::reset() { state_->reset(); }

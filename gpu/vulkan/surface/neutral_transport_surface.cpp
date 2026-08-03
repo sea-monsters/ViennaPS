@@ -39,9 +39,22 @@ NeutralTransportSurfaceModelFp32::~NeutralTransportSurfaceModelFp32() {
 bool NeutralTransportSurfaceModelFp32::initialize(
     const std::string_view spirvPath, std::string &error) {
   error.clear();
-  if (isInitialized()) {
+  if (isInitialized() && session_ == &ownedSession_) {
     return true;
   }
+  return setup(spirvPath, nullptr, error);
+}
+
+bool NeutralTransportSurfaceModelFp32::initialize(
+    runtime::ComputeSession &session, const std::string_view spirvPath,
+    std::string &error) {
+  error.clear();
+  return setup(spirvPath, &session, error);
+}
+
+bool NeutralTransportSurfaceModelFp32::setup(
+    const std::string_view spirvPath, runtime::ComputeSession *externalSession,
+    std::string &error) {
   if (spirvPath.empty()) {
     return setError(error, "initialization", "SPIR-V path is empty");
   }
@@ -53,13 +66,22 @@ bool NeutralTransportSurfaceModelFp32::initialize(
     return setError(error, "initialization", detail);
   };
 
-  if (!session_.initialize(error)) {
-    return failInitialization();
+  if (externalSession != nullptr) {
+    if (!externalSession->isValid()) {
+      return setError(error, "initialization",
+                      "external compute session is not initialized");
+    }
+    session_ = externalSession;
+  } else {
+    if (!ownedSession_.initialize(error)) {
+      return failInitialization();
+    }
+    session_ = &ownedSession_;
   }
 
   runtime::SpirvProgram program{};
   if (!runtime::readSpirv(spirvPath, program, error) ||
-      !shaderModule_.create(session_.device(), program, error)) {
+      !shaderModule_.create(session_->device(), program, error)) {
     return failInitialization();
   }
 
@@ -71,7 +93,7 @@ bool NeutralTransportSurfaceModelFp32::initialize(
     bindings[binding].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   }
   if (!descriptorSetLayout_.create(
-          session_.device(),
+          session_->device(),
           std::span<const VkDescriptorSetLayoutBinding>(bindings.data(),
                                                         bindings.size()),
           error)) {
@@ -80,23 +102,23 @@ bool NeutralTransportSurfaceModelFp32::initialize(
 
   const VkPushConstantRange pushRange{VK_SHADER_STAGE_COMPUTE_BIT, 0U,
                                       sizeof(PushConstants)};
-  if (!pipelineLayout_.create(session_.device(), descriptorSetLayout_.get(),
+  if (!pipelineLayout_.create(session_->device(), descriptorSetLayout_.get(),
                               std::span(&pushRange, 1U), error)) {
     return failInitialization();
   }
-  if (!descriptorPool_.create(session_.device(), 1U, 3U,
+  if (!descriptorPool_.create(session_->device(), 1U, 3U,
                               VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, error) ||
       !descriptorPool_.allocate(descriptorSetLayout_.get(), descriptorSet_,
                                 error)) {
     return failInitialization();
   }
-  if (!session_.commandContext().allocatePrimary(commandBuffer_, error) ||
-      !fence_.create(session_.device(), error)) {
+  if (!session_->commandContext().allocatePrimary(commandBuffer_, error) ||
+      !fence_.create(session_->device(), error)) {
     return failInitialization();
   }
 
   const runtime::ComputePipelineOptions options{kEntryPoint, {}, nullptr, 0U};
-  if (!pipeline_.create(session_.device(), shaderModule_, pipelineLayout_,
+  if (!pipeline_.create(session_->device(), shaderModule_, pipelineLayout_,
                         options, error)) {
     return failInitialization();
   }
@@ -112,11 +134,14 @@ void NeutralTransportSurfaceModelFp32::reset() {
   shaderModule_.reset();
   commandBuffer_ = VK_NULL_HANDLE;
   descriptorSet_ = VK_NULL_HANDLE;
-  session_.reset();
+  if (session_ == &ownedSession_)
+    ownedSession_.reset();
+  session_ = nullptr;
 }
 
 bool NeutralTransportSurfaceModelFp32::isInitialized() const {
-  return session_.isValid() && shaderModule_.get() != VK_NULL_HANDLE &&
+  return session_ != nullptr && session_->isValid() &&
+         shaderModule_.get() != VK_NULL_HANDLE &&
          descriptorSetLayout_.get() != VK_NULL_HANDLE &&
          pipelineLayout_.get() != VK_NULL_HANDLE &&
          pipeline_.get() != VK_NULL_HANDLE &&
@@ -143,7 +168,7 @@ bool NeutralTransportSurfaceModelFp32::createFloatBuffer(
     return setError(error, "createFloatBuffer", "element count overflows");
   }
   return buffer.create(
-      session_.device(),
+      session_->device(),
       static_cast<VkDeviceSize>(allocatedElements * sizeof(float)),
       kFloatBufferUsage, kFloatMemoryFlags, error);
 }
@@ -261,7 +286,7 @@ bool NeutralTransportSurfaceModelFp32::evaluate(
   const auto dispatchGroups =
       coverageCount / kWorkgroupSize + (coverageCount % kWorkgroupSize != 0U);
   if (dispatchGroups >
-      session_.selection().properties.limits.maxComputeWorkGroupCount[0]) {
+      session_->selection().properties.limits.maxComputeWorkGroupCount[0]) {
     return setError(error, "dispatch",
                     "dispatch group count exceeds device limit");
   }
@@ -281,7 +306,7 @@ bool NeutralTransportSurfaceModelFp32::evaluate(
     writes[binding].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[binding].pBufferInfo = &infos[binding];
   }
-  vkUpdateDescriptorSets(session_.device().get(),
+  vkUpdateDescriptorSets(session_->device().get(),
                          static_cast<std::uint32_t>(writes.size()),
                          writes.data(), 0U, nullptr);
 
@@ -337,7 +362,7 @@ bool NeutralTransportSurfaceModelFp32::evaluate(
   VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
   submit.commandBufferCount = 1U;
   submit.pCommandBuffers = &commandBuffer_;
-  if (vkQueueSubmit(session_.device().computeQueue(), 1U, &submit,
+  if (vkQueueSubmit(session_->device().computeQueue(), 1U, &submit,
                     fence_.get()) != VK_SUCCESS) {
     return setError(error, "dispatch", "failed to submit command buffer");
   }
@@ -352,7 +377,7 @@ bool NeutralTransportSurfaceModelFp32::evaluate(
 }
 
 const runtime::VulkanDevice &NeutralTransportSurfaceModelFp32::device() const {
-  return session_.device();
+  return session_->device();
 }
 
 float NeutralTransportSurfaceModelFp32::cpuVelocity(

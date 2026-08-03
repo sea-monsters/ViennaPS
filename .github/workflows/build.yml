@@ -6,8 +6,41 @@ on:
       - master
   pull_request:
   workflow_dispatch:
+    inputs:
+      run_vulkan_hardware:
+        description: Run the optional Vulkan probe on a labeled self-hosted runner
+        required: true
+        default: false
+        type: boolean
 
 jobs:
+  path-hygiene:
+    name: "🔒 Path hygiene"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v6
+
+      - name: 🔒 Reject machine-specific paths and SDK assignments
+        shell: bash
+        run: |
+          patterns=(
+            '(^|[[:space:]`"=])[A-Za-z]:[\\/]'
+            '(^|[[:space:]`"=])/User''s/'
+            '(^|[[:space:]`"=])/home/'
+            '(^|[[:space:]`"=])/mnt/'
+            '(^|[[:space:]`"=])/workspace/'
+          )
+          sdk_name='VULKAN_SDK'
+          patterns+=("${sdk_name}[[:space:]]*=[^`\"[:space:]]")
+          for pattern in "${patterns[@]}"; do
+            if git grep -n -E "$pattern" -- .github/workflows/build.yml docs/design/vulkan-compute-acceleration-development-report.md >/dev/null; then
+              echo "::error::Path hygiene violation in the controlled CI/docs files."
+              exit 1
+            fi
+          done
+
   test:
     strategy:
       fail-fast: false
@@ -72,8 +105,8 @@ jobs:
             Remove-Item -Recurse -Force _viennals -ErrorAction SilentlyContinue
             git clone --depth 1 --branch master https://github.com/ViennaTools/ViennaLS.git _viennals
             if ($LASTEXITCODE -ne 0) { exit 1 }
-            # Forward slashes: CMake treats a backslash as an escape, so a raw
-            # Windows path like D:\a\ViennaPS fails to parse on '\a'.
+            # Forward slashes: CMake treats a backslash as an escape, so raw
+            # Windows paths must be normalized before forwarding.
             $viennalsSource = (Get-Location).Path.Replace('\', '/')
             "CPM_ViennaLS_SOURCE=$viennalsSource/_viennals" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           }
@@ -132,14 +165,14 @@ jobs:
         run: |
           $cpmArgs = @()
           if ($env:CPM_ViennaLS_SOURCE) { $cpmArgs += "-DCPM_ViennaLS_SOURCE=$env:CPM_ViennaLS_SOURCE" }
-          cmake -DVIENNAPS_BUILD_TESTS=ON -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR=${{ github.workspace }}/vcpkg_installed -DVCPKG_MANIFEST_INSTALL=OFF @cpmArgs -B build
+          cmake -S . -B build -DVIENNAPS_BUILD_TESTS=ON -DVIENNAPS_ENABLE_VULKAN=OFF -DVIENNAPS_BUILD_VULKAN_PROBE=OFF -DVIENNAPS_BUILD_VULKAN_SMOKE=OFF -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake -DVCPKG_TARGET_TRIPLET=x64-windows -DVCPKG_INSTALLED_DIR=${{ github.workspace }}/vcpkg_installed -DVCPKG_MANIFEST_INSTALL=OFF @cpmArgs
           cmake --build build --config Release --parallel
           cmake --build build --config Debug --parallel
 
       - name: 🏗️ Compile (other)
         if: ${{ matrix.os != 'windows-latest' }}
         run: |
-          cmake -DVIENNAPS_BUILD_TESTS=ON -DVIENNAPS_ENABLE_SANITIZER=ON ${CPM_ViennaLS_SOURCE:+-DCPM_ViennaLS_SOURCE="$CPM_ViennaLS_SOURCE"} -B build
+          cmake -S . -B build -DVIENNAPS_BUILD_TESTS=ON -DVIENNAPS_ENABLE_VULKAN=OFF -DVIENNAPS_BUILD_VULKAN_PROBE=OFF -DVIENNAPS_BUILD_VULKAN_SMOKE=OFF -DVIENNAPS_ENABLE_SANITIZER=ON ${CPM_ViennaLS_SOURCE:+-DCPM_ViennaLS_SOURCE="$CPM_ViennaLS_SOURCE"}
           cmake --build build --config ${{ matrix.config }}
 
       - name: 🧪 Test
@@ -153,3 +186,64 @@ jobs:
         run: |
           ctest --output-on-failure -E "Benchmark|Performance" -C Release --test-dir build
           ctest --output-on-failure -E "Benchmark|Performance" -C Debug --test-dir build
+
+  vulkan-hardware:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_vulkan_hardware == true }}
+    name: "🔬 Optional Vulkan probe (self-hosted)"
+    runs-on:
+      - self-hosted
+      - vulkan
+    timeout-minutes: 30
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v6
+
+      - name: 🏗️ Configure Vulkan probe
+        shell: pwsh
+        run: |
+          $buildDir = Join-Path $env:RUNNER_TEMP "viennaps-vulkan-build"
+          cmake -S . -B $buildDir `
+            -DVIENNAPS_USE_VTK=OFF `
+            -DVIENNAPS_VTK_RENDERING=OFF `
+            -DVIENNAPS_BUILD_TESTS=ON `
+            -DVIENNAPS_ENABLE_VULKAN=ON `
+            -DVIENNAPS_BUILD_VULKAN_PROBE=ON `
+            -DVIENNAPS_BUILD_VULKAN_SMOKE=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: 🛠️ Build probe and focused deployment tests
+        shell: pwsh
+        run: |
+          $buildDir = Join-Path $env:RUNNER_TEMP "viennaps-vulkan-build"
+          cmake --build $buildDir --config Release --target `
+            viennaps-device-probe `
+            capabilityProfileIO `
+            probeProfileAdapter `
+            vulkanDeploymentProbe `
+            vulkanDeploymentBootstrap
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: 🔬 Run Vulkan probe and focused CTest
+        shell: pwsh
+        run: |
+          $buildDir = Join-Path $env:RUNNER_TEMP "viennaps-vulkan-build"
+          $profilePath = Join-Path $env:RUNNER_TEMP "viennaps-vulkan-deployment-profile.json"
+          $probeLog = Join-Path $env:RUNNER_TEMP "viennaps-vulkan-probe.log"
+          $probe = Get-ChildItem -Path $buildDir -Recurse -File |
+            Where-Object { $_.Name -in @("viennaps-device-probe", "viennaps-device-probe.exe") } |
+            Select-Object -First 1
+          if (-not $probe) {
+            Write-Error "viennaps-device-probe was not produced by the labeled self-hosted runner."
+            exit 1
+          }
+          & $probe.FullName `
+            --strict-fp32-smoke `
+            --write-deployment-profile $profilePath `
+            --validate-profile *> $probeLog
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Vulkan probe failed on the labeled self-hosted runner."
+            exit $LASTEXITCODE
+          }
+          ctest --test-dir $buildDir -C Release --output-on-failure `
+            -R "^(capabilityProfileIO|probeProfileAdapter|vulkanDeploymentProbe|vulkanDeploymentBootstrap)$"

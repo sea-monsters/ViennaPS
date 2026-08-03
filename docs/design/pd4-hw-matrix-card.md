@@ -1,6 +1,7 @@
 # PD4-HW-MATRIX 验收卡片
 
-- **状态**：`RUN`；对应主线 `docs/design/vulkan-compute-acceleration-status.md:2848`。
+- **状态**：`DONE`；2026-08-03 已在主线复验完成，对应主线
+  `docs/design/vulkan-compute-acceleration-status.md` 的 PD4 条目。
 - **边界**：本卡只验收 probe/profile/bootstrap 的可观测行为和硬件证据；不修改状态文档，不宣称生产路由或性能收益。
 - **路径规则**：所有构建目录、profile、临时输出、SDK 和依赖位置均使用调用者提供的路径或环境变量；卡片中不得填写机器本地 VTK/Vulkan 路径。
 
@@ -60,29 +61,33 @@ CPU oracle: PASS|FAIL
 
 ## 2026-08-03 当前验收记录
 
-所有命令均在 Git 已登记的 `claude/pd4-f84f7c` worktree 内执行；构建目录位于该 worktree 下。路径在此只以 `<build>`、`<probe>`、`<profile>` 表示，避免记录本机 SDK、VTK 或缓存位置。
+先前 worktree 的记录保留为历史背景；以下结果已于 2026-08-03 在主线
+worktree 中重新执行。每个构建目录、profile 和原始输出都是本轮临时文件，
+在记录结果后删除；路径继续只以 `<build>`、`<probe>`、`<profile>` 表示，
+避免记录本机 SDK、VTK、缓存或驱动路径。
 
 | 行 | 当前结果 | 证据 |
 |---|---|---|
-| Worktree isolation | `PASS` | `git worktree list` 列出当前 `claude/pd4-f84f7c` worktree；旧 `pd4-hw-matrix` 条目为 `prunable`，未被用作构建或恢复来源。 |
-| No-SDK disabled | `PASS` | 经 `cmake/invoke-cmake-clean-env.ps1` 从 `gpu/vulkan` 配置独立 `<build>`，取消 `VULKAN_SDK` 并启用 probe；构建 `viennaps-device-probe` 成功。运行 `<probe>` 退出 `0`，输出 `status="disabled"`、`devices=[]`、`source="build-time-fallback"`，原因为构建时 Vulkan headers/libraries 不可用。 |
-| Missing / stale / malformed / unknown profile | `PASS` | 在当前 worktree 的本地 VTK override Debug 构建中运行 `capabilityProfileIO` 与 `probeProfileAdapter`，均通过（分别 `0.18 s`、`0.09 s`）。覆盖 missing→`MISSING`、driver UUID stale→`STALE`、malformed/duplicate/type→`INVALID`、unknown schema rejection，且均 fail-closed 选择 `CPU`。 |
-| CPU fallback / Manual CPU bypass | `PASS` | 同一 focused CTest 运行 `vulkanDeploymentBootstrap`（`0.09 s`）与 `vulkanDeploymentProbe`（`0.12 s`），均通过。前者覆盖 collector/transient-path failure 的 CPU fallback 和 Manual CPU collector/probe bypass；后者覆盖 nonzero、timeout、malformed、hardware mismatch、invalid evidence 的 fail-closed 与临时输出清理。 |
-| Strict-FP32 success | `PASS` | SDK-enabled standalone `<probe> --strict-fp32-smoke --write-deployment-profile <profile> --validate-profile` 退出 `0`。严格 evidence：`PASS`，contract `fp32-bitwise-watchdog-v1`，`caseCount=18`，`mismatchCount=0`，`maxUlp=0`，`elapsedMs=130 <= watchdogMs=60000`，diagnostic 为空；profile validation `pass`。child UUID `8680557d080000000002000000000000` 与唯一 profile/device UUID 匹配。 |
-| Strict-FP32 failure | `PASS` | SDK-enabled standalone `<probe> --strict-fp32-smoke --strict-fp32-force-failure` 退出 `1`。输出包含 strict evidence `FAIL` 与 `failureDiagnostic="forced strict-FP32 child failure"`，父级诊断为 `strict FP32 child exited nonzero`；没有向该命令传入 profile 输出路径。`vulkanDeploymentProbe` focused CTest 已通过，覆盖 failure cleanup/adoption fail-closed 行。 |
-| Hardware fingerprint / queue | `PASS` | 真实 Intel Arc 枚举：device UUID `8680557d080000000002000000000000`；driver UUID `33322e302e3130312e38383630000000`；vendor/device IDs `32902`/`32085`；name `Intel(R) Arc(TM) Graphics`；driver version `1663644`（driver info `101.8860`）；API `1.4.348`。selected `queueFamily=1`、`dedicatedQueue=true`、`computeQueueFamilyIndices=[0,1]`。profile validation 随 strict-success 命令通过。 |
+| Worktree isolation | `PASS` | 主线登记 worktree 中执行；本轮只使用临时、命名构建目录，不使用 prunable worktree 或历史构建产物。 |
+| No-SDK disabled | `PASS` | 取消 `VULKAN_SDK` 并禁用 CMake Vulkan package lookup 的独立 `<build>` 成功构建 `viennaps-device-probe`。运行 `<probe>` 退出 `0`，输出 `status="disabled"`、零 devices、`source="build-time-fallback"`，原因为构建时 Vulkan headers/libraries 不可用。 |
+| Missing / stale / malformed / unknown profile | `PASS` | 无 SDK 的 focused CTest 执行 `capabilityProfileIO`（`0.17 s`）与 `probeProfileAdapter`（`0.07 s`）。覆盖 missing→`MISSING`、driver UUID stale→`STALE`、malformed/duplicate/type→`INVALID`、unknown schema rejection，且均 fail-closed 选择 `CPU`。 |
+| CPU fallback / Manual CPU bypass | `PASS` | 同一 focused CTest 执行 `vulkanDeploymentBootstrap`（`0.09 s`）与 `vulkanDeploymentProbe`（`0.15 s`）。前者覆盖 collector/transient-path failure 的 CPU fallback 和 Manual CPU collector/probe bypass；后者覆盖 nonzero、timeout、malformed、hardware mismatch、invalid evidence 的 fail-closed 与临时输出清理。四项合计 `4/4`、`1.29 s`。 |
+| Strict-FP32 success | `PASS` | SDK-enabled standalone `<probe> --strict-fp32-smoke --write-deployment-profile <profile> --validate-profile` 退出 `0`。严格 evidence：`PASS`，contract `fp32-bitwise-watchdog-v1`，`caseCount=18`，`mismatchCount=0`，`maxUlp=0`，`elapsedMs=166 <= watchdogMs=60000`，diagnostic 为空；profile validation `pass`。child UUID 与 profile/device UUID 唯一且完全匹配。 |
+| Strict-FP32 failure | `PASS` | SDK-enabled standalone `<probe> --strict-fp32-smoke --strict-fp32-force-failure` 退出 `1`。输出包含 strict evidence `FAIL` 与 `failureDiagnostic="forced strict-FP32 child failure"`，父级诊断为 `strict FP32 child exited nonzero`；比较执行前后临时目录，未留下新的 strict child evidence 文件。`vulkanDeploymentProbe` focused CTest 同时覆盖 failure cleanup/adoption fail-closed 行。 |
+| Hardware fingerprint / queue | `PASS` | 真实 Intel Arc 枚举：device UUID、driver UUID、vendor/device IDs、name、driver version 和 profile 内 `driverDate="unknown"` 均已记录；Vulkan API 未提供可验证驱动日期，因此该 schema 值不作为日期断言。selected `queueFamily=1`、`dedicatedQueue=true`、`computeQueueFamilyIndices=[0,1]`；profile validation 随 strict-success 命令通过。 |
 
-### 全项目 focused CTest 阻断详情
+### 本轮 focused CTest 与清理说明
 
-下列命令都使用 Windows clean-environment wrapper，并只创建当前 worktree 内的临时构建目录：
+下列命令使用 SDK 已移除的子进程环境，并只创建当前主线 worktree 内的
+临时构建目录：
 
 ```text
 cmake -S . -B <build> -DVIENNAPS_BUILD_TESTS=ON -DVIENNAPS_ENABLE_VULKAN=OFF
 ctest --test-dir <build> -C Debug --output-on-failure -R "^(capabilityProfileIO|probeProfileAdapter|vulkanDeploymentProbe|vulkanDeploymentBootstrap)$"
 ```
 
-- 使用本地 VTK source 的首次生成走到了 PD4 no-SDK diagnostic stub 配置，但生成阶段被外部 ViennaLS export-set 依赖的 VTK targets 阻断。
-- 不设置本地 VTK source 的重试在 VTK 子模块 checkout 时遇到 Windows path-length 失败。
-- 随后的本地 VTK retry 在获取 CPM 时网络超时。
-
-这些均是此前遇到的外部依赖/环境问题，不是已定位的 PD4 源码失败；其后复用当前 worktree 中已配置的本地 VTK override 完成四项 focused CTest 的构建和执行，四项均通过。PD4-HW-MATRIX 的本卡验收证据现已完整；后续仅由卡片 owner 按主线流程决定状态文档更新。
+本轮以 `VIENNAPS_USE_VTK=OFF`、本地 CPM cache 和 Ninja 只构建四个目标，
+避免 VTK checkout、全量测试和长期驻留的构建产物。CTest 通过后，no-SDK
+probe、CPU 控制面和 SDK probe 的三个临时构建目录均作为本轮可回收产物清理。
+PD4-HW-MATRIX 的本卡验收证据完整；状态文档可据此记录为完成，但不延伸为
+生产路由或性能收益声明。

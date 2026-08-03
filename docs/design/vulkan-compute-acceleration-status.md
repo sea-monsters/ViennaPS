@@ -2845,9 +2845,9 @@ failure is fail-closed.
 | `PD3-LS-SHARED-SESSION` | `DONE` — accepted 2026-08-03; the implementation claim is released. | `levelset_process_controller.hpp`, its focused smoke/CMake wiring, and this status record. Runtime interface expansion requires a recorded re-card first. | Serial prerequisite is accepted; `PD3-SESSION-COMPOSE` may now be claimed. | Intel Arc controller CTests 2/2 confirm equal nonzero update/rebuild generation and identical device name; no second session initialization; CPU-oracle, Manual-CPU bypass, teardown/reconfigure gates remain covered. |
 | `PD3-SESSION-COMPOSE` | `DONE` — accepted on main 2026-08-03 after root rebuild and focused execution evidence. | Exclusive: a composition orchestrator, its focused execution smoke, narrow Process-binding adapters, and this status evidence only. | Follow-up work may continue on `PD4-PERF-BASELINE`; do not treat this row as a release gate. | One session across coverage, diffusion, neutral velocity, Level Set update/rebuild; copied-callback lifetime; atomic mixed AUTO/MANUAL fallback matrix. |
 | `PD3-ROOT-INTEGRATION` | `DONE` — accepted on main 2026-08-03; full targeted integration evidence is recorded below. | Root integration tests and process/trench fixtures only; no algorithm rewrite. | Serial integration gate is released. | Root configure/build, focused executor and deployment tests, 96/96 non-benchmark CTest excluding the pre-existing long `vulkanCpuBaseline`, and trench CPU oracle. |
-| `PD4-HW-MATRIX` | `RUN` — implementation/evidence snapshot merged 2026-08-03; completion is not claimed. | Exclusive: `docs/design/pd4-hw-matrix-card.md`, `gpu/vulkan/VulkanProbe.cpp`, `tests/vulkanDeploymentProbe/`, `tests/probeProfileAdapter/`, `tests/vulkanDeploymentBootstrap/`, `tests/capabilityProfileIO/`. No production routing changes; no Level Set code. | Continue from the recorded evidence; do not treat this row as a release gate. | No-SDK probe exit 0; four focused CPU CTests 4/4; Intel Arc strict PASS with matching identity/queue; forced strict failure exits nonzero and remains fail-closed. |
+| `PD4-HW-MATRIX` | `DONE` — accepted on main 2026-08-03 after a fresh no-SDK/CPU/Intel Arc rerun. | Exclusive: `docs/design/pd4-hw-matrix-card.md`, `gpu/vulkan/VulkanProbe.cpp`, `tests/vulkanDeploymentProbe/`, `tests/probeProfileAdapter/`, `tests/vulkanDeploymentBootstrap/`, `tests/capabilityProfileIO/`. No production routing changes; no Level Set code. | Hardware-matrix evidence is now a PD5 input; do not reopen it without a new hardware/probe defect card. | No-SDK probe exit 0; four focused CPU CTests 4/4; Intel Arc strict PASS with matching identity/queue; forced strict failure exits nonzero, cleans child evidence, and remains fail-closed. |
 | `PD4-PERF-BASELINE` | `DONE` — accepted on main 2026-08-03 as a reproducible baseline evidence card; no optimization claim is implied. | `cmake/run-pd4-perf-baseline.ps1` and its dated JSON evidence only. | Baseline is available to PD5 and later optimization cards. | Five selected CPU/Vulkan smoke suites, three repetitions each, all oracle gates PASS; dispatch/submit/buffer contract metrics and wall-time samples recorded. |
-| `PD5-CI-DOCS-INTEGRATION` | Docs drafting is `READY-P`; CI merge gate is `READY-S` after PD3 root integration and PD4 evidence. | CI workflow/CMake focused options and this status record. | Documentation can proceed in parallel; CI changes wait for evidence. | CPU/no-SDK CI lane, optional self-hosted Vulkan lane, path-hygiene check, linked matrix evidence; CI never requires an SDK. |
+| `PD5-CI-DOCS-INTEGRATION` | `DONE` — CI/docs integration accepted locally on main 2026-08-03; no remote GitHub run is claimed. | `.github/workflows/build.yml`, the CI section of `vulkan-compute-acceleration-development-report.md`, and this status record. No C++/CMake production changes. | `PD5-INSTALL-EXPORT` remains independently gated; a future hosted/self-hosted run verifies runner provisioning, not this local integration claim. | Default CPU/no-SDK lane is explicit; optional dispatch-only labeled self-hosted Vulkan lane is isolated; path-hygiene job and linked PD4 evidence are present; CI never installs or requires an SDK. |
 | `PD5-INSTALL-EXPORT` | `READY-S`: requires root integration; optional release gate. | CMake install/export, consumer smoke, and deployment documentation. | Serial release-facing gate. | Install/export consumer compile; CPU configure required; optional Vulkan/VTK cases recorded without absolute local paths. |
 
 Dependency guard: `PD3-LS-SHARED-SESSION` must extend the existing Level Set
@@ -2859,35 +2859,68 @@ correctness oracle on non-CUDA hosts.
 
 ### PD4-HW-MATRIX
 
-- Status: `RUN` — implementation/evidence snapshot recorded; completion is not claimed
+- Status: `DONE` — accepted on main after a fresh no-SDK, CPU control-plane,
+  and Intel Arc strict-FP32 rerun
 - Date: 2026-08-03
 
-The card was recovered into the registered `claude/pd4-f84f7c` worktree; no
-prunable legacy worktree or root-level build directory was used. The
-no-SDK standalone probe built and returned the disabled build-time fallback
-contract with exit code 0. In the focused Debug configuration,
+The current main worktree rerun used three isolated, temporary build directories:
+a no-SDK diagnostic probe, four CPU/fixture tests, and an SDK-enabled strict
+probe. The no-SDK probe built and returned the disabled build-time fallback
+contract with exit code 0. The focused configuration ran
 `capabilityProfileIO`, `probeProfileAdapter`, `vulkanDeploymentBootstrap`, and
-`vulkanDeploymentProbe` passed 4/4. Those fixtures cover missing, stale,
-malformed, duplicate/type-invalid, and unknown-schema profiles; CPU
-fail-closed behavior; Manual CPU bypass; and strict child nonzero, timeout,
+`vulkanDeploymentProbe` successfully 4/4 in 1.29 s. Those fixtures cover
+missing, stale, malformed, duplicate/type-invalid, and unknown-schema profiles;
+CPU fail-closed behavior; Manual CPU bypass; and strict child nonzero, timeout,
 malformed-output, mismatched-hardware, invalid-evidence, and cleanup paths.
 
 On the Intel Arc device, strict FP32 succeeded under
-`fp32-bitwise-watchdog-v1` with 18 cases, zero mismatches, zero ULP, 130 ms
+`fp32-bitwise-watchdog-v1` with 18 cases, zero mismatches, zero ULP, 166 ms
 within the 60 s watchdog, and a unique matching device UUID. Profile validation
 passed; the selected compute queue was family 1 with a dedicated queue, and
 compute families were `[0,1]`. The forced strict failure exited nonzero with
-an explicit diagnostic and did not promote Vulkan. The complete raw hardware
-profile and JSON evidence remain local to the validation environment; no local
-SDK, VTK, cache, or profile path is tracked.
+an explicit diagnostic, did not promote Vulkan, and left no new strict-child
+evidence file. The complete raw hardware profile and JSON evidence were kept
+only for the run and then removed with the temporary builds; no local SDK, VTK,
+cache, driver, or profile path is tracked.
 
 | Gate | Result |
 |---|---|
 | No-SDK contract | Standalone diagnostic probe: PASS; exit 0; `status=disabled`, empty devices, and `source=build-time-fallback`. |
-| CPU control plane | Focused CTest: PASS 4/4 in 1.35 s. |
+| CPU control plane | Focused CTest: PASS 4/4 in 1.29 s. |
 | Strict success | Intel Arc strict child: PASS; exact FP32 contract and matching deployment profile identity. |
-| Strict negative path | Forced strict failure: PASS; parent exited nonzero, diagnostic retained, and fixture cleanup/adoption coverage passed. |
-| Scope boundary | PD4 acceptance documentation and focused test evidence are being carried forward; production routing, Level Set, global CMake, and local environment paths remain untouched. |
+| Strict negative path | Forced strict failure: PASS; parent exited nonzero, explicit diagnostic retained, no new child-evidence file remained, and fixture cleanup/adoption coverage passed. |
+| Scope boundary | PD4 hardware acceptance is complete; production routing, Level Set, global CMake, and local environment paths remain untouched. |
+
+### PD5-CI-DOCS-INTEGRATION
+
+- Status: `DONE` — local implementation and static validation accepted on main
+  2026-08-03; no GitHub-hosted or self-hosted workflow result is asserted.
+- Scope: `.github/workflows/build.yml`, the CI integration section of the
+  development report, and this status record. No production C++, CMake, SDK,
+  profile, or hardware output is tracked.
+
+The standard cross-platform `test` job now explicitly configures
+`VIENNAPS_ENABLE_VULKAN=OFF`, `VIENNAPS_BUILD_VULKAN_PROBE=OFF`, and
+`VIENNAPS_BUILD_VULKAN_SMOKE=OFF`; it remains the ordinary CPU/no-SDK build and
+non-benchmark CTest lane. `vulkan-hardware` is a separate job that runs only
+when a manually dispatched workflow sets `run_vulkan_hardware=true`, and only
+on a runner labeled both `self-hosted` and `vulkan`. It uses `RUNNER_TEMP` for
+its build, profile, and probe log, leaving no hardware identity or local SDK
+path in the repository or CI summary.
+
+`path-hygiene` runs on a hosted Ubuntu runner and scans the controlled workflow
+and CI documentation with boundary-aware patterns for Windows and Unix absolute
+paths plus SDK environment assignments. The pattern construction avoids
+self-matching its own rule and URLs. The development report contains the same
+commands, lane boundary, and the link to the PD4 hardware matrix evidence.
+
+| Gate | Local evidence |
+|---|---|
+| Workflow syntax | Python YAML parse: PASS; required `path-hygiene` and `vulkan-hardware` jobs present. |
+| Default CPU/no-SDK boundary | Fresh no-SDK CMake evidence used by PD4 configured `VIENNAPS_ENABLE_VULKAN=OFF`, probe/smoke OFF and ran the four control-plane CTests 4/4. The CI job now passes the same flags explicitly on every hosted platform. |
+| Path hygiene | The workflow's six boundary-aware `git grep -E` patterns produced zero matches against the two controlled files: PASS. |
+| Optional hardware lane | Static workflow review: dispatch-only boolean input, `self-hosted` + `vulkan` labels, strict probe and focused CTest commands, all generated paths under `RUNNER_TEMP`: PASS. Remote runner provisioning/execution is not claimed. |
+| Scope boundary | No SDK installation was added to hosted CI; no performance result, hardware promotion, or remote workflow success is inferred. |
 
 ### PD3-LS-SHARED-SESSION
 
@@ -2998,9 +3031,11 @@ with runtime instrumentation without reopening the correctness baseline.
   hardening for profile fail-closed behavior, numerical-evidence fallback,
   selected-device propagation, probe-failure cleanup, and strict probe-device
   argument propagation.
-- Current continuation: `PD3-SESSION-COMPOSE`, `PD3-ROOT-INTEGRATION`, and
-  `PD4-PERF-BASELINE` are now accepted; `PD4-HW-MATRIX` remains RUN and the
-  later PD5 cards remain gated by their own evidence.
+- At this snapshot: `PD3-SESSION-COMPOSE`, `PD3-ROOT-INTEGRATION`, and
+  `PD4-PERF-BASELINE` were accepted while `PD4-HW-MATRIX` had not yet been
+  accepted. The later mainline rerun recorded in the current PD4 entry above
+  supersedes that PD4 state; the remaining PD5 cards still require their own
+  evidence.
 - The snapshot remains historical and is intentionally not rewritten as a
   completion declaration. No production-routing promotion, optimization
   claim, or release gate is implied by that historical entry.

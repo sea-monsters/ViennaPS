@@ -586,6 +586,85 @@ backend 数值等价可作为初始候选，不直接成为 ViennaPS 全模型�
 Lavapipe 是 CPU 软件 Vulkan，只证明 API/着色器正确性，不代表真实 GPU 性能或
 光追支持。硬件 CI 才能提升 Capability Profile 的 `validation` 状态。
 
+#### 7.3.1 本仓库当前 CI 接入边界
+
+当前 `.github/workflows/build.yml` 将默认回归与硬件实测入口隔离：
+
+- 必需的 `path-hygiene` job 在托管 Ubuntu runner 上只扫描本切片的两个受控文件，
+  拒绝绝对本机路径和硬编码的 SDK environment assignment。它的验收命令与 workflow 相同；命令
+  无匹配时每个 `git grep` 必须以退出码 `1` 结束，整个循环以 `0` 结束。规则
+  使用边界和安全分段，因而不会把自身规则、合法 URL 或示例文本当作路径：
+
+  ```bash
+  patterns=(
+    '(^|[[:space:]`"=])[A-Za-z]:[\\/]'
+    '(^|[[:space:]`"=])/User''s/'
+    '(^|[[:space:]`"=])/home/'
+    '(^|[[:space:]`"=])/mnt/'
+    '(^|[[:space:]`"=])/workspace/'
+  )
+  sdk_name='VULKAN_SDK'
+  patterns+=("${sdk_name}[[:space:]]*=[^`\"[:space:]]")
+  for pattern in "${patterns[@]}"; do
+    if git grep -n -E "$pattern" -- \
+        .github/workflows/build.yml \
+        docs/design/vulkan-compute-acceleration-development-report.md >/dev/null; then
+      exit 1
+    fi
+  done
+  ```
+
+  这项检查只证明受控 CI/开发报告没有把本机路径或 SDK 赋值带入版本控制；它不把
+  临时目录存在本身当作验收，也不替代硬件矩阵的设备/驱动证据审查。
+
+- 托管 `test` job 在所有平台显式使用
+  `VIENNAPS_ENABLE_VULKAN=OFF`、`VIENNAPS_BUILD_VULKAN_PROBE=OFF` 和
+  `VIENNAPS_BUILD_VULKAN_SMOKE=OFF`。它不安装 Vulkan SDK，仍执行标准 CPU 构建和
+  非基准 CTest；对应的最小本地命令为：
+
+  ```powershell
+  cmake -S . -B build `
+    -DVIENNAPS_BUILD_TESTS=ON `
+    -DVIENNAPS_ENABLE_VULKAN=OFF `
+    -DVIENNAPS_BUILD_VULKAN_PROBE=OFF `
+    -DVIENNAPS_BUILD_VULKAN_SMOKE=OFF
+  cmake --build build --config Release
+  ctest --test-dir build -C Release --output-on-failure -E "Benchmark|Performance"
+  ```
+
+- `vulkan-hardware` 只接受 `workflow_dispatch` 的
+  `run_vulkan_hardware=true`，并要求 `self-hosted`、`vulkan` 两个 runner 标签。
+  该 job 不在 push 或 pull request 上自动运行，也不替托管 runner 安装 SDK；SDK、
+  loader/driver 和 shader compiler 均由受管控 runner 提供。它使用下列同一组
+  CMake/CTest 入口构建 `viennaps-device-probe`，运行严格 FP32 probe，并执行已有
+  的四个部署控制面测试：
+
+  ```powershell
+  $buildDir = Join-Path $env:RUNNER_TEMP "viennaps-vulkan-build"
+  cmake -S . -B $buildDir `
+    -DVIENNAPS_USE_VTK=OFF `
+    -DVIENNAPS_VTK_RENDERING=OFF `
+    -DVIENNAPS_BUILD_TESTS=ON `
+    -DVIENNAPS_ENABLE_VULKAN=ON `
+    -DVIENNAPS_BUILD_VULKAN_PROBE=ON `
+    -DVIENNAPS_BUILD_VULKAN_SMOKE=ON
+  cmake --build $buildDir --config Release --target `
+    viennaps-device-probe `
+    capabilityProfileIO `
+    probeProfileAdapter `
+    vulkanDeploymentProbe `
+    vulkanDeploymentBootstrap
+  ctest --test-dir $buildDir -C Release --output-on-failure `
+    -R "^(capabilityProfileIO|probeProfileAdapter|vulkanDeploymentProbe|vulkanDeploymentBootstrap)$"
+  ```
+
+  probe 输出、deployment profile 和失败日志只写入 `$RUNNER_TEMP`，不进入仓库或
+  CI 摘要，避免提交本机路径、设备名或驱动标识。该 lane 的可验证结果是对应的
+  workflow check；需要用于硬件矩阵的原始 JSON、设备/驱动指纹和队列证据时，仍由
+  主线按 [状态文档](vulkan-compute-acceleration-status.md) 的受控流程记录。
+  通过这个可选 lane 不等于完成硬件矩阵、性能门禁或 PD5；它也不是 CPU/no-SDK
+  回归的替代品。
+
 ### 7.4 性能门禁
 
 P0 固定代表性 2D/3D、小/中/大、ray-heavy、advection-heavy 和 oxidation-heavy

@@ -2790,6 +2790,65 @@ lifetime behavior.
 |---|---|
 | RED | Fresh local Ninja build failed at the frozen borrowed smoke call because the executor had no three-argument `initialize` overload (MSVC C2660). |
 | GREEN | The borrowed executor smoke built and passed with exact CPU raw-bit equality, self-owned compatibility, invalid-session rejection, reset/destruction session survival, and callback use while the caller session remained valid. |
-| Fresh root hardware acceptance | Fresh `C:\tmp\viennaps-pd2-build` configuration used `VULKAN_SDK=D:\VulkanSDK\1.4.357.0` only in the command environment and the local `.cpm-cache`; focused CTest passed 2/2 on the Intel Arc (`viennaps-vulkan-neutral-transport-surface-smoke`, `viennaps-vulkan-neutral-transport-velocity-executor-smoke`). |
+| Fresh root hardware acceptance | Fresh temporary configuration supplied `VULKAN_SDK` only through the command environment and used the local `.cpm-cache`; focused CTest passed 2/2 on the Intel Arc (`viennaps-vulkan-neutral-transport-surface-smoke`, `viennaps-vulkan-neutral-transport-velocity-executor-smoke`). |
 | Scope exception | The necessary low-level `neutral_transport_surface.hpp/.cpp` session-lifetime change was authorized after inspection showed no existing borrowed capability; no CMake, shader, policy, Process, CUDA, or dependency files changed. |
 | Cleanup | Temporary validation trees `C:\tmp\viennaps-pd2-build` and workspace `.tmp_pd2_red_ninja` were removed after validation. |
+
+### PD2-C: single-session Process neutral surface binding
+
+- Status: implemented and accepted by fresh Intel Arc hardware CTest
+- Date: 2026-08-03
+
+`ProcessDeploymentBinding<D>` now has an explicit caller-retained CPU process
+model overload. When a neutral-transport workload selects Vulkan, the binding
+discovers `impl::NeutralTransportSurfaceModel<float,D>` through that handle,
+retains the concrete surface model for callback cleanup, and initializes
+coverage, surface diffusion, and neutral velocity bridges against the one
+`DeploymentComputeContext` session. The neutral callback captures the shared
+holder, so it remains usable after the binding object is destroyed while the
+caller retains the model/session; `clear(process)` removes Process callbacks
+and the model callback before holder/session release. Existing two-stage
+overloads still reject neutral workloads. Automatic bridge, shader, or model
+failure degrades the complete selected surface set atomically; manual Vulkan
+failure is fail-closed.
+
+| Gate | Result |
+|---|---|
+| Interface gap | The pre-change facade has no retained-neutral-model overload; the smoke call preserves that missing-interface case. A separate pre-change compile was not claimed because the first agent shell had no C++ compiler. |
+| Fresh root hardware CTest | A fresh Visual Studio 2022 root configuration with temporary `VULKAN_SDK`, local CPM cache, and a temporary patched ViennaLS source built the smoke; Intel Arc CTest `viennaps-vulkan-process-deployment-binding-smoke` passed 1/1 in 0.48 s. |
+| Validation coverage | The single smoke checks CPU raw-bit neutral velocity alongside coverage/diffusion, one shared session identity, caller-retained callback lifetime, clear/reconfigure, invalid or non-neutral models, atomic automatic degradation, and manual fail-closed behavior. |
+| Cleanup | The temporary build, copied ViennaLS source, and build logs were removed after the CTest; the repository root `build` directory was retained. |
+| Scope boundary | Only the Process binding facade, its smoke, surface CMake target wiring, and this append-only status entry changed. |
+
+### Parallel execution board (PD2-C onward)
+
+- Snapshot: 2026-08-03; this is the scheduling source of truth for concurrent
+  Vulkan work.
+- Status legend: `DONE` = evidence accepted; `RUN` = code exists with a named
+  gate pending; `READY-S` = serial predecessor is accepted; `READY-P` = safe
+  to implement in parallel; `BLOCKED` = an external capability or dependency
+  gate is missing.
+- Update rule: every card update records an owner/card ID, changed-file
+  boundary, exact command/result, CPU oracle outcome, and (when Vulkan is
+  selected) hardware evidence. Do not record an unmeasured speedup as a
+  result. Deployment composition has exactly one session owner; copied
+  callbacks keep their holder alive until explicit clear/reconfiguration.
+
+| Card / phase | Current state and predecessor | Exclusive ownership boundary | Parallel scheduling | Required acceptance evidence |
+|---|---|---|---|---|
+| `BASE` through `PD1-B` | `DONE`: profile cache/probe, primitives/BVH, Level Set seam, CPU executor seams, coverage/surface bridges, and two-stage Process binding are accepted. | Existing runtime, primitives, profile I/O, coverage, and surface-diffusion code; no compatibility rewrite. | Baseline only; do not reopen without a defect card. | Existing focused CPU differentials and Intel Arc smoke records in this document. |
+| `PD2-A` / `PD2-B` / `PD2-C` | `DONE`: neutral stage policy, borrowed neutral bridge, and three-stage Process binding accepted. | `backendPolicy.hpp`; neutral surface/executor; Process binding and its smoke/CMake target. | Baseline only; later cards consume these interfaces. | Policy CTest; neutral bridge CTests 2/2; Process-binding CTest 1/1 with CPU raw-bit oracle. |
+| `PD3-LS-SHARED-SESSION` | `READY-S`: PD2-C and the existing P5-K3E Level Set deployment seam are accepted. | `levelset_deployment_session.hpp`, `levelset_process_controller.hpp`, and only necessary runtime session adapters. | Design review may run now; implementation is serial before composition. | Level Set and surface stages expose the same generation/device/queue; no second session initialization; CPU oracle, Manual-CPU bypass, teardown/reconfigure smoke. |
+| `PD3-SESSION-COMPOSE` | `READY-S`: requires `PD3-LS-SHARED-SESSION`. | New composition smoke/orchestrator plus narrow adapters between Process binding and Level Set deployment session. | Sole cross-surface/Level Set owner; do not duplicate bridge ownership. | One session across coverage, diffusion, neutral velocity, Level Set update/rebuild; copied-callback lifetime; atomic mixed AUTO/MANUAL fallback matrix. |
+| `PD3-ROOT-INTEGRATION` | `READY-S`: requires `PD3-SESSION-COMPOSE` and available patched ViennaLS/CS/VTK prerequisites. | Root integration tests and process/trench fixtures only; no algorithm rewrite. | Serial integration gate. | Root configure/build, focused executor and deployment tests, then non-benchmark CTest/trench CPU oracle; record any host-path blocker exactly. |
+| `PD4-HW-MATRIX` | `READY-P`: PD2-C is accepted and this card does not depend on Level Set code changes. | Probe/profile fixtures and no-SDK/CPU-only test harness; no production routing changes. | Can run beside `PD3-LS-SHARED-SESSION`. | No-SDK disabled status; missing/stale/unknown profile fail-closed; strict-FP32 Intel Arc smoke; adapter UUID/driver/queue evidence; CPU fallback coverage. |
+| `PD4-PERF-BASELINE` | `READY-S`: requires `PD3-SESSION-COMPOSE` so session-overhead measurements are meaningful. | Benchmark harness/scripts and status evidence only. | May run beside the hardware matrix after its predecessor. | Repeated deterministic CPU/Vulkan runs; submit/dispatch/buffer metrics for coverage, diffusion, neutral, Level Set; CPU correctness check before any performance claim. |
+| `PD5-CI-DOCS-INTEGRATION` | Docs drafting is `READY-P`; CI merge gate is `READY-S` after PD3 root integration and PD4 evidence. | CI workflow/CMake focused options and this status record. | Documentation can proceed in parallel; CI changes wait for evidence. | CPU/no-SDK CI lane, optional self-hosted Vulkan lane, path-hygiene check, linked matrix evidence; CI never requires an SDK. |
+| `PD5-INSTALL-EXPORT` | `READY-S`: requires root integration; optional release gate. | CMake install/export, consumer smoke, and deployment documentation. | Serial release-facing gate. | Install/export consumer compile; CPU configure required; optional Vulkan/VTK cases recorded without absolute local paths. |
+
+Dependency guard: `PD3-LS-SHARED-SESSION` must extend the existing Level Set
+owner rather than creating another `ProcessDeploymentBinding` session;
+`PD3-SESSION-COMPOSE` is the only card allowed to own cross-surface/Level Set
+lifecycle composition. `PD4` cards are observational until their acceptance
+evidence exists. Every implementation card must use CPU results as its
+correctness oracle on non-CUDA hosts.

@@ -3,6 +3,8 @@
 
 #include "process_deployment_binding.hpp"
 
+#include <models/psNeutralTransport.hpp>
+
 #include <array>
 #include <bit>
 #include <cstdint>
@@ -15,6 +17,8 @@
 
 int main() {
   viennaps::Process<float, 2> process;
+  auto retainedNeutralModel =
+      viennacore::SmartPointer<viennaps::ProcessModelBase<float, 2>>::New();
   process.setCoverageDeltaExecutor(
       [](viennaps::CoverageDeltaWork<float> &, std::string &) { return true; });
   process.setSurfaceDiffusionStatusExecutor(
@@ -41,6 +45,12 @@ int main() {
   selection.selectionMode = SelectionMode::MANUAL;
   selection.globalBackend = ComputeBackend::CPU;
   viennaps::vulkan::surface::ProcessDeploymentBinding<2> binding;
+  // Regression coverage for the explicit retained-model overload (CPU path).
+  const auto missingNeutralOverload = binding.configure(
+      process, decision, {}, workloads, selection, {},
+      viennaps::vulkan::surface::ProcessDeploymentBinding<2>::SpirvPaths{},
+      retainedNeutralModel);
+  static_cast<void>(missingNeutralOverload);
   const auto result = binding.configure(process, decision, {}, workloads,
                                         selection, {});
   if (!result.ok || process.getCoverageDeltaExecutor() ||
@@ -174,6 +184,122 @@ int main() {
       std::bit_cast<std::uint32_t>(diffusionOutput[1]) !=
           std::bit_cast<std::uint32_t>(3.0F)) {
     std::cerr << "retained surface callback smoke failed: " << error << '\n';
+    return 1;
+  }
+
+  // The neutral stage uses a caller-retained CPU model handle.  Coverage,
+  // diffusion, and neutral all share the one deployment context/session.
+  using NeutralModel = viennaps::NeutralTransport<float, 2>;
+  using NeutralSurface =
+      viennaps::impl::NeutralTransportSurfaceModel<float, 2>;
+  viennaps::NeutralTransportParameters<float> neutralParameters;
+  neutralParameters.kEtch = 2.0F;
+  neutralParameters.surfaceSiteDensity = 3.0F;
+  neutralParameters.siliconDensity = 6.0F;
+  neutralParameters.etchFrontMaterial = viennaps::Material::Si;
+  auto neutralModel = viennacore::SmartPointer<NeutralModel>::New(
+      neutralParameters);
+  auto neutralSurface =
+      std::dynamic_pointer_cast<NeutralSurface>(neutralModel->getSurfaceModel());
+  if (!neutralSurface) {
+    std::cerr << "neutral model surface discovery failed\n";
+    return 1;
+  }
+  neutralSurface->initializeCoverages(3U);
+  auto neutralCoverage =
+      neutralSurface->getCoverages()->getScalarData(neutralParameters.coverageLabel);
+  *neutralCoverage = {0.25F, 0.5F, 0.75F};
+  auto neutralFluxes = viennacore::PointData<float>::New();
+  neutralFluxes->insertNextScalarData(std::vector<float>(3U, 1.0F),
+                                      neutralParameters.fluxLabel);
+  const std::vector<float> neutralMaterials{
+      static_cast<float>(neutralParameters.etchFrontMaterial.legacyId()), 1.0F,
+      static_cast<float>(neutralParameters.etchFrontMaterial.legacyId())};
+  const std::vector<viennacore::Vec3D<float>> neutralCoordinates(3U);
+  const auto neutralCpu = neutralSurface->calculateVelocities(
+      neutralFluxes, neutralCoordinates, neutralMaterials);
+
+  viennaps::Process<float, 2> neutralProcess;
+  neutralProcess.setProcessModel(neutralModel);
+  const std::array<StageWorkload, 3> allSurfaceWorkloads = {
+      StageWorkload{Stage::COVERAGE, Precision::FP32, 1U, false, RayMode::NONE,
+                    true},
+      StageWorkload{Stage::SURFACE_DIFFUSION, Precision::FP32, 1U, false,
+                    RayMode::NONE, true},
+      StageWorkload{Stage::NEUTRAL_TRANSPORT_VELOCITY, Precision::FP32, 3U,
+                    false, RayMode::NONE, true}};
+  auto allVulkanDecision = vulkanDecision;
+  allVulkanDecision.plan.stages.push_back(
+      StageSelection{Stage::NEUTRAL_TRANSPORT_VELOCITY});
+  allVulkanDecision.plan.stages.back().selected = true;
+  allVulkanDecision.plan.stages.back().selectedBackend =
+      ComputeBackend::VULKAN;
+  const auto retainedModel =
+      viennacore::SmartPointer<viennaps::ProcessModelBase<float, 2>>(
+          neutralModel);
+  viennaps::vulkan::surface::ProcessDeploymentBinding<2>::SpirvPaths allPaths{
+      VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV_PATH,
+      VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH,
+      VIENNAPS_VULKAN_NEUTRAL_TRANSPORT_SPV_PATH};
+  viennaps::vulkan::surface::ProcessDeploymentBinding<2> invalidNeutralBinding;
+  const auto invalidNeutral = invalidNeutralBinding.configure(
+      neutralProcess, allVulkanDecision, fingerprint, allSurfaceWorkloads,
+      automatic, {}, allPaths, retainedNeutralModel);
+  if (!invalidNeutral.ok || !invalidNeutral.degraded ||
+      invalidNeutralBinding.context() != nullptr ||
+      neutralProcess.getCoverageDeltaExecutor() ||
+      neutralProcess.getSurfaceDiffusionExecutor()) {
+    std::cerr << "invalid neutral model degradation smoke failed\n";
+    return 1;
+  }
+  auto missingNeutralPath = allPaths;
+  missingNeutralPath.neutralTransportVelocity.clear();
+  viennaps::vulkan::surface::ProcessDeploymentBinding<2> missingNeutralBinding;
+  const auto missingNeutral = missingNeutralBinding.configure(
+      neutralProcess, allVulkanDecision, fingerprint, allSurfaceWorkloads,
+      automatic, {}, missingNeutralPath, retainedModel);
+  if (!missingNeutral.ok || !missingNeutral.degraded ||
+      missingNeutralBinding.context() != nullptr ||
+      neutralProcess.getCoverageDeltaExecutor() ||
+      neutralProcess.getSurfaceDiffusionExecutor()) {
+    std::cerr << "empty neutral shader degradation smoke failed\n";
+    return 1;
+  }
+  viennaps::vulkan::surface::ProcessDeploymentBinding<2> neutralBinding;
+  const auto neutralConfigured = neutralBinding.configure(
+      neutralProcess, allVulkanDecision, fingerprint, allSurfaceWorkloads,
+      automatic, {}, allPaths, retainedModel);
+  const auto *neutralContext = neutralBinding.context();
+  const auto *neutralSession =
+      neutralContext == nullptr ? nullptr : neutralContext->session();
+  if (!neutralConfigured.ok || neutralConfigured.degraded ||
+      !neutralConfigured.coverageVulkan ||
+      !neutralConfigured.surfaceDiffusionVulkan ||
+      !neutralConfigured.neutralTransportVelocityVulkan ||
+      neutralSession == nullptr ||
+      neutralConfigured.sessionGeneration != neutralSession->generation() ||
+      neutralConfigured.device != neutralSession->deviceHandle()) {
+    std::cerr << "combined neutral Process binding smoke failed\n";
+    return 1;
+  }
+  const auto neutralGpu = neutralSurface->calculateVelocities(
+      neutralFluxes, neutralCoordinates, neutralMaterials);
+  if (neutralGpu == nullptr || neutralGpu->size() != neutralCpu->size()) {
+    std::cerr << "neutral callback did not produce output\n";
+    return 1;
+  }
+  for (std::size_t index = 0U; index < neutralCpu->size(); ++index) {
+    if (std::bit_cast<std::uint32_t>(neutralGpu->at(index)) !=
+        std::bit_cast<std::uint32_t>(neutralCpu->at(index))) {
+      std::cerr << "neutral callback differs from CPU oracle\n";
+      return 1;
+    }
+  }
+  neutralBinding.clear(neutralProcess);
+  const auto neutralAfterClear = neutralSurface->calculateVelocities(
+      neutralFluxes, neutralCoordinates, neutralMaterials);
+  if (neutralAfterClear == nullptr || neutralAfterClear->size() != 3U) {
+    std::cerr << "neutral clear lifecycle smoke failed\n";
     return 1;
   }
   process.clearCoverageDeltaExecutor();

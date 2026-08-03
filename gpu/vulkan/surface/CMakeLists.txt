@@ -175,20 +175,25 @@ add_executable(viennaps-vulkan-process-deployment-binding-smoke
                process_deployment_binding_smoke.cpp)
 add_dependencies(viennaps-vulkan-process-deployment-binding-smoke
                  viennaps-vulkan-graph-diffusion-spv
-                 viennaps-vulkan-coverage-delta-metric-spv)
+                 viennaps-vulkan-coverage-delta-metric-spv
+                 viennaps-vulkan-neutral-transport-surface-spv)
 target_compile_features(viennaps-vulkan-process-deployment-binding-smoke
                          PRIVATE cxx_std_20)
 string(REPLACE "\\" "/" VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH
                "${VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV}")
 string(REPLACE "\\" "/" VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV_PATH
                "${VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV}")
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_NEUTRAL_TRANSPORT_SPV_PATH
+               "${VIENNAPS_VULKAN_SURFACE_SPV}")
 target_compile_definitions(
   viennaps-vulkan-process-deployment-binding-smoke PRIVATE
   "VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH=\"${VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH}\""
-  "VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV_PATH=\"${VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV_PATH}\"")
+  "VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV_PATH=\"${VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV_PATH}\""
+  "VIENNAPS_VULKAN_NEUTRAL_TRANSPORT_SPV_PATH=\"${VIENNAPS_VULKAN_NEUTRAL_TRANSPORT_SPV_PATH}\"")
 target_link_libraries(viennaps-vulkan-process-deployment-binding-smoke
                       PRIVATE ViennaPS viennaps_vulkan_surface_diffusion
-                              viennaps_vulkan_coverage_delta_metric Vulkan::Vulkan)
+                              viennaps_vulkan_coverage_delta_metric
+                              viennaps_vulkan_surface Vulkan::Vulkan)
 
 if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
    VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE)

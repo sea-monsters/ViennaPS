@@ -21,6 +21,13 @@ cmake --build build --parallel
 ctest --test-dir build --output-on-failure -E "Benchmark|Performance"
 ```
 
+On Windows hosted shells, run the same CMake arguments through
+`pwsh -File cmake/invoke-cmake-clean-env.ps1 -- <cmake args>` to remove a
+duplicate `PATH`/`Path` child environment that MSBuild rejects. Keep SDK and
+cache locations in caller environment variables. Before parallel work, read
+`docs/development-build-and-worktree-guide.md`; one claimed card must use one
+verified Git worktree and must not create a root `build-*` directory.
+
 To build examples, add `-DVIENNAPS_BUILD_EXAMPLES=ON`. To build Python
 bindings locally, use `python -m pip install .`; GPU builds require a matching
 CUDA toolkit and driver. The CI formatting check is run with:

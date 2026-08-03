@@ -33,6 +33,10 @@ For full documentation, visit [ViennaPS Documentation](https://viennatools.githu
 Forward-looking architecture and development plans maintained with the source
 are indexed in [Development documents](docs/README.md).
 
+For source contributors working with CMake, cached CPM dependencies, Vulkan,
+or parallel worktrees, see the repository-local
+[build and parallel-development guide](docs/development-build-and-worktree-guide.md).
+
 ## Releases
 
 > [!NOTE]  

@@ -2828,6 +2828,10 @@ failure is fail-closed.
   gate pending; `READY-S` = serial predecessor is accepted; `READY-P` = safe
   to implement in parallel; `BLOCKED` = an external capability or dependency
   gate is missing.
+- Claim rule: a `RUN` row names its card owner and exact exclusive files before
+  implementation begins. Other roles may inspect the boundary but may not edit
+  it; a required expansion is re-carded and recorded before the edit. Release
+  the claim only after the acceptance evidence and cleanup are recorded.
 - Update rule: every card update records an owner/card ID, changed-file
   boundary, exact command/result, CPU oracle outcome, and (when Vulkan is
   selected) hardware evidence. Do not record an unmeasured speedup as a
@@ -2838,7 +2842,7 @@ failure is fail-closed.
 |---|---|---|---|---|
 | `BASE` through `PD1-B` | `DONE`: profile cache/probe, primitives/BVH, Level Set seam, CPU executor seams, coverage/surface bridges, and two-stage Process binding are accepted. | Existing runtime, primitives, profile I/O, coverage, and surface-diffusion code; no compatibility rewrite. | Baseline only; do not reopen without a defect card. | Existing focused CPU differentials and Intel Arc smoke records in this document. |
 | `PD2-A` / `PD2-B` / `PD2-C` | `DONE`: neutral stage policy, borrowed neutral bridge, and three-stage Process binding accepted. | `backendPolicy.hpp`; neutral surface/executor; Process binding and its smoke/CMake target. | Baseline only; later cards consume these interfaces. | Policy CTest; neutral bridge CTests 2/2; Process-binding CTest 1/1 with CPU raw-bit oracle. |
-| `PD3-LS-SHARED-SESSION` | `READY-S`: PD2-C and the existing P5-K3E Level Set deployment seam are accepted. | `levelset_deployment_session.hpp`, `levelset_process_controller.hpp`, and only necessary runtime session adapters. | Design review may run now; implementation is serial before composition. | Level Set and surface stages expose the same generation/device/queue; no second session initialization; CPU oracle, Manual-CPU bypass, teardown/reconfigure smoke. |
+| `PD3-LS-SHARED-SESSION` | `RUN` — claimed 2026-08-03 by `root/PD3-LS-SHARED-SESSION`; PD2-C and P5-K3E are accepted. | Exclusive: `gpu/vulkan/levelset/levelset_deployment_session.hpp`, `levelset_process_controller.hpp`, their focused smoke/CMake wiring, and this status record. Runtime interface expansion requires a recorded re-card first. | Serial implementation claim; other roles may only prepare read-only design/review. | Level Set and surface stages expose the same generation/device/queue; no second session initialization; CPU oracle, Manual-CPU bypass, teardown/reconfigure smoke. |
 | `PD3-SESSION-COMPOSE` | `READY-S`: requires `PD3-LS-SHARED-SESSION`. | New composition smoke/orchestrator plus narrow adapters between Process binding and Level Set deployment session. | Sole cross-surface/Level Set owner; do not duplicate bridge ownership. | One session across coverage, diffusion, neutral velocity, Level Set update/rebuild; copied-callback lifetime; atomic mixed AUTO/MANUAL fallback matrix. |
 | `PD3-ROOT-INTEGRATION` | `READY-S`: requires `PD3-SESSION-COMPOSE` and available patched ViennaLS/CS/VTK prerequisites. | Root integration tests and process/trench fixtures only; no algorithm rewrite. | Serial integration gate. | Root configure/build, focused executor and deployment tests, then non-benchmark CTest/trench CPU oracle; record any host-path blocker exactly. |
 | `PD4-HW-MATRIX` | `READY-P`: PD2-C is accepted and this card does not depend on Level Set code changes. | Probe/profile fixtures and no-SDK/CPU-only test harness; no production routing changes. | Can run beside `PD3-LS-SHARED-SESSION`. | No-SDK disabled status; missing/stale/unknown profile fail-closed; strict-FP32 Intel Arc smoke; adapter UUID/driver/queue evidence; CPU fallback coverage. |

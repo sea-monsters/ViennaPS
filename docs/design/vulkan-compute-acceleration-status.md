@@ -2111,21 +2111,21 @@ the complete level-set dependency set is absent.
 
 ### P5-JD: device-resident ray-flux composition baseline
 
-- Status: accepted locally as an ordered multi-submit composition baseline;
-  it is not the final one-command path or a production Process route
-- Date: 2026-08-02
+- Status: revalidated locally on the Release Vulkan configuration; it is not the
+  final one-command path or a production Process route
+- Date: 2026-08-04
 
 `DeviceRayFluxPipeline` is the physical composition of
 P5-I triangle hits, P5-JA record compaction, P5-JB2B stable radix ordering,
-and P5-JC surface reduction. It will allocate and upload only the original
-ray, triangle, and weight inputs, retain all hit/record/count/segment
-intermediates in the shared `ComputeSession`, and download only the terminal
+and P5-JC surface reduction. It allocates and uploads only the original
+ray, triangle, and weight inputs, retains all hit/record/count/segment
+intermediates in the shared `ComputeSession`, and downloads only the terminal
 surface id, weight, and count. The first acceptance fixture is five rays and
 three triangles: three hits on surface 0 reduce to `3.0`, one translated hit
 is a singleton `-0`, and one ray misses. Every terminal word is compared with
-the existing CPU pipeline oracle. The standalone Vulkan build compiles the
-new smoke under MSVC; two direct Intel Arc executions print
-`device ray-flux pipeline Vulkan dispatch PASS`, and its focused CTest passes
+the existing CPU pipeline oracle. The standalone Vulkan build compiles the new
+smoke under MSVC; its Release execution prints
+`device ray-flux pipeline Vulkan dispatch PASS`, and the focused CTest passes
 1/1.
 
 This deliberately changes the prior milestone wording: the reusable stage
@@ -2144,9 +2144,9 @@ therefore device residency and CPU-bitwise terminal differential only.
 
 ### P5-JE: single-command device-resident ray-flux compute chain
 
-- Status: accepted locally as a compute-submission fusion slice; it is not a
+- Status: revalidated locally on the Release Vulkan configuration; it is not a
   production Process route or strict-FP32 deployment promotion
-- Date: 2026-08-02
+- Date: 2026-08-04
 
 P5-JE turns the P5-I -> P5-JA -> P5-JB2B -> P5-JC composition into one
 primary compute command buffer and one queue submission guarded by one fence.
@@ -2163,15 +2163,15 @@ compute-submission count.
 | One-compute-submit contract | `DeviceRayFluxPipeline::lastComputeSubmissionCount()` reports exactly `1` after the complete recorded chain; all record-only APIs were checked to contain no lifecycle, submit, wait, or download operation |
 | CPU bitwise differential | the real Intel Arc device runs the five-ray/three-triangle fixture; count, dense surface ids, FP32 weight words (including singleton `-0`), and output-tail sentinels match `RayFluxPipeline::runCpu` exactly |
 | Integration correction | the initial differential exposed a compact count of 5 instead of 4: `recordDispatch` had recorded into its private member command buffer rather than the supplied primary buffer. It now records every Vulkan command into the supplied buffer; the compact and reduced device counts are 4 and 2 respectively before terminal readback |
-| Regression group | standalone `gpu/vulkan` build under MSVC succeeds and five focused CTests pass: triangle-hit device, ray-record compaction, recursive radix sort, surface reduction, and the full device ray-flux pipeline |
+| Regression group | Release standalone `gpu/vulkan` target build succeeds and five focused CTests pass: triangle-hit device, ray-record compaction, recursive radix sort, surface reduction, and the full device ray-flux pipeline |
 | Scope boundary | no device-visible non-finite/overflow intermediate status, strict-FP32 deployment probe, exact dynamic output admission, BVH, particle transport, Process routing, or automatic backend eligibility is claimed |
 
 ### P5-JF: strict-FP32 reduction status and fail-closed terminal commit
 
-- Status: accepted locally as a numerical-integrity slice; it closes the
-  device-visible intermediate-sum rejection gap in the P5-JE aggregate, but is
-  not a production ray-tracing or Process route
-- Date: 2026-08-03
+- Status: revalidated locally on the Release Vulkan configuration; it closes
+  the device-visible intermediate-sum rejection gap in the P5-JE aggregate,
+  but is not a production ray-tracing or Process route
+- Date: 2026-08-04
 
 P5-JF adds a one-word, device-local sticky status buffer to surface reduction.
 The reduction shader validates the accumulator seed, every addend, and every
@@ -2187,8 +2187,9 @@ the flag is nonzero. The non-recording primitive follows the same contract.
 | CPU rejection oracle | Two `FLT_MAX` records for one surface overflow their ordered FP32 sum. `RaySurfaceReducer::reduceCpu` rejects the input and leaves prefilled output ids, weights, and count unchanged. |
 | Device reduction | The same two-record fixture sets the device status. `DeviceRaySurfaceReducer::reduce()` returns failure and its caller-owned device output buffers retain their sentinels. |
 | Aggregate transaction | `DeviceRayFluxPipeline::runCpu()` and `runGpu()` both reject the same-surface overflow fixture; the GPU path checks status before count/id/weight readback, so its output sentinels and count remain unchanged. |
-| Existing normal path | The existing five-ray/three-triangle CPU differential and device ray-flux smoke still pass, preserving the accepted bitwise normal-path result. |
-| Validation boundary | The two affected standalone CTests pass on the local Vulkan device. A complete standalone build remains blocked by the pre-existing `/W4 /WX` C4530 exception-handling warning in `gather_histogram_primitives.cpp`; this slice does not claim that unrelated full-suite gate. |
+| Existing normal path | The five-ray/three-triangle CPU differential and device ray-flux smoke pass in Release, preserving the accepted bitwise normal-path result. |
+| Revalidation | `spirv-val --target-env vulkan1.2` accepts `ray_surface_reduce.comp.spv`; the five focused P5-JD/JE/JF CTests, including the strict aggregate overflow fixture, pass in the fresh Release Vulkan build. |
+| Broader-suite revalidation | The current standalone `gpu/vulkan` Release CTest registration contains 12 ray tests and the complete suite passes 12/12. The prior 24/24 wording is not reproducible from the current standalone registration and is not used as an acceptance denominator. |
 | Scope boundary | This adds numerical failure propagation only. It does not add a BVH, reflection/multi-bounce transport, CUDA callable-equivalent surface physics, Process routing, dynamic-output admission, or automatic backend promotion. |
 
 ### P5-R1: compute-only flattened BVH triangle traversal
@@ -2294,26 +2295,27 @@ RK2/RK3 remain deliberately CPU-only until a multi-stage device state machine
 is proven. The first surface velocity formula is now exact but intentionally
 unwired to process selection. Direct negative/non-finite time injection and
 the optional VTK-enabled install/export conflict remain validation gaps.
-P5-JD first proves physical device-resident composition of P5-I, P5-JA,
-P5-JB2B, and P5-JC while retaining the sixteen stable P5-JB2B LSD passes,
-their full `RayRecord` bit contract, and device-local count storage. P5-JE
-then records those stages with explicit barriers into one compute submission.
-P5-JF completes the next numerical-integrity condition with a device-visible
-status and a fail-closed terminal commit for non-finite or out-of-domain
-intermediate FP32 sums, matching the relevant `reduceCpu` rejection boundary.
-P5-R1 next supplies compute-only traversal over a CPU-built, device-resident
-flat BVH. The remaining ray work is GPU BVH construction/refit,
-boundary/reflection/multi-bounce behavior, surface-model coupling, and Process
-routing. P5-K2 now populates P5-K1's evidence with an isolated watchdog probe;
-its dedicated raw-word shader and process boundary cannot reuse the HostVisible
-radix helpers.
-CPU differential checking remains an explicit validation gate, not a
+
+P5-JD, P5-JE, and P5-JF are now locally revalidated: the device-resident ray
+composition, one-submit recording chain, and strict-FP32 fail-closed terminal
+status are evidenced on Intel Arc. The next serial boundary is to release the
+uncommitted regression-hardening claim, then connect the accepted ray data path
+to a real Process route. P5-R1 through P5-R6 provide compute-BVH traversal and
+prepared/refit primitives, but GPU construction, physical transport
+reflection/roulette, surface-model coupling, and Process routing remain open.
+
+P5-K2 populates P5-K1's evidence with an isolated watchdog probe; its
+dedicated raw-word shader and process boundary cannot reuse the HostVisible
+radix helpers. The P5-N2/B2B/COV bridges likewise remain explicit seams until
+the shared Process/deployment installation and model support matrix are
+accepted. CPU differential checking remains an explicit validation gate, not a
 production per-call guard. Coverage reaction is a capability-gated FP64
 candidate, without weakening the current fail-closed gate.
 
-After those production-seam gates, the Level Set work advances to HRLE
-sparse rebuild integration, followed by particle/ray and surface/oxidation
-stages.
+After the P5 route and model gates, the single-developer order advances to the
+P6 linear-algebra/oxidation cards and then P7 resident execution, calibration,
+soak, recovery, and release gates. The detailed dependency order is recorded
+in `Total-plan continuation board: P5 to P7` below.
 
 ### P5-K3: synchronous deployment-profile provisioning seam
 
@@ -2822,7 +2824,7 @@ failure is fail-closed.
 
 ### Parallel execution board (PD2-C onward)
 
-- Snapshot: 2026-08-03; this is the scheduling source of truth for concurrent
+- Snapshot: 2026-08-04; this is the scheduling source of truth for concurrent
   Vulkan work.
 - Status legend: `DONE` = evidence accepted; `RUN` = code exists with a named
   gate pending; `READY-S` = serial predecessor is accepted; `READY-P` = safe
@@ -2849,6 +2851,11 @@ failure is fail-closed.
 | `PD4-PERF-BASELINE` | `DONE` — accepted on main 2026-08-03 as a reproducible baseline evidence card; no optimization claim is implied. | `cmake/run-pd4-perf-baseline.ps1` and its dated JSON evidence only. | Baseline is available to PD5 and later optimization cards. | Five selected CPU/Vulkan smoke suites, three repetitions each, all oracle gates PASS; dispatch/submit/buffer contract metrics and wall-time samples recorded. |
 | `PD5-CI-DOCS-INTEGRATION` | `DONE` — CI/docs integration accepted locally on main 2026-08-03; no remote GitHub run is claimed. | `.github/workflows/build.yml`, the CI section of `vulkan-compute-acceleration-development-report.md`, and this status record. No C++/CMake production changes. | `PD5-INSTALL-EXPORT` remains independently gated; a future hosted/self-hosted run verifies runner provisioning, not this local integration claim. | Default CPU/no-SDK lane is explicit; optional dispatch-only labeled self-hosted Vulkan lane is isolated; path-hygiene job and linked PD4 evidence are present; CI never installs or requires an SDK. |
 | `PD5-INSTALL-EXPORT` | `DONE` — local CPU/no-SDK acceptance completed 2026-08-04. | CMake install/export, consumer smoke, and deployment documentation. | Serial release-facing gate; remote CPU CI remains the next evidence step. | Install/export consumer compile: PASS; CPU configure/build/install plus independent CTest 1/1. VTK/Vulkan remain optional, unclaimed cases. |
+| `PD5-CI-REMOTE` | `BLOCKED` — no remote evidence is present as of 2026-08-04. | Remote publication/branch setup and the existing `.github/workflows/build.yml`; no new product code. | `READY-S` after the current mainline is published to a remote branch that contains the workflow. | GitHub-hosted `path-hygiene`, `test`, and `install-export` checks complete on the published commit; record run IDs and URLs. The optional Vulkan lane is a separate self-hosted gate. |
+| `P5-JD` | `DONE-LOCAL` — implementation is on local `main` and revalidated on the Release Vulkan configuration; not a production Process route. | `gpu/vulkan/ray/` device ray-flux composition and its focused smoke; no Process/model routing. | `P5-JE` and `P5-JF` consume this device-resident terminal-differential contract; do not reopen without a regression card. | Five-ray/three-triangle CPU bitwise oracle, device residency, transaction guards, and focused Intel Arc execution pass. |
+| `P5-JE` | `DONE-LOCAL` — one-compute-submit composition is on local `main` and revalidated; no strict deployment promotion. | Record-only ray stages, shared scratch/command buffer, and aggregate smoke. | `P5-JF` consumes the single-submit chain; production routing remains gated by the P5 physics/model cards. | Exactly one compute submission, explicit barriers, terminal differential, and the five focused ray CTests pass. |
+| `P5-JF` | `DONE-LOCAL` — strict-FP32 status propagation is on local `main` and revalidated; no automatic backend eligibility. | Surface-reduction status shader/API and aggregate fail-closed commit. | Unlocks numerical-integrity evidence for production-route design, not production promotion itself. | Overflow fixture sets device status; CPU/GPU outputs remain unchanged; strict shader validation and focused suite pass. |
+| `P5-JD/JE/JF-REGRESSION-HARDENING` | `DONE-LOCAL` — committed 2026-08-05; smoke diagnostics, descriptor-lease reuse coverage, and CTest pass/fail regex hardening are on local `main`. | Exclusive: `gpu/vulkan/ray/CMakeLists.txt`, `gpu/vulkan/ray/device_ray_flux_pipeline_smoke.cpp`; do not mix with Process/model integration. | Unlocks `P5-RAY-ROUTE` for Process/model integration. | Fresh standalone `gpu/vulkan` Release build on Intel Arc; complete configured CTest suite 12/12 passed; five JD/JE/JF-focused tests 5/5 passed. |
 
 Dependency guard: `PD3-LS-SHARED-SESSION` must extend the existing Level Set
 owner rather than creating another `ProcessDeploymentBinding` session;
@@ -2856,6 +2863,41 @@ owner rather than creating another `ProcessDeploymentBinding` session;
 lifecycle composition. `PD4` cards are observational until their acceptance
 evidence exists. Every implementation card must use CPU results as its
 correctness oracle on non-CUDA hosts.
+
+### Total-plan continuation board: P5 to P7
+
+- Snapshot: 2026-08-04. This board expands the original P0--P7 plan into
+  executable follow-up cards; it does not turn an implementation note into a
+  completion declaration.
+- `DONE-LOCAL` means the card's local acceptance boundary is evidenced. It does
+  not mean production Process routing, remote CI, cross-vendor coverage, or
+  release readiness is complete. `READY-S` is serially executable after its
+  predecessor; `READY-P` may proceed in parallel; `BLOCKED` needs an external
+  capability or publication step.
+
+| Card | State and predecessor | Exclusive scope | Acceptance / next unlock |
+|---|---|---|---|
+| `PD5-CI-REMOTE` | `BLOCKED` — local `PD5-INSTALL-EXPORT` and CI wiring are ready, but the remote default branch is still `master`, has no `build.yml`, and no Vulkan runner is registered. | Remote branch publication, workflow trigger, and run evidence only. | Publish a branch containing the current workflow; capture hosted CPU/no-SDK run IDs/URLs, then unlock release-facing install/export evidence. |
+| `P5-RAY-ROUTE` | `READY-S` after `P5-JF`; no production route exists today. | `Process`/`FluxEngine` injection, backend policy, CPU/manual fallback, and ray result transaction. | At least one real ray model reaches the route with CPU bitwise/differential coverage and explicit fail-closed Vulkan selection; unlocks the model matrix. |
+| `P5-RAY-PHYSICS` | `READY-P` after the device ray data chain; it may proceed beside `P5-RAY-ROUTE`. | Boundary/reflection, roulette/event queue, material/surface response, and multi-bounce contracts. | Deterministic transport differential on representative models; unlocks production ray-model acceptance. |
+| `P5-SURFACE-INTEGRATION` | `READY-S` after the existing P5-N2, P5-B2B, P5-COV2, and P5-COV3 seams are revalidated together. | Coverage, surface diffusion, neutral velocity, and Process callback installation. | One shared deployment session, CPU fallback, raw-bit FP32 candidate checks, and no stale callback; unlocks the P5 model matrix. |
+| `P5-MODEL-MATRIX` | `READY-S` after `P5-RAY-ROUTE`, `P5-RAY-PHYSICS`, and `P5-SURFACE-INTEGRATION`. | Multi-particle/species, ion/neutral transport, fluorocarbon/plasma/TEOS, wet-etch/selective-epitaxy/oxide-regrowth coverage. | Each supported model has a tested support row, conservation/geometry acceptance, and an explicit unsupported/fallback row; unlocks P5 exit. |
+| `P5-DEPLOYMENT-EXIT` | `READY-S` after `PD5-CI-REMOTE`, `P5-MODEL-MATRIX`, and the long top-level `P5-K3E` gate. | Install/export variants, deployment profile, Process preview documentation, and support matrix. | Hosted install/export plus optional VTK-enabled case, deployment-profile persistence, and a release-scoped Vulkan Process preview; unlocks P6/P7 integration. |
+| `P6-LA-BASELINE` | `READY-P` after the existing P2/P3 field contracts; single-agent order places it after the P5 route. | FP64 matrix assembly, SpMV, AXPY/dot/norm, deterministic reduction, BiCGSTAB/Jacobi, OOM admission. | 2D/3D field and matrix CPU/Vulkan differential with convergence/residual history; unlocks oxidation stages. |
+| `P6-OXIDATION-COUPLING` | `READY-S` after `P6-LA-BASELINE`. | Oxidant diffusion, pressure/Stokes, harmonic extension, deformation, and batched SIMPLE/coupling. | Trench/fin/LOCOS field and physical acceptance; unsupported FP64 devices fail closed per stage; unlocks full-physics integration. |
+| `P6-PHYSICS-EXIT` | `READY-S` after `P6-OXIDATION-COUPLING`. | Oxidation outer loop, rollback, residual diagnostics, and CPU/CUDA/Vulkan parity. | No silent geometry on non-convergence, residual history retained, and model support matrix updated; unlocks P7. |
+| `P7-RESIDENT-EXECUTION` | `READY-S` after P5 and P6 exits. | Cross-step device working set, callback invalidation/detach telemetry, command segmentation, and cache lifetime. | Repeated multi-step process run has bounded transfers and correct invalidation/recovery; unlocks calibration. |
+| `P7-CALIBRATION` | `READY-S` after `P7-RESIDENT-EXECUTION`. | Cost model, pipeline/AS cache, workload thresholds, and Selection Record replay. | Hardware-matrix calibration chooses only qualified plans and records replayable evidence; unlocks release gates. |
+| `P7-CI-SOAK-RELEASE` | `READY-S` after `P7-CALIBRATION`. | CPU-only regression, optional CUDA compatibility, Lavapipe/vendor matrix, long soak, device-lost recovery, install/diagnostics docs. | Cross-platform release gates pass; old `VIENNAPS_USE_GPU` behavior has no unexpected regression; this is the total-plan completion gate. |
+
+Current order for a single developer is therefore:
+`PD5-CI-REMOTE` publication → `P5-JD/JE/JF-REGRESSION-HARDENING` claim release →
+`P5-RAY-ROUTE` → `P5-RAY-PHYSICS` → `P5-SURFACE-INTEGRATION` →
+`P5-MODEL-MATRIX` → `P5-DEPLOYMENT-EXIT` → `P6-LA-BASELINE` →
+`P6-OXIDATION-COUPLING` → `P6-PHYSICS-EXIT` → `P7-RESIDENT-EXECUTION` →
+`P7-CALIBRATION` → `P7-CI-SOAK-RELEASE`. `P6-LA-BASELINE` may be scheduled
+in parallel with the P5 cards in a multi-owner setup, as allowed by the
+original P0--P7 dependency graph.
 
 ### PD4-HW-MATRIX
 

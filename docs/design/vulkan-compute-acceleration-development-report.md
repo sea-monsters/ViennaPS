@@ -816,6 +816,36 @@ P3 与 P4 在 P2 后可由不同开发者并行；P6 的线性代数可在 P3 �
 
 每个 Preview 都必须标注支持矩阵，不用一个总开关暗示尚未实现的模型可用。
 
+### 8.3 当前执行快照（2026-08-04）
+
+当前实现已经跨过“Vulkan runtime / deployment profile / Level Set seam / ray
+device data chain”的可验证基础阶段，但尚未达到本报告定义的 Vulkan Process
+Preview，更不是 P6--P7 的 Full Physics 发布状态。PD0--PD4 的本地控制面和
+`PD5-CI-DOCS-INTEGRATION`、`PD5-INSTALL-EXPORT` 的本地 CPU/no-SDK 验收已经
+有记录；这只能说明本地证据链可重放。GitHub 远端 CI 仍是独立门禁：截至本快照，
+远端默认分支为 `master`，默认分支没有 `build.yml`，没有已登记的 Vulkan
+runner，也没有可引用的远端 run URL，因此不能把远端 CI 计入完成度。
+
+P5 的 `P5-JD`、`P5-JE`、`P5-JF` 已在本地 Release Vulkan/Intel Arc 上分别
+完成设备驻留组合、单 compute submission 组合和严格 FP32 fail-closed 状态
+传播；当前重验证的五项 ray CTest 为 5/5，standalone 配置的完整 ray CTest
+为 12/12。它们仍然没有 Process/model production route、完整表面物理覆盖、
+跨厂商矩阵或 release gate，所以“开发完成”不得写成“全项目完成”。当前工作树已无未提交的 P5 回归加固 diff；该 diff 已作为独立快照提交并记录到状态文档，现在可以进入 Process/model 集成阶段。
+
+单人顺序已经细化到状态文档的 `Total-plan continuation board: P5 to P7`：
+
+1. 先完成远端分支发布和 `PD5-CI-REMOTE` 证据；
+2. 释放并提交/回收 P5-JD/JE/JF 回归加固；
+3. 完成 `P5-RAY-ROUTE`、`P5-RAY-PHYSICS`、`P5-SURFACE-INTEGRATION` 和
+   `P5-MODEL-MATRIX`，形成 Vulkan Process Preview；
+4. 运行 `P5-DEPLOYMENT-EXIT`，再进入 `P6-LA-BASELINE`、氧化耦合和物理退出门；
+5. 最后完成 P7 的跨步骤常驻、成本模型/Selection Record、CI soak、device-lost
+   恢复和发布兼容门。
+
+这些阶段的状态、前置证据、独占文件边界和验收条件以
+[实现状态与任务看板](vulkan-compute-acceleration-status.md) 为准；本节只更新
+总开发计划的当前位置，不把实现进度宣称为完成。
+
 ## 9. 风险登记
 
 | 风险 | 影响 | 缓解和触发条件 |

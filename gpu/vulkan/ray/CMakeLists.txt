@@ -655,8 +655,11 @@ target_link_libraries(viennaps-vulkan-ray-surface-reduction-smoke PRIVATE
                       viennaps_vulkan_ray_surface_reduction
                       viennaps_vulkan_ray_reducer Vulkan::Vulkan)
 if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
-add_test(NAME viennaps-vulkan-ray-surface-reduction-smoke
+  add_test(NAME viennaps-vulkan-ray-surface-reduction-smoke
            COMMAND viennaps-vulkan-ray-surface-reduction-smoke)
+  set_tests_properties(viennaps-vulkan-ray-surface-reduction-smoke PROPERTIES
+    PASS_REGULAR_EXPRESSION "ray surface reduction Vulkan dispatch PASS"
+    FAIL_REGULAR_EXPRESSION "SKIP;FAIL")
 endif()
 
 # P5-R1 CPU-built flattened BVH triangle-hit primitive.
@@ -800,4 +803,7 @@ target_link_libraries(viennaps-vulkan-device-ray-flux-pipeline-smoke PRIVATE
 if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
   add_test(NAME viennaps-vulkan-device-ray-flux-pipeline-smoke
            COMMAND viennaps-vulkan-device-ray-flux-pipeline-smoke)
+  set_tests_properties(viennaps-vulkan-device-ray-flux-pipeline-smoke PROPERTIES
+    PASS_REGULAR_EXPRESSION "device ray-flux pipeline Vulkan dispatch PASS"
+    FAIL_REGULAR_EXPRESSION "SKIP;FAIL")
 endif()

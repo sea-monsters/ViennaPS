@@ -86,6 +86,8 @@ bool DeviceRayRecordCompactor::initialize(
 
 void DeviceRayRecordCompactor::reset() {
   const bool own = session_ == &ownedSession_;
+  if (session_ != nullptr && session_->isValid())
+    vkDeviceWaitIdle(session_->deviceHandle());
   fence_.destroy();
   pipeline_.reset();
   descriptorPool_.reset();
@@ -407,11 +409,42 @@ bool DeviceRayRecordCompactor::recordCompact(
                                     error) ||
       !scan_.recordWriteCompactionCount(commandBuffer, output.flags,
                                         output.offsets, rayCount, output.count,
-                                        error) ||
+                                        scanScratch, error) ||
       !recordMode(recordDescriptorSet_, 1U))
     return false;
   output.inputCount = static_cast<std::uint32_t>(rayCount);
   output.sessionGeneration = session_->generation();
   return true;
+}
+
+bool DeviceRayRecordCompactor::registerRecordTerminalSubmission(
+    primitives::ReductionScanPrimitives::DeviceScanScratch &scanScratch,
+    const VkFence terminalFence, std::string &error) {
+  return scan_.registerRecordTerminalSubmission(scanScratch, terminalFence,
+                                                error);
+}
+
+bool DeviceRayRecordCompactor::reclaimRecordDescriptorSets(
+    primitives::ReductionScanPrimitives::DeviceScanScratch &scanScratch,
+    const VkFence terminalFence, std::string &error) {
+  return scan_.reclaimRecordDescriptorSets(scanScratch, terminalFence, error);
+}
+
+bool DeviceRayRecordCompactor::cancelRecordTerminalSubmission(
+    primitives::ReductionScanPrimitives::DeviceScanScratch &scanScratch,
+    const VkFence terminalFence, std::string &error) {
+  return scan_.cancelRecordTerminalSubmission(scanScratch, terminalFence, error);
+}
+
+bool DeviceRayRecordCompactor::discardRecordDescriptorSets(
+    primitives::ReductionScanPrimitives::DeviceScanScratch &scanScratch,
+    std::string &error) {
+  return scan_.discardRecordDescriptorSets(scanScratch, error);
+}
+
+bool DeviceRayRecordCompactor::hasRecordDescriptorLease(
+    const primitives::ReductionScanPrimitives::DeviceScanScratch &scanScratch)
+    const {
+  return scan_.hasRecordDescriptorLease(scanScratch);
 }
 } // namespace viennaps::vulkan::ray

@@ -137,6 +137,8 @@ bool DeviceRayFluxPipeline::setup(runtime::ComputeSession *external,
 
 void DeviceRayFluxPipeline::reset() {
   const bool ownsSession = session_ == &ownedSession_;
+  if (session_ != nullptr && session_->isValid())
+    vkDeviceWaitIdle(session_->deviceHandle());
   fence_.destroy();
   commandBuffer_ = VK_NULL_HANDLE;
   scanScratch_.reset();
@@ -267,9 +269,42 @@ bool DeviceRayFluxPipeline::runGpu(std::span<const Ray> rays,
   vkCmdFillBuffer(commandBuffer_, reduced.status.handle(), 0U,
                   sizeof(std::uint32_t), 0U);
   scanScratch_.reset();
+  const auto discardRecordLeases = [&]() {
+    if (compactor_.hasRecordDescriptorLease(scanScratch_)) {
+      std::string cleanupError;
+      if (!compactor_.discardRecordDescriptorSets(scanScratch_, cleanupError) &&
+          error.empty())
+        error = cleanupError;
+    }
+    if (reducer_.hasRecordDescriptorLease(scanScratch_)) {
+      std::string cleanupError;
+      if (!reducer_.discardRecordDescriptorSets(scanScratch_, cleanupError) &&
+          error.empty())
+        error = cleanupError;
+    }
+  };
+  const auto cancelRecordLeases = [&]() {
+    const auto cancel = [&](auto &stage) {
+      if (!stage.hasRecordDescriptorLease(scanScratch_))
+        return;
+      std::string cleanupError;
+      if (!stage.cancelRecordTerminalSubmission(scanScratch_, fence_.get(),
+                                                cleanupError) &&
+          !stage.discardRecordDescriptorSets(scanScratch_, cleanupError) &&
+          error.empty())
+        error = cleanupError;
+    };
+    cancel(compactor_);
+    cancel(reducer_);
+  };
+  const auto discardRecordedCommand = [&]() {
+    vkResetCommandBuffer(commandBuffer_, 0U);
+    discardRecordLeases();
+    return false;
+  };
   const auto recordFailure = [&]() {
     vkEndCommandBuffer(commandBuffer_);
-    return false;
+    return discardRecordedCommand();
   };
   if ((useTriangleBvh_
            ? !triangleBvh_.recordDispatch(commandBuffer_, origins, directions,
@@ -287,15 +322,33 @@ bool DeviceRayFluxPipeline::runGpu(std::span<const Ray> rays,
                              reduced, scanScratch_, error))
     return recordFailure();
   if (vkEndCommandBuffer(commandBuffer_) != VK_SUCCESS)
-    return fail(error, "failed to end device ray-flux command buffer");
+    return discardRecordedCommand();
+  if (!compactor_.registerRecordTerminalSubmission(scanScratch_, fence_.get(),
+                                                    error) ||
+      !reducer_.registerRecordTerminalSubmission(scanScratch_, fence_.get(),
+                                                 error)) {
+    vkResetCommandBuffer(commandBuffer_, 0U);
+    cancelRecordLeases();
+    return false;
+  }
   VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
   submit.commandBufferCount = 1U;
   submit.pCommandBuffers = &commandBuffer_;
   if (vkQueueSubmit(session_->device().computeQueue(), 1U, &submit,
-                    fence_.get()) != VK_SUCCESS)
-    return fail(error, "failed to submit device ray-flux command buffer");
+                    fence_.get()) != VK_SUCCESS) {
+    const std::string submitError = "failed to submit device ray-flux command buffer";
+    vkResetCommandBuffer(commandBuffer_, 0U);
+    cancelRecordLeases();
+    if (error.empty())
+      error = submitError;
+    return false;
+  }
   lastComputeSubmissionCount_ = 1U;
   if (!fence_.wait(std::numeric_limits<std::uint64_t>::max(), error))
+    return false;
+  if (!compactor_.reclaimRecordDescriptorSets(scanScratch_, fence_.get(),
+                                              error) ||
+      !reducer_.reclaimRecordDescriptorSets(scanScratch_, fence_.get(), error))
     return false;
   fence_.reset();
 

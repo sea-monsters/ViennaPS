@@ -42,8 +42,7 @@ struct ReductionScanOptions {
 class ReductionScanPrimitives {
 public:
   // Device scratch retained by record-only operations until the caller's
-  // command buffer has completed. The vectors are intentionally public so an
-  // orchestrator can own their lifetime across a terminal submission.
+  // terminal submission has completed.
   struct DeviceScanScratch {
     std::vector<runtime::DeviceBuffer> blockSums{};
     std::vector<runtime::DeviceBuffer> blockOffsets{};
@@ -69,6 +68,8 @@ public:
   // before resetting, reinitializing, or destroying that session. Moving the
   // session makes the primitives stale; reset them while the moved-to session
   // still owns the Vulkan device before reuse.
+  // Reset waits for pending record-only work before destroying the primitive's
+  // descriptor pool, layouts, and pipelines.
   void reset();
   [[nodiscard]] bool isInitialized() const;
   [[nodiscard]] std::uint64_t boundSessionGeneration() const;
@@ -115,6 +116,39 @@ public:
                                                 std::size_t elementCount,
                                                 runtime::DeviceBuffer &count,
                                                 std::string &error);
+  [[nodiscard]] bool recordWriteCompactionCount(VkCommandBuffer commandBuffer,
+                                                runtime::DeviceBuffer &flags,
+                                                runtime::DeviceBuffer &offsets,
+                                                std::size_t elementCount,
+                                                runtime::DeviceBuffer &count,
+                                                DeviceScanScratch &scratch,
+                                                std::string &error);
+
+  // Associates the active record lease with the fence that will be passed to
+  // the caller-owned terminal vkQueueSubmit. Call this before that submission.
+  [[nodiscard]] bool registerRecordTerminalSubmission(
+      DeviceScanScratch &scratch, VkFence terminalFence, std::string &error);
+
+  // Recycles descriptor leases only after the registered terminal fence has
+  // signaled. The scratch object must not be reset or reused before this call.
+  [[nodiscard]] bool reclaimRecordDescriptorSets(DeviceScanScratch &scratch,
+                                                 VkFence terminalFence,
+                                                 std::string &error);
+
+  // Cancels a registered but unsubmitted terminal lease after the caller has
+  // reset or freed its command buffer following a failed vkQueueSubmit.
+  [[nodiscard]] bool cancelRecordTerminalSubmission(
+      DeviceScanScratch &scratch, VkFence terminalFence, std::string &error);
+
+  [[nodiscard]] bool hasRecordDescriptorLease(
+      const DeviceScanScratch &scratch) const;
+
+  // Cancels a record-only lease after the caller has discarded, rather than
+  // submitted, its command buffer. The caller must reset or free that command
+  // buffer before calling this method. A lease with a registered terminal
+  // fence cannot be cancelled.
+  [[nodiscard]] bool discardRecordDescriptorSets(DeviceScanScratch &scratch,
+                                                 std::string &error);
 
   [[nodiscard]] bool writeCompactionCount(runtime::DeviceBuffer &flags,
                                           runtime::DeviceBuffer &offsets,
@@ -225,18 +259,19 @@ private:
                                             runtime::DeviceBuffer &output,
                                             runtime::DeviceBuffer &blockSums,
                                             std::size_t elementCount,
+                                            DeviceScanScratch &scratch,
                                             std::string &error);
   [[nodiscard]] bool
   recordDeviceScanAddOffsets(VkCommandBuffer commandBuffer,
                              runtime::DeviceBuffer &output,
                              runtime::DeviceBuffer &blockOffsets,
-                             std::size_t elementCount, std::string &error);
-  [[nodiscard]] bool recordDeviceCompactionCount(VkCommandBuffer commandBuffer,
-                                                 runtime::DeviceBuffer &flags,
-                                                 runtime::DeviceBuffer &offsets,
-                                                 runtime::DeviceBuffer &count,
-                                                 std::size_t elementCount,
-                                                 std::string &error);
+                             std::size_t elementCount,
+                             DeviceScanScratch &scratch, std::string &error);
+  [[nodiscard]] bool recordDeviceCompactionCount(
+      VkCommandBuffer commandBuffer, runtime::DeviceBuffer &flags,
+      runtime::DeviceBuffer &offsets, runtime::DeviceBuffer &count,
+      std::size_t elementCount, DeviceScanScratch &scratch,
+      std::string &error);
   [[nodiscard]] bool recordScanIntRecursive(
       VkCommandBuffer commandBuffer, runtime::DeviceBuffer &input,
       std::size_t elementCount, runtime::DeviceBuffer &output,
@@ -270,8 +305,13 @@ private:
                                          std::string &error) const;
   [[nodiscard]] bool updateDeviceDescriptors(std::array<VkBuffer, 5u> buffers,
                                              std::string &error);
-  [[nodiscard]] bool allocateRecordDescriptorSet(VkDescriptorSet &descriptorSet,
-                                                 std::string &error);
+  [[nodiscard]] bool registerRecordScratch(VkCommandBuffer commandBuffer,
+                                          DeviceScanScratch &scratch,
+                                          std::string &error);
+  [[nodiscard]] bool
+  allocateRecordDescriptorSet(DeviceScanScratch &scratch,
+                              VkDescriptorSet &descriptorSet,
+                              std::string &error);
   [[nodiscard]] bool
   updateRecordDeviceDescriptors(VkDescriptorSet descriptorSet,
                                 std::array<VkBuffer, 5u> buffers,
@@ -307,7 +347,15 @@ private:
   runtime::ComputeSession *activeSession_{nullptr};
   std::uint64_t sessionGeneration_{0};
   VkDescriptorSet descriptorSet_{VK_NULL_HANDLE};
-  std::vector<VkDescriptorSet> recordDescriptorSets_{};
+  std::vector<VkDescriptorSet> reusableRecordDescriptorSets_{};
+  struct RecordScratchLease {
+    VkCommandBuffer commandBuffer{VK_NULL_HANDLE};
+    DeviceScanScratch *scratch{nullptr};
+    VkFence terminalFence{VK_NULL_HANDLE};
+    std::vector<VkDescriptorSet> descriptorSets{};
+  };
+
+  std::vector<RecordScratchLease> recordScratchLeases_{};
   VkCommandBuffer commandBuffer_{VK_NULL_HANDLE};
 };
 

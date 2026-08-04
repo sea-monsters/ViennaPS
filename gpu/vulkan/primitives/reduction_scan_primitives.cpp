@@ -69,7 +69,9 @@ ReductionScanPrimitives::ReductionScanPrimitives(
       activeSession_(std::exchange(other.activeSession_, nullptr)),
       sessionGeneration_(std::exchange(other.sessionGeneration_, 0u)),
       descriptorSet_(std::exchange(other.descriptorSet_, VK_NULL_HANDLE)),
-      recordDescriptorSets_(std::move(other.recordDescriptorSets_)),
+      reusableRecordDescriptorSets_(
+          std::move(other.reusableRecordDescriptorSets_)),
+      recordScratchLeases_(std::move(other.recordScratchLeases_)),
       commandBuffer_(std::exchange(other.commandBuffer_, VK_NULL_HANDLE)) {}
 
 ReductionScanPrimitives &
@@ -96,7 +98,9 @@ ReductionScanPrimitives::operator=(ReductionScanPrimitives &&other) noexcept {
   activeSession_ = std::exchange(other.activeSession_, nullptr);
   sessionGeneration_ = std::exchange(other.sessionGeneration_, 0u);
   descriptorSet_ = std::exchange(other.descriptorSet_, VK_NULL_HANDLE);
-  recordDescriptorSets_ = std::move(other.recordDescriptorSets_);
+  reusableRecordDescriptorSets_ =
+      std::move(other.reusableRecordDescriptorSets_);
+  recordScratchLeases_ = std::move(other.recordScratchLeases_);
   commandBuffer_ = std::exchange(other.commandBuffer_, VK_NULL_HANDLE);
   return *this;
 }
@@ -219,6 +223,12 @@ bool ReductionScanPrimitives::initialize(runtime::ComputeSession &session,
 }
 
 void ReductionScanPrimitives::reset() {
+  // Record-only command buffers bind objects owned by this primitive. Wait for
+  // terminal completion before destroying their descriptor pool or pipelines.
+  if (!recordScratchLeases_.empty() && activeSession_ != nullptr &&
+      activeSession_->isValid()) {
+    vkDeviceWaitIdle(activeSession_->device().get());
+  }
   dummyInt_.reset();
   dummyFloat_.reset();
   fence_.destroy();
@@ -244,7 +254,8 @@ void ReductionScanPrimitives::reset() {
   sessionGeneration_ = 0u;
   ownedSession_.reset();
   descriptorSet_ = VK_NULL_HANDLE;
-  recordDescriptorSets_.clear();
+  reusableRecordDescriptorSets_.clear();
+  recordScratchLeases_.clear();
   commandBuffer_ = VK_NULL_HANDLE;
 }
 
@@ -482,14 +493,160 @@ bool ReductionScanPrimitives::updateDeviceDescriptors(
   return true;
 }
 
+bool ReductionScanPrimitives::registerRecordScratch(
+    const VkCommandBuffer commandBuffer, DeviceScanScratch &scratch,
+    std::string &error) {
+  const auto existingCommand = std::find_if(
+      recordScratchLeases_.begin(), recordScratchLeases_.end(),
+      [commandBuffer](const auto &lease) {
+        return lease.commandBuffer == commandBuffer;
+      });
+  if (existingCommand != recordScratchLeases_.end()) {
+    return existingCommand->scratch == &scratch
+               ? true
+               : setError(error, "record",
+                          "command buffer already has different scan scratch");
+  }
+  if (std::any_of(recordScratchLeases_.begin(), recordScratchLeases_.end(),
+                  [&scratch](const auto &lease) {
+                    return lease.scratch == &scratch;
+                  })) {
+    return setError(error, "record",
+                    "scan scratch is already leased by another command buffer");
+  }
+  recordScratchLeases_.push_back({commandBuffer, &scratch, VK_NULL_HANDLE});
+  return true;
+}
+
 bool ReductionScanPrimitives::allocateRecordDescriptorSet(
-    VkDescriptorSet &descriptorSet, std::string &error) {
+    DeviceScanScratch &scratch, VkDescriptorSet &descriptorSet,
+    std::string &error) {
   if (!isReady(error))
     return false;
-  if (!descriptorPool_.allocate(descriptorSetLayout_.get(), descriptorSet,
-                                error))
+  if (!reusableRecordDescriptorSets_.empty()) {
+    descriptorSet = reusableRecordDescriptorSets_.back();
+    reusableRecordDescriptorSets_.pop_back();
+  } else if (!descriptorPool_.allocate(descriptorSetLayout_.get(), descriptorSet,
+                                       error)) {
     return false;
-  recordDescriptorSets_.push_back(descriptorSet);
+  }
+  const auto lease = std::find_if(
+      recordScratchLeases_.begin(), recordScratchLeases_.end(),
+      [&scratch](const auto &candidate) {
+        return candidate.scratch == &scratch;
+      });
+  if (lease == recordScratchLeases_.end())
+    return setError(error, "record", "scan scratch has no active lease");
+  lease->descriptorSets.push_back(descriptorSet);
+  return true;
+}
+
+bool ReductionScanPrimitives::registerRecordTerminalSubmission(
+    DeviceScanScratch &scratch, const VkFence terminalFence,
+    std::string &error) {
+  error.clear();
+  if (!isReady(error))
+    return false;
+  if (terminalFence == VK_NULL_HANDLE)
+    return setError(error, "record", "terminal fence is invalid");
+  const VkResult fenceStatus =
+      vkGetFenceStatus(activeSession_->device().get(), terminalFence);
+  if (fenceStatus == VK_SUCCESS)
+    return setError(error, "record", "terminal fence is already signaled");
+  if (fenceStatus != VK_NOT_READY)
+    return setError(error, "record", "vkGetFenceStatus failed");
+  const auto lease = std::find_if(
+      recordScratchLeases_.begin(), recordScratchLeases_.end(),
+      [&scratch](const auto &candidate) {
+        return candidate.scratch == &scratch;
+      });
+  if (lease == recordScratchLeases_.end())
+    return setError(error, "record", "scan scratch has no active lease");
+  if (lease->terminalFence != VK_NULL_HANDLE &&
+      lease->terminalFence != terminalFence)
+    return setError(error, "record", "scan scratch already has terminal fence");
+  lease->terminalFence = terminalFence;
+  return true;
+}
+
+bool ReductionScanPrimitives::reclaimRecordDescriptorSets(
+    DeviceScanScratch &scratch, const VkFence terminalFence,
+    std::string &error) {
+  error.clear();
+  if (!isReady(error))
+    return false;
+  const auto lease = std::find_if(
+      recordScratchLeases_.begin(), recordScratchLeases_.end(),
+      [&scratch](const auto &candidate) {
+        return candidate.scratch == &scratch;
+      });
+  if (lease == recordScratchLeases_.end())
+    return setError(error, "reclaim", "scan scratch has no active lease");
+  if (lease->terminalFence == VK_NULL_HANDLE)
+    return setError(error, "reclaim", "terminal submission is not registered");
+  if (terminalFence != lease->terminalFence)
+    return setError(error, "reclaim", "terminal fence does not match lease");
+  const VkResult status =
+      vkGetFenceStatus(activeSession_->device().get(), lease->terminalFence);
+  if (status == VK_NOT_READY)
+    return setError(error, "reclaim", "terminal submission has not completed");
+  if (status != VK_SUCCESS)
+    return setError(error, "reclaim", "vkGetFenceStatus failed");
+  reusableRecordDescriptorSets_.insert(
+      reusableRecordDescriptorSets_.end(), lease->descriptorSets.begin(),
+      lease->descriptorSets.end());
+  recordScratchLeases_.erase(lease);
+  return true;
+}
+
+bool ReductionScanPrimitives::cancelRecordTerminalSubmission(
+    DeviceScanScratch &scratch, const VkFence terminalFence,
+    std::string &error) {
+  error.clear();
+  if (!isReady(error))
+    return false;
+  const auto lease = std::find_if(
+      recordScratchLeases_.begin(), recordScratchLeases_.end(),
+      [&scratch](const auto &candidate) {
+        return candidate.scratch == &scratch;
+      });
+  if (lease == recordScratchLeases_.end())
+    return setError(error, "cancel", "scan scratch has no active lease");
+  if (lease->terminalFence != terminalFence)
+    return setError(error, "cancel", "terminal fence does not match lease");
+  reusableRecordDescriptorSets_.insert(
+      reusableRecordDescriptorSets_.end(), lease->descriptorSets.begin(),
+      lease->descriptorSets.end());
+  recordScratchLeases_.erase(lease);
+  return true;
+}
+
+bool ReductionScanPrimitives::hasRecordDescriptorLease(
+    const DeviceScanScratch &scratch) const {
+  return std::any_of(recordScratchLeases_.begin(), recordScratchLeases_.end(),
+                     [&scratch](const auto &lease) {
+                       return lease.scratch == &scratch;
+                     });
+}
+
+bool ReductionScanPrimitives::discardRecordDescriptorSets(
+    DeviceScanScratch &scratch, std::string &error) {
+  error.clear();
+  if (!isReady(error))
+    return false;
+  const auto lease = std::find_if(
+      recordScratchLeases_.begin(), recordScratchLeases_.end(),
+      [&scratch](const auto &candidate) {
+        return candidate.scratch == &scratch;
+      });
+  if (lease == recordScratchLeases_.end())
+    return setError(error, "discard", "scan scratch has no active lease");
+  if (lease->terminalFence != VK_NULL_HANDLE)
+    return setError(error, "discard", "terminal submission is registered");
+  reusableRecordDescriptorSets_.insert(
+      reusableRecordDescriptorSets_.end(), lease->descriptorSets.begin(),
+      lease->descriptorSets.end());
+  recordScratchLeases_.erase(lease);
   return true;
 }
 
@@ -693,7 +850,8 @@ bool ReductionScanPrimitives::recordDeviceKernel(
 bool ReductionScanPrimitives::recordDeviceScanBlocks(
     const VkCommandBuffer commandBuffer, runtime::DeviceBuffer &input,
     runtime::DeviceBuffer &output, runtime::DeviceBuffer &blockSums,
-    const std::size_t elementCount, std::string &error) {
+    const std::size_t elementCount, DeviceScanScratch &scratch,
+    std::string &error) {
   const auto blockCount = ceilDiv(elementCount, kWorkgroupSize);
   if (blockCount == 0u ||
       !validateDeviceIntLength("scan input", input, elementCount, error) ||
@@ -730,7 +888,7 @@ bool ReductionScanPrimitives::recordDeviceScanBlocks(
                   VK_ACCESS_SHADER_WRITE_BIT,
                   VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)};
   VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
-  if (!allocateRecordDescriptorSet(descriptorSet, error) ||
+  if (!allocateRecordDescriptorSet(scratch, descriptorSet, error) ||
       !updateRecordDeviceDescriptors(descriptorSet,
                                      {dummyFloat_.handle(),
                                       dummyFloat_.handle(), input.handle(),
@@ -746,7 +904,7 @@ bool ReductionScanPrimitives::recordDeviceScanBlocks(
 bool ReductionScanPrimitives::recordDeviceScanAddOffsets(
     const VkCommandBuffer commandBuffer, runtime::DeviceBuffer &output,
     runtime::DeviceBuffer &blockOffsets, const std::size_t elementCount,
-    std::string &error) {
+    DeviceScanScratch &scratch, std::string &error) {
   const auto blockCount = ceilDiv(elementCount, kWorkgroupSize);
   if (blockCount == 0u ||
       !validateDeviceIntLength("scan output", output, elementCount, error) ||
@@ -766,7 +924,7 @@ bool ReductionScanPrimitives::recordDeviceScanAddOffsets(
       makeBarrier(output.handle(), output.size(), VK_ACCESS_SHADER_WRITE_BIT,
                   VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT)};
   VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
-  if (!allocateRecordDescriptorSet(descriptorSet, error) ||
+  if (!allocateRecordDescriptorSet(scratch, descriptorSet, error) ||
       !updateRecordDeviceDescriptors(descriptorSet,
                                      {dummyFloat_.handle(),
                                       dummyFloat_.handle(), dummyInt_.handle(),
@@ -781,7 +939,8 @@ bool ReductionScanPrimitives::recordDeviceScanAddOffsets(
 bool ReductionScanPrimitives::recordDeviceCompactionCount(
     const VkCommandBuffer commandBuffer, runtime::DeviceBuffer &flags,
     runtime::DeviceBuffer &offsets, runtime::DeviceBuffer &count,
-    const std::size_t elementCount, std::string &error) {
+    const std::size_t elementCount, DeviceScanScratch &scratch,
+    std::string &error) {
   if (!validateDeviceIntLength("normalized compaction flags", flags,
                                elementCount, error) ||
       !validateDeviceIntLength("compaction offsets", offsets, elementCount,
@@ -797,7 +956,7 @@ bool ReductionScanPrimitives::recordDeviceCompactionCount(
   if (elementCount == 0u)
     return true;
   VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
-  if (!allocateRecordDescriptorSet(descriptorSet, error) ||
+  if (!allocateRecordDescriptorSet(scratch, descriptorSet, error) ||
       !updateRecordDeviceDescriptors(descriptorSet,
                                      {dummyFloat_.handle(),
                                       dummyFloat_.handle(), flags.handle(),
@@ -843,7 +1002,8 @@ bool ReductionScanPrimitives::recordScanIntRecursive(
     return setError(error, "validation",
                     "scan scratch capacity is insufficient");
   if (!recordDeviceScanBlocks(commandBuffer, input, output,
-                              scratch.blockSums[level], elementCount, error))
+                              scratch.blockSums[level], elementCount, scratch,
+                              error))
     return false;
   if (blockCount == 1u)
     return true;
@@ -857,8 +1017,9 @@ bool ReductionScanPrimitives::recordScanIntRecursive(
                               blockCount, scratch.blockOffsets[level], scratch,
                               level + 1u, error))
     return false;
-  return recordDeviceScanAddOffsets(
-      commandBuffer, output, scratch.blockOffsets[level], elementCount, error);
+  return recordDeviceScanAddOffsets(commandBuffer, output,
+                                    scratch.blockOffsets[level], elementCount,
+                                    scratch, error);
 }
 
 bool ReductionScanPrimitives::recordExclusiveScanInt(
@@ -890,6 +1051,8 @@ bool ReductionScanPrimitives::recordExclusiveScanInt(
   }
   scratch.blockSums.reserve(scratchLevels);
   scratch.blockOffsets.reserve(scratchLevels);
+  if (!registerRecordScratch(commandBuffer, scratch, error))
+    return false;
   return recordScanIntRecursive(commandBuffer, input, inputElementCount, output,
                                 scratch, 0u, error);
 }
@@ -898,16 +1061,35 @@ bool ReductionScanPrimitives::recordWriteCompactionCount(
     const VkCommandBuffer commandBuffer, runtime::DeviceBuffer &flags,
     runtime::DeviceBuffer &offsets, const std::size_t elementCount,
     runtime::DeviceBuffer &count, std::string &error) {
+  const auto scratch = std::find_if(
+      recordScratchLeases_.begin(), recordScratchLeases_.end(),
+      [commandBuffer](const auto &lease) {
+        return lease.commandBuffer == commandBuffer;
+      });
+  if (scratch == recordScratchLeases_.end())
+    return setError(error, "record",
+                    "record compaction count requires caller-owned scan scratch");
+  return recordWriteCompactionCount(commandBuffer, flags, offsets, elementCount,
+                                    count, *scratch->scratch, error);
+}
+
+bool ReductionScanPrimitives::recordWriteCompactionCount(
+    const VkCommandBuffer commandBuffer, runtime::DeviceBuffer &flags,
+    runtime::DeviceBuffer &offsets, const std::size_t elementCount,
+    runtime::DeviceBuffer &count, DeviceScanScratch &scratch,
+    std::string &error) {
   error.clear();
   if (!isReady(error) || commandBuffer == VK_NULL_HANDLE)
     return commandBuffer == VK_NULL_HANDLE
                ? setError(error, "record", "command buffer is invalid")
                : false;
+  if (!registerRecordScratch(commandBuffer, scratch, error))
+    return false;
   if (elementCount > std::numeric_limits<std::uint32_t>::max())
     return setError(error, "validation",
                     "compaction length is outside uint32 range");
   return recordDeviceCompactionCount(commandBuffer, flags, offsets, count,
-                                     elementCount, error);
+                                     elementCount, scratch, error);
 }
 
 bool ReductionScanPrimitives::dispatchReduce(runtime::HostVisibleBuffer &input,

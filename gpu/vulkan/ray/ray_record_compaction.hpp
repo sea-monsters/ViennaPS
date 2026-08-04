@@ -78,6 +78,22 @@ public:
       primitives::ReductionScanPrimitives::DeviceScanScratch &scanScratch,
       std::string &error);
 
+  [[nodiscard]] bool registerRecordTerminalSubmission(
+      primitives::ReductionScanPrimitives::DeviceScanScratch &scanScratch,
+      VkFence terminalFence, std::string &error);
+  [[nodiscard]] bool reclaimRecordDescriptorSets(
+      primitives::ReductionScanPrimitives::DeviceScanScratch &scanScratch,
+      VkFence terminalFence, std::string &error);
+  [[nodiscard]] bool cancelRecordTerminalSubmission(
+      primitives::ReductionScanPrimitives::DeviceScanScratch &scanScratch,
+      VkFence terminalFence, std::string &error);
+  [[nodiscard]] bool discardRecordDescriptorSets(
+      primitives::ReductionScanPrimitives::DeviceScanScratch &scanScratch,
+      std::string &error);
+  [[nodiscard]] bool hasRecordDescriptorLease(
+      const primitives::ReductionScanPrimitives::DeviceScanScratch &scanScratch)
+      const;
+
 private:
   [[nodiscard]] bool setup(std::string_view compactionSpirv,
                            std::string_view reductionScanSpirv,

@@ -113,6 +113,8 @@ bool DeviceRaySurfaceReducer::initialize(runtime::ComputeSession &session,
 
 void DeviceRaySurfaceReducer::reset() {
   const bool ownsSession = session_ == &ownedSession_;
+  if (session_ != nullptr && session_->isValid())
+    vkDeviceWaitIdle(session_->deviceHandle());
   fence_.destroy();
   commandBuffer_ = VK_NULL_HANDLE;
   descriptorSet_ = VK_NULL_HANDLE;
@@ -445,7 +447,7 @@ bool DeviceRaySurfaceReducer::recordReduce(
                                     error) ||
       !scan_.recordWriteCompactionCount(commandBuffer, output.flags,
                                         output.offsets, inputCapacity,
-                                        output.count, error))
+                                        output.count, scanScratch, error))
     return false;
   vkCmdPipelineBarrier(commandBuffer,
                        VK_PIPELINE_STAGE_TRANSFER_BIT |
@@ -474,6 +476,38 @@ bool DeviceRaySurfaceReducer::recordReduce(
   output.inputCapacity = capacity;
   output.sessionGeneration = session_->generation();
   return true;
+}
+
+bool DeviceRaySurfaceReducer::registerRecordTerminalSubmission(
+    primitives::ReductionScanPrimitives::DeviceScanScratch &scanScratch,
+    const VkFence terminalFence, std::string &error) {
+  return scan_.registerRecordTerminalSubmission(scanScratch, terminalFence,
+                                                error);
+}
+
+bool DeviceRaySurfaceReducer::reclaimRecordDescriptorSets(
+    primitives::ReductionScanPrimitives::DeviceScanScratch &scanScratch,
+    const VkFence terminalFence, std::string &error) {
+  return scan_.reclaimRecordDescriptorSets(scanScratch, terminalFence, error);
+}
+
+bool DeviceRaySurfaceReducer::cancelRecordTerminalSubmission(
+    primitives::ReductionScanPrimitives::DeviceScanScratch &scanScratch,
+    const VkFence terminalFence, std::string &error) {
+  return scan_.cancelRecordTerminalSubmission(scanScratch, terminalFence,
+                                              error);
+}
+
+bool DeviceRaySurfaceReducer::discardRecordDescriptorSets(
+    primitives::ReductionScanPrimitives::DeviceScanScratch &scanScratch,
+    std::string &error) {
+  return scan_.discardRecordDescriptorSets(scanScratch, error);
+}
+
+bool DeviceRaySurfaceReducer::hasRecordDescriptorLease(
+    const primitives::ReductionScanPrimitives::DeviceScanScratch &scanScratch)
+    const {
+  return scan_.hasRecordDescriptorLease(scanScratch);
 }
 
 } // namespace viennaps::vulkan::ray

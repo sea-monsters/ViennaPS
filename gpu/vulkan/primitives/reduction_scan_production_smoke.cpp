@@ -35,7 +35,7 @@ namespace runtime = viennaps::vulkan::runtime;
   return primitives.recordExclusiveScanInt(commandBuffer, input, 1u, output, 1u,
                                            scratch, error) &&
          primitives.recordWriteCompactionCount(commandBuffer, input, output, 1u,
-                                               count, error);
+                                               count, scratch, error);
 }
 
 constexpr std::size_t kWorkgroupSize = 256u;
@@ -365,8 +365,6 @@ scanOracle(const std::vector<std::int32_t> &input,
     return false;
   }
 
-  // Record-only scan/count must share one externally-owned command buffer and
-  // leave all scratch alive until this terminal submission completes.
   runtime::DeviceBuffer recordedOffsets{};
   runtime::DeviceBuffer recordedCount{};
   if (!recordedOffsets.create(session, countLength * sizeof(std::int32_t),
@@ -374,50 +372,100 @@ scanOracle(const std::vector<std::int32_t> &input,
       !recordedCount.create(session, sizeof(std::int32_t), error)) {
     return false;
   }
-  ReductionScanPrimitives::DeviceScanScratch recordScratch{};
-  VkCommandBuffer recordCommand = VK_NULL_HANDLE;
-  if (!session.commandContext().allocatePrimary(recordCommand, error))
-    return false;
-  VkCommandBufferBeginInfo recordBegin{
-      VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-  recordBegin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-  if (vkBeginCommandBuffer(recordCommand, &recordBegin) != VK_SUCCESS ||
-      !primitives.recordExclusiveScanInt(recordCommand, flags, countLength,
-                                         recordedOffsets, countLength,
-                                         recordScratch, error) ||
-      !primitives.recordWriteCompactionCount(recordCommand, flags,
-                                             recordedOffsets, countLength,
-                                             recordedCount, error) ||
-      vkEndCommandBuffer(recordCommand) != VK_SUCCESS) {
-    return false;
+  // A discarded record-only command buffer must release its descriptor lease
+  // without a terminal fence, so a failed recording cannot strand pool sets.
+  {
+    ReductionScanPrimitives::DeviceScanScratch discardedScratch{};
+    VkCommandBuffer discardedCommand = VK_NULL_HANDLE;
+    if (!session.commandContext().allocatePrimary(discardedCommand, error))
+      return false;
+    VkCommandBufferBeginInfo discardedBegin{
+        VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    discardedBegin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    if (vkBeginCommandBuffer(discardedCommand, &discardedBegin) != VK_SUCCESS ||
+        !primitives.recordExclusiveScanInt(discardedCommand, flags, countLength,
+                                           recordedOffsets, countLength,
+                                           discardedScratch, error) ||
+        !primitives.recordWriteCompactionCount(
+            discardedCommand, flags, recordedOffsets, countLength, recordedCount,
+            discardedScratch, error) ||
+        vkResetCommandBuffer(discardedCommand, 0u) != VK_SUCCESS ||
+        !primitives.discardRecordDescriptorSets(discardedScratch, error)) {
+      return false;
+    }
+    vkFreeCommandBuffers(session.device().get(), session.commandContext().pool(),
+                         1u, &discardedCommand);
   }
-  runtime::Fence recordFence{};
-  if (!recordFence.create(session.device(), error))
-    return false;
-  VkSubmitInfo recordSubmit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-  recordSubmit.commandBufferCount = 1u;
-  recordSubmit.pCommandBuffers = &recordCommand;
-  if (vkQueueSubmit(session.device().computeQueue(), 1u, &recordSubmit,
-                    recordFence.get()) != VK_SUCCESS ||
-      !recordFence.wait(std::numeric_limits<std::uint64_t>::max(), error)) {
-    return false;
+
+  // Repeat completed record-only work beyond the pool's 128-set capacity to
+  // prove terminal-fence reclamation safely reuses descriptor sets.
+  for (std::size_t iteration = 0u; iteration < 40u; ++iteration) {
+    ReductionScanPrimitives::DeviceScanScratch recordScratch{};
+    VkCommandBuffer recordCommand = VK_NULL_HANDLE;
+    if (!session.commandContext().allocatePrimary(recordCommand, error))
+      return false;
+    VkCommandBufferBeginInfo recordBegin{
+        VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    recordBegin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    if (vkBeginCommandBuffer(recordCommand, &recordBegin) != VK_SUCCESS ||
+        !primitives.recordExclusiveScanInt(recordCommand, flags, countLength,
+                                           recordedOffsets, countLength,
+                                           recordScratch, error) ||
+        !primitives.recordWriteCompactionCount(recordCommand, flags,
+                                               recordedOffsets, countLength,
+                                               recordedCount, recordScratch,
+                                               error) ||
+        vkEndCommandBuffer(recordCommand) != VK_SUCCESS) {
+      return false;
+    }
+    runtime::Fence recordFence{};
+    if (!recordFence.create(session.device(), error))
+      return false;
+    error.clear();
+    if (primitives.reclaimRecordDescriptorSets(recordScratch, recordFence.get(),
+                                               error) ||
+        error.find("not registered") == std::string::npos) {
+      error = "record descriptor lease accepted an unregistered fence";
+      return false;
+    }
+    if (!primitives.registerRecordTerminalSubmission(recordScratch,
+                                                     recordFence.get(), error) ||
+        primitives.reclaimRecordDescriptorSets(recordScratch, recordFence.get(),
+                                               error) ||
+        error.find("has not completed") == std::string::npos) {
+      error = "record descriptor lease reclaimed before terminal submission";
+      return false;
+    }
+    error.clear();
+    VkSubmitInfo recordSubmit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    recordSubmit.commandBufferCount = 1u;
+    recordSubmit.pCommandBuffers = &recordCommand;
+    if (vkQueueSubmit(session.device().computeQueue(), 1u, &recordSubmit,
+                      recordFence.get()) != VK_SUCCESS ||
+        !recordFence.wait(std::numeric_limits<std::uint64_t>::max(), error) ||
+        !primitives.reclaimRecordDescriptorSets(recordScratch, recordFence.get(),
+                                                error)) {
+      return false;
+    }
+    recordFence.reset();
+    if (iteration == 0u) {
+      std::int32_t recordedActual = -1;
+      std::vector<std::int32_t> recordedOffsetsActual(countLength);
+      if (!recordedCount.download(session, &recordedActual,
+                                  sizeof(recordedActual), 0u, error) ||
+          !recordedOffsets.download(session, recordedOffsetsActual.data(),
+                                    recordedOffsetsActual.size() *
+                                        sizeof(recordedOffsetsActual[0]),
+                                    0u, error) ||
+          recordedActual != actualCount ||
+          recordedOffsetsActual != scanOracle(flagValues, countLength, 0)) {
+        error = "record-only scan/count mismatch";
+        return false;
+      }
+    }
+    vkFreeCommandBuffers(session.device().get(), session.commandContext().pool(),
+                         1u, &recordCommand);
   }
-  recordFence.reset();
-  std::int32_t recordedActual = -1;
-  std::vector<std::int32_t> recordedOffsetsActual(countLength);
-  if (!recordedCount.download(session, &recordedActual, sizeof(recordedActual),
-                              0u, error) ||
-      !recordedOffsets.download(session, recordedOffsetsActual.data(),
-                                recordedOffsetsActual.size() *
-                                    sizeof(recordedOffsetsActual[0]),
-                                0u, error) ||
-      recordedActual != actualCount ||
-      recordedOffsetsActual != scanOracle(flagValues, countLength, 0)) {
-    error = "record-only scan/count mismatch";
-    return false;
-  }
-  vkFreeCommandBuffers(session.device().get(), session.commandContext().pool(),
-                       1u, &recordCommand);
   error.clear();
   runtime::ComputeSession foreignSession{};
   if (!foreignSession.initialize(error)) {

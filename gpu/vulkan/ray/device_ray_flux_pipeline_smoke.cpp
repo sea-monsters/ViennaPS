@@ -302,3 +302,23 @@ int main() {
          resetWeight[0] == kWeightSentinel);
   std::cout << "device ray-flux pipeline Vulkan dispatch PASS\n";
 }
+    if (!require_equal(gpuSurface[i] == kSurfaceSentinel &&
+                           gpuWeight[i] == kWeightSentinel,
+                       "gpu normal tail sentinel"))
+      return 1;
+
+  for (std::size_t iteration = 0U; iteration < 40U; ++iteration) {
+    std::vector<std::uint32_t> reuseSurface(rays.size(), kSurfaceSentinel);
+    std::vector<float> reuseWeight(rays.size(), kWeightSentinel);
+    RayFluxResult reuse{reuseSurface, reuseWeight, 0U};
+    if (!require_result(pipeline.runGpu(rays, triangles, weights, reuse, error),
+                        "descriptor lease reuse run", error) ||
+        !require_equal(pipeline.lastComputeSubmissionCount() == 1U &&
+                           reuse.count == cpu.count && reuseSurface == cpuSurface &&
+                           std::equal(reuseWeight.begin(), reuseWeight.end(),
+                                      cpuWeight.begin(),
+                                      [](const float lhs, const float rhs) {
+                                        return std::bit_cast<std::uint32_t>(lhs) ==
+                                               std::bit_cast<std::uint32_t>(rhs);
+                                      }),
+                       "descriptor lease reuse result"))

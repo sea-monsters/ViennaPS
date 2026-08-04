@@ -10,6 +10,7 @@
 #include <iostream>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -68,6 +69,20 @@ template <typename T>
 [[nodiscard]] bool sameFloat(const float left, const float right) {
   return std::bit_cast<std::uint32_t>(left) ==
          std::bit_cast<std::uint32_t>(right);
+}
+
+[[nodiscard]] bool expectRejectedDeviceScan(
+    const bool succeeded, const std::string_view label,
+    const std::string &rejectionError, std::string &error) {
+  if (succeeded) {
+    error = std::string(label) + " succeeded unexpectedly";
+    return false;
+  }
+  if (rejectionError.empty()) {
+    error = std::string(label) + " failed without a validation diagnostic";
+    return false;
+  }
+  return true;
 }
 
 [[nodiscard]] ReductionScanStats
@@ -389,31 +404,44 @@ scanOracle(const std::vector<std::int32_t> &input,
   }
   recordFence.reset();
   std::int32_t recordedActual = -1;
+  std::vector<std::int32_t> recordedOffsetsActual(countLength);
   if (!recordedCount.download(session, &recordedActual, sizeof(recordedActual),
                               0u, error) ||
-      recordedActual != actualCount) {
-    error = "record-only compaction count mismatch";
+      !recordedOffsets.download(session, recordedOffsetsActual.data(),
+                                recordedOffsetsActual.size() *
+                                    sizeof(recordedOffsetsActual[0]),
+                                0u, error) ||
+      recordedActual != actualCount ||
+      recordedOffsetsActual != scanOracle(flagValues, countLength, 0)) {
+    error = "record-only scan/count mismatch";
     return false;
   }
   vkFreeCommandBuffers(session.device().get(), session.commandContext().pool(),
                        1u, &recordCommand);
+  error.clear();
   runtime::ComputeSession foreignSession{};
   if (!foreignSession.initialize(error)) {
+    error = "failed to initialize cross-session validation fixture: " + error;
     return false;
   }
   runtime::DeviceBuffer foreign{};
   if (!foreign.create(foreignSession, sizeof(std::int32_t), error)) {
+    error = "failed to create cross-session validation fixture: " + error;
     return false;
   }
   constexpr std::int32_t sentinel = 0x2468ace;
   if (!offsets.upload(session, &sentinel, sizeof(sentinel), 0u, error)) {
     return false;
   }
-  error.clear();
-  if (primitives.exclusiveScanInt(foreign, 1u, offsets, 1u, error)) {
-    error = "cross-session device scan succeeded unexpectedly";
+  std::string rejectionError;
+  const auto rejectedCrossSessionScan =
+      primitives.exclusiveScanInt(foreign, 1u, offsets, 1u, rejectionError);
+  if (!expectRejectedDeviceScan(rejectedCrossSessionScan,
+                                "cross-session device scan", rejectionError,
+                                error)) {
     return false;
   }
+  error.clear();
   std::int32_t actualSentinel = 0;
   if (!offsets.download(session, &actualSentinel, sizeof(actualSentinel), 0u,
                         error) ||
@@ -421,17 +449,21 @@ scanOracle(const std::vector<std::int32_t> &input,
     error = "cross-session rejection changed device output";
     return false;
   }
-  error.clear();
-  if (primitives.exclusiveScanInt(offsets, 1u, offsets, 1u, error)) {
-    error = "device in-place scan succeeded unexpectedly";
+  rejectionError.clear();
+  if (!expectRejectedDeviceScan(
+          primitives.exclusiveScanInt(offsets, 1u, offsets, 1u, rejectionError),
+          "device in-place scan", rejectionError, error)) {
     return false;
   }
   error.clear();
-  if (primitives.exclusiveScanInt(flags, countLength, offsets, countLength - 1u,
-                                  error)) {
-    error = "device length mismatch succeeded unexpectedly";
+  rejectionError.clear();
+  if (!expectRejectedDeviceScan(
+          primitives.exclusiveScanInt(flags, countLength, offsets,
+                                      countLength - 1u, rejectionError),
+          "device length mismatch", rejectionError, error)) {
     return false;
   }
+  error.clear();
   return true;
 }
 

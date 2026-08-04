@@ -882,6 +882,14 @@ bool ReductionScanPrimitives::recordExclusiveScanInt(
     return false;
   if (inputElementCount == 0u)
     return true;
+  const auto blockCount = ceilDiv(inputElementCount, kWorkgroupSize);
+  std::size_t scratchLevels = 1u;
+  for (auto remainingBlocks = blockCount; remainingBlocks > 1u;
+       remainingBlocks = ceilDiv(remainingBlocks, kWorkgroupSize)) {
+    ++scratchLevels;
+  }
+  scratch.blockSums.reserve(scratchLevels);
+  scratch.blockOffsets.reserve(scratchLevels);
   return recordScanIntRecursive(commandBuffer, input, inputElementCount, output,
                                 scratch, 0u, error);
 }

@@ -542,13 +542,18 @@ diff --git a/include/viennals/lsAdvectIntegrationSchemes.hpp b/include/viennals/
 index dc28b3e..123beb2 100644
 --- a/include/viennals/lsAdvectIntegrationSchemes.hpp
 +++ b/include/viennals/lsAdvectIntegrationSchemes.hpp
-@@ -2,2 +2,5 @@
+@@ -1,5 +1,8 @@
+ #pragma once
  
 +#include <cmath>
 +#include <limits>
 +
  #include <lsBooleanOperation.hpp>
-@@ -50,6 +53,18 @@ template <class T, int D> struct AdvectTimeIntegration {
+ #include <lsDomain.hpp>
+ 
+@@ -48,10 +51,22 @@ template <class T, int D> struct AdvectTimeIntegration {
+     if (kernel.currentTimeStep < 0. || kernel.storedRates.empty())
+       kernel.computeRates(maxTimeStep);
  
 +    if (!kernel.validateAdvectionTimeBeforeUpdate()) {
 +      const double rejectedTimeStep = kernel.currentTimeStep;
@@ -567,7 +572,11 @@ index dc28b3e..123beb2 100644
 +      return 0.;
 +
      if (updateLowerLayers)
-@@ -84,5 +99,15 @@ template <class T, int D> struct AdvectTimeIntegration {
+       kernel.adjustLowerLayers();
+ 
+@@ -82,9 +97,19 @@ template <class T, int D> struct AdvectTimeIntegration {
+     double dt1 = evolveForwardEuler(kernel, maxTimeStep,
+                                     kernel.velocityUpdateCallback != nullptr);
  
 -    if (dt1 <= 0.)
 +    if (kernel.hasLevelSetUpdateError() || kernel.hasLevelSetRebuildError() ||
@@ -584,7 +593,11 @@ index dc28b3e..123beb2 100644
 +      return dt1;
 +
      if (kernel.velocityUpdateCallback)
-@@ -95,2 +120,12 @@ template <class T, int D> struct AdvectTimeIntegration {
+       kernel.velocityUpdateCallback(kernel.levelSets.back());
+ 
+@@ -93,6 +118,16 @@ template <class T, int D> struct AdvectTimeIntegration {
+     // Update to u* = u^(1) + dt * L(u^(1))
+     double dt2 = evolveForwardEuler(kernel, dt1, false);
  
 +    if (kernel.hasLevelSetUpdateError() || kernel.hasLevelSetRebuildError() ||
 +        kernel.hasAdvectionTimeError())
@@ -597,7 +610,11 @@ index dc28b3e..123beb2 100644
 +      return dt2;
 +
      // Combine: u^(n+1) = 0.5 * u^n + 0.5 * u*
-@@ -125,5 +160,15 @@ template <class T, int D> struct AdvectTimeIntegration {
+     bool etched = kernel.combineLevelSets(0.5, 0.5);
+ 
+@@ -123,9 +158,19 @@ template <class T, int D> struct AdvectTimeIntegration {
+     double dt1 = evolveForwardEuler(kernel, maxTimeStep,
+                                     kernel.velocityUpdateCallback != nullptr);
  
 -    if (dt1 <= 0.)
 +    if (kernel.hasLevelSetUpdateError() || kernel.hasLevelSetRebuildError() ||
@@ -614,7 +631,11 @@ index dc28b3e..123beb2 100644
 +      return dt1;
 +
      if (kernel.velocityUpdateCallback)
-@@ -135,2 +180,12 @@ template <class T, int D> struct AdvectTimeIntegration {
+       kernel.velocityUpdateCallback(kernel.levelSets.back());
+ 
+@@ -133,6 +178,16 @@ template <class T, int D> struct AdvectTimeIntegration {
+     // u* = u^(1) + dt * L(u^(1))
+     double dt2 = evolveForwardEuler(kernel, dt1, false);
  
 +    if (kernel.hasLevelSetUpdateError() || kernel.hasLevelSetRebuildError() ||
 +        kernel.hasAdvectionTimeError())
@@ -627,7 +648,11 @@ index dc28b3e..123beb2 100644
 +      return dt2;
 +
      // Combine to get u^(2) = 0.75 * u^n + 0.25 * u*.
-@@ -155,2 +210,12 @@ template <class T, int D> struct AdvectTimeIntegration {
+     bool etched1 = kernel.combineLevelSets(0.75, 0.25);
+ 
+@@ -153,6 +208,16 @@ template <class T, int D> struct AdvectTimeIntegration {
+     // u** = u^(2) + dt * L(u^(2))
+     double dt3 = evolveForwardEuler(kernel, dt1, false);
  
 +    if (kernel.hasLevelSetUpdateError() ||
 +        kernel.hasAdvectionTimeError())
@@ -640,3 +665,4 @@ index dc28b3e..123beb2 100644
 +      return dt3;
 +
      // Combine to get u^(n+1) = 1/3 * u^n + 2/3 * u**.
+     bool etched2 = kernel.combineLevelSets(1.0 / 3.0, 2.0 / 3.0);

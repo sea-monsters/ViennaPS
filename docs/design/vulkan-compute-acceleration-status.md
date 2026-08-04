@@ -2848,7 +2848,7 @@ failure is fail-closed.
 | `PD4-HW-MATRIX` | `DONE` — accepted on main 2026-08-03 after a fresh no-SDK/CPU/Intel Arc rerun. | Exclusive: `docs/design/pd4-hw-matrix-card.md`, `gpu/vulkan/VulkanProbe.cpp`, `tests/vulkanDeploymentProbe/`, `tests/probeProfileAdapter/`, `tests/vulkanDeploymentBootstrap/`, `tests/capabilityProfileIO/`. No production routing changes; no Level Set code. | Hardware-matrix evidence is now a PD5 input; do not reopen it without a new hardware/probe defect card. | No-SDK probe exit 0; four focused CPU CTests 4/4; Intel Arc strict PASS with matching identity/queue; forced strict failure exits nonzero, cleans child evidence, and remains fail-closed. |
 | `PD4-PERF-BASELINE` | `DONE` — accepted on main 2026-08-03 as a reproducible baseline evidence card; no optimization claim is implied. | `cmake/run-pd4-perf-baseline.ps1` and its dated JSON evidence only. | Baseline is available to PD5 and later optimization cards. | Five selected CPU/Vulkan smoke suites, three repetitions each, all oracle gates PASS; dispatch/submit/buffer contract metrics and wall-time samples recorded. |
 | `PD5-CI-DOCS-INTEGRATION` | `DONE` — CI/docs integration accepted locally on main 2026-08-03; no remote GitHub run is claimed. | `.github/workflows/build.yml`, the CI section of `vulkan-compute-acceleration-development-report.md`, and this status record. No C++/CMake production changes. | `PD5-INSTALL-EXPORT` remains independently gated; a future hosted/self-hosted run verifies runner provisioning, not this local integration claim. | Default CPU/no-SDK lane is explicit; optional dispatch-only labeled self-hosted Vulkan lane is isolated; path-hygiene job and linked PD4 evidence are present; CI never installs or requires an SDK. |
-| `PD5-INSTALL-EXPORT` | `READY-S`: requires root integration; optional release gate. | CMake install/export, consumer smoke, and deployment documentation. | Serial release-facing gate. | Install/export consumer compile; CPU configure required; optional Vulkan/VTK cases recorded without absolute local paths. |
+| `PD5-INSTALL-EXPORT` | `DONE` — local CPU/no-SDK acceptance completed 2026-08-04. | CMake install/export, consumer smoke, and deployment documentation. | Serial release-facing gate; remote CPU CI remains the next evidence step. | Install/export consumer compile: PASS; CPU configure/build/install plus independent CTest 1/1. VTK/Vulkan remain optional, unclaimed cases. |
 
 Dependency guard: `PD3-LS-SHARED-SESSION` must extend the existing Level Set
 owner rather than creating another `ProcessDeploymentBinding` session;
@@ -2921,6 +2921,40 @@ commands, lane boundary, and the link to the PD4 hardware matrix evidence.
 | Path hygiene | The workflow's six boundary-aware `git grep -E` patterns produced zero matches against the two controlled files: PASS. |
 | Optional hardware lane | Static workflow review: dispatch-only boolean input, `self-hosted` + `vulkan` labels, strict probe and focused CTest commands, all generated paths under `RUNNER_TEMP`: PASS. Remote runner provisioning/execution is not claimed. |
 | Scope boundary | No SDK installation was added to hosted CI; no performance result, hardware promotion, or remote workflow success is inferred. |
+
+### PD5-INSTALL-EXPORT
+
+- Status: `DONE` — local CPU/no-SDK install/export acceptance completed on
+  2026-08-04. GitHub-hosted CPU evidence is a separate, subsequent step.
+- Scope: the ViennaLS patch transport, root CMake export compatibility bridge,
+  `cmake/run-pd5-install-export.cmake`, the standalone consumer fixture, and
+  the isolated CPU/no-SDK CI job. No production Vulkan routing, VTK support,
+  CUDA behavior, profile, or hardware evidence is changed.
+
+The acceptance script owns a caller-selected temporary work directory. It
+configures the producer with VTK and every Vulkan target disabled, builds the
+complete producer/dependency closure, installs it, and then configures the
+consumer only through the resulting install prefix. It disables
+`CMAKE_FIND_USE_INSTALL_PREFIX` for the producer configuration so a failed or
+partial prior install cannot satisfy an upstream dependency search. The
+consumer imports `ViennaTools::ViennaPS`, creates a plane domain, and exits
+successfully only when the public headers and transitive targets compile, link,
+and run.
+
+The initial consumer configuration exposed a real ViennaLS v5.8.5 export
+defect: its generated config required VTK even when configured without VTK.
+The versioned ViennaLS integration patch was normalized against a clean source
+checkout, and the root CMake compatibility bridge rewrites only that generated
+binary-tree dependency list in the no-VTK configuration. VTK-enabled exports
+remain outside this card and are not claimed as passing.
+
+| Gate | Local evidence |
+|---|---|
+| Patch transport | Clean-source dry-run application: PASS for the tracked ViennaLS integration patch. |
+| Producer configuration | Fresh CPU/no-SDK configure: PASS with VTK, Vulkan probe, and Vulkan smoke disabled. The resulting ViennaLS config requires `ViennaHRLE` and `ViennaCore`, not VTK. |
+| Producer build and install | PASS after complete Embree build; package configs, headers, runtime libraries, and dependency exports installed to the isolated prefix. |
+| Independent consumer | `find_package(ViennaPS 4.6 CONFIG REQUIRED)`, `ViennaTools::ViennaPS` link, compile, and run: PASS; CTest 1/1 in 0.46 s. |
+| Optional VTK/Vulkan cases | `NOT RUN` by design. No VTK-enabled export, Vulkan SDK dependency, or hardware result is inferred. |
 
 ### PD3-LS-SHARED-SESSION
 

@@ -632,6 +632,16 @@ Lavapipe 是 CPU 软件 Vulkan，只证明 API/着色器正确性，不代表真
   ctest --test-dir build -C Release --output-on-failure -E "Benchmark|Performance"
   ```
 
+- `install-export` 是独立的 Ubuntu CPU/no-SDK job。它以
+  `VIENNAPS_USE_VTK=OFF`、`VIENNAPS_VTK_RENDERING=OFF` 和所有 Vulkan
+  开关关闭的方式执行 `cmake/run-pd5-install-export.cmake`；脚本先在
+  `$RUNNER_TEMP` 安装完整的依赖闭包，再将 `CMAKE_PREFIX_PATH` 限定为该
+  prefix，配置、编译并运行 `tests/installExportConsumer`。Producer 配置
+  明确关闭 `CMAKE_FIND_USE_INSTALL_PREFIX`，避免半成品 install prefix 被
+  自己误当作依赖。这个 gate 证明 `find_package(ViennaPS)`、
+  `ViennaTools::ViennaPS` 目标和传递依赖对干净消费者有效；它不启用 VTK、
+  CUDA 或 Vulkan，也不替代硬件 lane。
+
 - `vulkan-hardware` 只接受 `workflow_dispatch` 的
   `run_vulkan_hardware=true`，并要求 `self-hosted`、`vulkan` 两个 runner 标签。
   该 job 不在 push 或 pull request 上自动运行，也不替托管 runner 安装 SDK；SDK、

@@ -187,6 +187,38 @@ jobs:
           ctest --output-on-failure -E "Benchmark|Performance" -C Release --test-dir build
           ctest --output-on-failure -E "Benchmark|Performance" -C Debug --test-dir build
 
+  install-export:
+    name: "📦 Install/export consumer (CPU, no SDK)"
+    needs: path-hygiene
+    runs-on: ubuntu-latest
+    container: ghcr.io/viennatools/vienna-builder:suite
+
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v6
+
+      - name: 🖥️ Setup Environment
+        uses: ./.github/actions/setup
+        with:
+          os: ubuntu-latest
+
+      - name: 🔗 Prepare ViennaLS source
+        run: |
+          VIENNALS_TAG=$(awk '/NAME ViennaLS/{f=1} f && /GIT_TAG/{print $2; exit}' CMakeLists.txt)
+          if ! git ls-remote --tags --exit-code https://github.com/ViennaTools/ViennaLS.git "$VIENNALS_TAG" > /dev/null 2>&1; then
+            echo "[CI] Tag $VIENNALS_TAG not found; cloning master as fallback"
+            rm -rf _viennals
+            git clone --depth 1 --branch master https://github.com/ViennaTools/ViennaLS.git _viennals
+            echo "CPM_ViennaLS_SOURCE=$(pwd)/_viennals" >> "$GITHUB_ENV"
+          fi
+
+      - name: 📦 Install and consume the CPU/no-SDK package
+        run: |
+          cmake \
+            -DVIENNAPS_INSTALL_EXPORT_WORK_DIR="$RUNNER_TEMP/viennaps-install-export" \
+            ${CPM_ViennaLS_SOURCE:+-DCPM_ViennaLS_SOURCE="$CPM_ViennaLS_SOURCE"} \
+            -P cmake/run-pd5-install-export.cmake
+
   vulkan-hardware:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_vulkan_hardware == true }}
     name: "🔬 Optional Vulkan probe (self-hosted)"

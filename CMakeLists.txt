@@ -241,6 +241,39 @@ CPMAddPackage(
           "VIENNALS_USE_VTK ${VIENNAPS_USE_VTK}"
           "VIENNALS_VTK_RENDERING ${VIENNAPS_VTK_RENDERING}" "VIENNALS_USE_GPU ${VIENNAPS_USE_GPU}")
 
+# ViennaLS v5.8.5's generated package config unconditionally lists VTK even
+# when it was configured without VTK. Align the installed dependency contract
+# with this CPU/no-VTK configuration so a downstream ViennaPS consumer does
+# not need a VTK SDK it cannot use.
+if(NOT VIENNAPS_USE_VTK)
+  set(_VIENNAPS_VIENNALS_CONFIG "${ViennaLS_BINARY_DIR}/ViennaLSConfig.cmake")
+  set(_VIENNAPS_VIENNALS_VTK_DEPENDENCY
+      "SEPARATE_DEPENDENCIES \"VTK;ViennaHRLE;ViennaCore\"")
+  set(_VIENNAPS_VIENNALS_CPU_DEPENDENCY
+      "SEPARATE_DEPENDENCIES \"ViennaHRLE;ViennaCore\"")
+
+  if(NOT EXISTS "${_VIENNAPS_VIENNALS_CONFIG}")
+    message(FATAL_ERROR "[ViennaPS] ViennaLS package config was not generated.")
+  endif()
+
+  file(READ "${_VIENNAPS_VIENNALS_CONFIG}" _VIENNAPS_VIENNALS_CONFIG_TEXT)
+  string(FIND "${_VIENNAPS_VIENNALS_CONFIG_TEXT}"
+              "${_VIENNAPS_VIENNALS_VTK_DEPENDENCY}" _VIENNAPS_VTK_INDEX)
+  if(NOT _VIENNAPS_VTK_INDEX EQUAL -1)
+    string(REPLACE "${_VIENNAPS_VIENNALS_VTK_DEPENDENCY}"
+                   "${_VIENNAPS_VIENNALS_CPU_DEPENDENCY}"
+                   _VIENNAPS_VIENNALS_CONFIG_TEXT
+                   "${_VIENNAPS_VIENNALS_CONFIG_TEXT}")
+    file(WRITE "${_VIENNAPS_VIENNALS_CONFIG}"
+         "${_VIENNAPS_VIENNALS_CONFIG_TEXT}")
+  endif()
+endif()
+unset(_VIENNAPS_VIENNALS_CONFIG)
+unset(_VIENNAPS_VIENNALS_VTK_DEPENDENCY)
+unset(_VIENNAPS_VIENNALS_CPU_DEPENDENCY)
+unset(_VIENNAPS_VIENNALS_CONFIG_TEXT)
+unset(_VIENNAPS_VTK_INDEX)
+
 if(_VIENNAPS_HAD_CMAKE_SKIP_INSTALL_RULES)
   set(CMAKE_SKIP_INSTALL_RULES "${_VIENNAPS_PREVIOUS_CMAKE_SKIP_INSTALL_RULES}")
 else()

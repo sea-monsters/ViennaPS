@@ -3,6 +3,40 @@
 This file records verified implementation slices. It complements, and does not
 replace, the accepted development report and ADR.
 
+## Hard requirement: reuse CPU path outside compute
+
+Vulkan migration accelerates **compute ops only**. Non-compute behavior must
+**reuse or remain compatible** with the pre-migration CPU route
+(`code_reference/ViennaPS`) so numerical consistency and backward compatibility
+hold. Empty executors / Manual CPU must match the original CPU path. Intentional
+departures need a card ID, a documented diff vs the reference tree, and
+regression tests.
+
+Authoritative wording:
+[intent whitepaper §2.2 item 8](vulkan-program-intent-framework.md) and
+[development report §12](vulkan-compute-acceleration-development-report.md).
+
+### P0–P4 / PD0–PD4 compliance audit — Round 1 (2026-08-05)
+
+**Formal ledger:**
+[p0-p4-cpu-reuse-audit-round1.md](p0-p4-cpu-reuse-audit-round1.md)
+(`RECORDED`; follow-ups not closed in this round).
+
+| Area | Verdict | Note |
+|---|---|---|
+| Control plane, runtime, primitives | Compliant | Selection + kernels; no Process fork |
+| Surface coverage/diffusion/neutral seams | Compliant | Managers/strategies reused; empty executor = CPU |
+| `psCPU*Engine` / default Advect | Compliant | Unchanged production defaults |
+| LS update via Advect executors | Mostly compliant | Empty = original Advect |
+| HRLE rebuild ports (`psHrleRebuild*`) | Partial | Semantic CPU+GPU port, not Advect private body; bit-exact sphere oracles exist; upstream drift risk |
+| P4 ray device chain | Partial (acceptable) | Kernel `runCpu` only; production flux still `psCPU*` |
+| **P3K `AdvectionHandler::performAdvection`** | **Deviation** | Shared CPU path: invalid/zero progress early-exit vs reference always-`SUCCESS` time advance |
+
+Follow-ups (tracked as R1-F1…F3 in the Round 1 ledger; not claimed fixed here):
+lock HRLE mirror + Advect differential CI; decide whether P3K is intentional
+product fail-closed or must be gated off the shared CPU path; prefer
+ViennaRay/`CPUTriangleEngine` helpers on later ray route.
+
 ## S1: capability gate, real dispatch, and CPU oracle
 
 - Status: accepted locally
@@ -2878,7 +2912,7 @@ correctness oracle on non-CUDA hosts.
 | Card | State and predecessor | Exclusive scope | Acceptance / next unlock |
 |---|---|---|---|
 | `PD5-CI-REMOTE` | `BLOCKED` — local `PD5-INSTALL-EXPORT` and CI wiring are ready, but the remote default branch is still `master`, has no `build.yml`, and no Vulkan runner is registered. | Remote branch publication, workflow trigger, and run evidence only. | Publish a branch containing the current workflow; capture hosted CPU/no-SDK run IDs/URLs, then unlock release-facing install/export evidence. |
-| `P5-RAY-ROUTE` | `READY-S` after `P5-JF`; no production route exists today. | `Process`/`FluxEngine` injection, backend policy, CPU/manual fallback, and ray result transaction. | At least one real ray model reaches the route with CPU bitwise/differential coverage and explicit fail-closed Vulkan selection; unlocks the model matrix. |
+| `P5-RAY-ROUTE` | `DONE-LOCAL` — single-bounce Process route validated against CPU_TRIANGLE oracle on Intel Arc. | `Process`/`FluxEngine` injection, backend policy, CPU/manual fallback, and ray result transaction. | `ray_flux_process_route_smoke` passes: totalRelDiff 0.29%, maxRelDiff 2.07%, 20000/20000 rays hit; fail-closed unprepared route deposits no flux. | `P5-RAY-PHYSICS` |
 | `P5-RAY-PHYSICS` | `READY-P` after the device ray data chain; it may proceed beside `P5-RAY-ROUTE`. | Boundary/reflection, roulette/event queue, material/surface response, and multi-bounce contracts. | Deterministic transport differential on representative models; unlocks production ray-model acceptance. |
 | `P5-SURFACE-INTEGRATION` | `READY-S` after the existing P5-N2, P5-B2B, P5-COV2, and P5-COV3 seams are revalidated together. | Coverage, surface diffusion, neutral velocity, and Process callback installation. | One shared deployment session, CPU fallback, raw-bit FP32 candidate checks, and no stale callback; unlocks the P5 model matrix. |
 | `P5-MODEL-MATRIX` | `READY-S` after `P5-RAY-ROUTE`, `P5-RAY-PHYSICS`, and `P5-SURFACE-INTEGRATION`. | Multi-particle/species, ion/neutral transport, fluorocarbon/plasma/TEOS, wet-etch/selective-epitaxy/oxide-regrowth coverage. | Each supported model has a tested support row, conservation/geometry acceptance, and an explicit unsupported/fallback row; unlocks P5 exit. |

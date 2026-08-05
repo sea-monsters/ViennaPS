@@ -19,7 +19,8 @@ enum class FluxEngineType {
   CPU_TRIANGLE, // CPU, Triangle-based
   GPU_DISK,     // GPU, Disk-based
   GPU_TRIANGLE, // GPU, Triangle-based
-  GPU_LINE      // GPU, Line-based
+  GPU_LINE,     // GPU, Line-based
+  VULKAN_RAY    // Vulkan ray-flux pipeline (injected via override)
 };
 }
 
@@ -91,6 +92,8 @@ convertFluxEngineType(const std::string &s) {
     return viennaps::FluxEngineType::GPU_TRIANGLE;
   if (s == "GPU_LINE" || s == "GL")
     return viennaps::FluxEngineType::GPU_LINE;
+  if (s == "VULKAN_RAY" || s == "VR")
+    return viennaps::FluxEngineType::VULKAN_RAY;
   throw std::invalid_argument("Unknown FluxEngineType: " + s);
 }
 
@@ -154,6 +157,8 @@ convertFluxEngineTypeToString(viennaps::FluxEngineType type) {
     return "GPU_TRIANGLE";
   case viennaps::FluxEngineType::GPU_LINE:
     return "GPU_LINE";
+  case viennaps::FluxEngineType::VULKAN_RAY:
+    return "VULKAN_RAY";
   default:
     return "UNKNOWN";
   }

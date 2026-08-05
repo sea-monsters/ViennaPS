@@ -44,6 +44,7 @@ private:
   std::vector<std::unique_ptr<ProcessStrategy<NumericType, D>>> strategies_;
   FluxEngineType fluxEngineType_ = FluxEngineType::AUTO;
   ProcessResult lastProcessResult_ = ProcessResult::SUCCESS;
+  std::unique_ptr<FluxEngine<NumericType, D>> fluxEngineOverride_ = nullptr;
 
 public:
   using LevelSetUpdateExecutor =
@@ -108,6 +109,17 @@ public:
   }
 
   void setFluxEngineType(FluxEngineType type) { fluxEngineType_ = type; }
+
+  /// Installs a pre-built flux engine that overrides the factory created by
+  /// createFluxEngine(). The override is consumed by the next apply() or
+  /// calculateFlux() call. Useful for deployment-injected backends (e.g.
+  /// Vulkan ray-flux) that cannot be created by the built-in factory.
+  void
+  setFluxEngineOverride(std::unique_ptr<FluxEngine<NumericType, D>> engine) {
+    fluxEngineOverride_ = std::move(engine);
+  }
+
+  void clearFluxEngineOverride() { fluxEngineOverride_.reset(); }
 
   void setIntermediateOutputPath(const std::string &path) {
     context_.intermediateOutputPath = path;
@@ -207,7 +219,13 @@ public:
     if (strategy->requiresFluxEngine()) {
       VIENNACORE_LOG_DEBUG("Setting up " + util::toString(fluxEngineType_) +
                            " flux engine for strategy.");
-      strategy->setFluxEngine(createFluxEngine());
+      auto engine = createFluxEngine();
+      if (!engine) {
+        VIENNACORE_LOG_ERROR("Failed to create flux engine.");
+        lastProcessResult_ = ProcessResult::FAILURE;
+        return;
+      }
+      strategy->setFluxEngine(std::move(engine));
     }
 
     // Execute strategy
@@ -232,8 +250,13 @@ public:
       return nullptr;
     }
 
+    auto engine = createFluxEngine();
+    if (!engine) {
+      VIENNACORE_LOG_ERROR("Failed to create flux engine.");
+      return nullptr;
+    }
     auto strategy = std::make_unique<FluxProcessStrategy<NumericType, D>>(
-        createFluxEngine());
+        std::move(engine));
     strategy->calculateFlux(context_);
 
     return context_.diskMesh;
@@ -300,8 +323,13 @@ private:
     }
   }
 
-  // Factory method for creating flux engines
-  std::unique_ptr<FluxEngine<NumericType, D>> createFluxEngine() const {
+  // Factory method for creating flux engines. An installed override is
+  // returned instead; otherwise the engine is created from fluxEngineType_.
+  std::unique_ptr<FluxEngine<NumericType, D>> createFluxEngine() {
+    if (fluxEngineOverride_) {
+      VIENNACORE_LOG_DEBUG("Using overridden flux engine.");
+      return std::move(fluxEngineOverride_);
+    }
     assert(fluxEngineType_ != FluxEngineType::AUTO &&
            "Flux engine type must be specified before creation.");
     VIENNACORE_LOG_DEBUG("Creating flux engine of type: " +

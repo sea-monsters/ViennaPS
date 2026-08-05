@@ -19,6 +19,12 @@ ViennaCore 的设备与数值基础设施、ViennaLS 的稀疏 Level Set、Vienn
 没有硬件光追的 AMD、Intel 或 NVIDIA 设备仍可加速 Level Set、网格、表面场、
 扩散和线性求解，并可通过计算着色器软件 BVH 执行光线输运。
 
+**重要工程约束（CPU 路径复用）：** 迁移对象是计算核，不是工艺语义。除
+compute 操作外，编排、模型、默认 CPU 引擎、主机侧输运辅助与 Advect 事务须
+复用或兼容旧 CPU 路线；空 executor / Manual CPU 必须保持原版行为。完整规范
+与 P0–P4 审计见第 12 节及
+[意图白皮书](vulkan-program-intent-framework.md) §2.2 第 8 条。
+
 部署或首次使用时，独立探测器生成持久化的能力档案。运行仿真时，选择器根据
 硬功能阈值、问题规模、精度要求、显存余量和校准结果逐阶段选择最优实现，无需
 用户了解设备细节。用户可以通过 `manual` 配置覆盖所有自动策略；但显式选择
@@ -816,28 +822,35 @@ P3 与 P4 在 P2 后可由不同开发者并行；P6 的线性代数可在 P3 �
 
 每个 Preview 都必须标注支持矩阵，不用一个总开关暗示尚未实现的模型可用。
 
-### 8.3 当前执行快照（2026-08-04）
+### 8.3 当前执行快照（2026-08-05）
 
 当前实现已经跨过“Vulkan runtime / deployment profile / Level Set seam / ray
-device data chain”的可验证基础阶段，但尚未达到本报告定义的 Vulkan Process
-Preview，更不是 P6--P7 的 Full Physics 发布状态。PD0--PD4 的本地控制面和
-`PD5-CI-DOCS-INTEGRATION`、`PD5-INSTALL-EXPORT` 的本地 CPU/no-SDK 验收已经
-有记录；这只能说明本地证据链可重放。GitHub 远端 CI 仍是独立门禁：截至本快照，
-远端默认分支为 `master`，默认分支没有 `build.yml`，没有已登记的 Vulkan
-runner，也没有可引用的远端 run URL，因此不能把远端 CI 计入完成度。
+device data chain”的可验证基础阶段，并已完成 `P5-RAY-ROUTE` 的本地验收：
+`ray_flux_process_route_smoke` 在 Intel Arc Release Vulkan 上通过
+`Process::calculateFlux()` 将 `SingleParticleProcess<float, 2>` 注入到
+`VulkanRayFluxEngine`，与 `CPU_TRIANGLE` 基准比较，totalRelDiff=0.29%、
+maxRelDiff=2.07%、20000/20000 条光线命中，fail-closed 的未准备上下文未沉积任何
+flux 数据。这仍不等于 Vulkan Process Preview 或 P6--P7 Full Physics 发布状态：
+多反射/俄罗斯轮盘、表面物理覆盖、跨厂商矩阵、远端 CI 和 release gate 均未完成。
 
-P5 的 `P5-JD`、`P5-JE`、`P5-JF` 已在本地 Release Vulkan/Intel Arc 上分别
-完成设备驻留组合、单 compute submission 组合和严格 FP32 fail-closed 状态
-传播；当前重验证的五项 ray CTest 为 5/5，standalone 配置的完整 ray CTest
-为 12/12。它们仍然没有 Process/model production route、完整表面物理覆盖、
-跨厂商矩阵或 release gate，所以“开发完成”不得写成“全项目完成”。当前工作树已无未提交的 P5 回归加固 diff；该 diff 已作为独立快照提交并记录到状态文档，现在可以进入 Process/model 集成阶段。
+PD0--PD4 的本地控制面和 `PD5-CI-DOCS-INTEGRATION`、`PD5-INSTALL-EXPORT` 的本地
+CPU/no-SDK 验收已经有记录；这只能说明本地证据链可重放。GitHub 远端 CI 仍是独立
+门禁：截至本快照，远端默认分支为 `master`，默认分支没有 `build.yml`，没有已登记的
+Vulkan runner，也没有可引用的远端 run URL，因此不能把远端 CI 计入完成度。
+
+P5 的 `P5-JD`、`P5-JE`、`P5-JF` 已在本地 Release Vulkan/Intel Arc 上分别完成设备
+驻留组合、单 compute submission 组合和严格 FP32 fail-closed 状态传播；当前重验证的
+五项 ray CTest 为 5/5，standalone 配置的完整 ray CTest 为 12/12（本快照运行仍为
+6/6 核心 ray smoke）。`P5-RAY-ROUTE` 本地验收完成后，工作树已无未提交的 P5 回归
+加固 diff；该 diff 已作为独立快照提交并记录到状态文档，现在可以继续推进
+`P5-RAY-PHYSICS`、`P5-SURFACE-INTEGRATION` 和 `P5-MODEL-MATRIX`。
 
 单人顺序已经细化到状态文档的 `Total-plan continuation board: P5 to P7`：
 
 1. 先完成远端分支发布和 `PD5-CI-REMOTE` 证据；
 2. 释放并提交/回收 P5-JD/JE/JF 回归加固；
-3. 完成 `P5-RAY-ROUTE`、`P5-RAY-PHYSICS`、`P5-SURFACE-INTEGRATION` 和
-   `P5-MODEL-MATRIX`，形成 Vulkan Process Preview；
+3. 完成 `P5-RAY-PHYSICS`、`P5-SURFACE-INTEGRATION` 和 `P5-MODEL-MATRIX`，形成
+   Vulkan Process Preview；
 4. 运行 `P5-DEPLOYMENT-EXIT`，再进入 `P6-LA-BASELINE`、氧化耦合和物理退出门；
 5. 最后完成 P7 的跨步骤常驻、成本模型/Selection Record、CI soak、device-lost
    恢复和发布兼容门。
@@ -895,3 +908,50 @@ P5 的 `P5-JD`、`P5-JE`、`P5-JF` 已在本地 Release Vulkan/Intel Arc 上分�
 
 在此之前，应使用 `experimental Vulkan backend` 或对应 Preview 名称，避免总开关
 给用户造成完整功能覆盖的错误预期。
+
+## 12. CPU 路径复用要求（重要）
+
+本次工程目标是 **Vulkan 计算迁移**。除真正的计算操作外，所有功能应通过
+**复用或兼容** 既有 CPU 路线实现，以保证数值一致性与向后兼容性。
+
+### 12.1 规范表述
+
+| 类别 | 要求 |
+|---|---|
+| 必须复用 / 兼容 | `Process` 与 Strategy 编排；`ProcessModel` / `SurfaceModel`；默认 `psCPUDiskEngine` / `psCPUTriangleEngine`；ViennaRay 主机侧采样与归一化；`viennals::Advect` 事务与默认重建；Domain / 材料 / I/O / Python |
+| 允许替换 | 仅 executor、FluxEngine 注入点或原语层背后的 **compute 核**；空 executor 与 Manual CPU 必须回到原版 CPU 行为 |
+| 禁止 | 第二套 Process 循环；平行重写化学/表面模型；无文档地改写共享 CPU 时间推进/早退；把 kernel-oracle CPU 副本默认为生产 ViennaRay/Advect 等价 |
+
+有意偏离原版 CPU 行为时，必须同时具备：卡片 ID、与
+`code_reference/ViennaPS` 的差分说明、回归测试。该要求与
+[意图白皮书](vulkan-program-intent-framework.md) §2.2 第 8 条同级。
+
+### 12.2 P0–P4 / PD0–PD4 第一轮合规审计（2026-08-05）
+
+**正式账本：**
+[p0-p4-cpu-reuse-audit-round1.md](p0-p4-cpu-reuse-audit-round1.md)
+（状态 `RECORDED`；纠偏项本轮未关闭）。
+
+相对 `D:\Codex_lib\code_reference\ViennaPS` 的只读审查结论摘要：
+
+**总评：架构总体合规**——未另起 Process / Flux / SurfaceModel 生产循环；默认
+仍走 CPU 引擎与 Advect。残留风险集中在 **HRLE rebuild 语义移植** 与 **P3K
+共享路径编排变更**。
+
+| 切片 / 区域 | 判定 | 要点 |
+|---|---|---|
+| PD0–PD2、PD3–PD4 控制面与证据 | 合规 | 选择/绑定/矩阵；空回调 = 原算法 |
+| P0–P2 原语与 runtime | 合规 | 计算原语 + 契约级 CPU oracle |
+| P3 Level Set update 缝 | 基本合规 | Advect executor；空 = 原路径；RK2/RK3 强制 CPU |
+| P4 HRLE classify/compact/reconstruct | 部分偏离 | `psHrleRebuild*.hpp` 为独立 CPU 契约 + Vulkan 核，非直接调用 Advect 私有 rebuild；有球体 bit-exact 证据，存在上游漂移风险 |
+| P4 ray 设备链 | 部分（可接受） | 独立 kernel `runCpu`；生产通量仍 `psCPU*`（路由属后续卡） |
+| P3K `AdvectionHandler::performAdvection` | **偏离** | 相对原版：非有限/负 `timeStep` → `FAILURE`；零进度 → `EARLY_TERMINATION`；扩展零速度哨兵；executor 错误传播。**无 Vulkan 时也改变共享 CPU 早退语义** |
+
+纠偏建议（账本 R1-F1…F3）：
+
+1. HRLE 端口：锁定与 ViennaLS rebuild 的镜像关系 + Advect-CPU 差分 CI。
+2. P3K：要么文档化为有意产品改进并保留回归，要么收回为可选/仅设备路径，恢复共享 CPU 与原版一致。
+3. 后续光线 Process 路由：优先调用 ViennaRay / CPU triangle 主机辅助，减少归一化副本。
+
+意图白皮书 §12.1 与状态看板文首同步指向同一轮账本；本报告不把审计本身宣称为
+已完成纠偏。

@@ -807,3 +807,65 @@ if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
     PASS_REGULAR_EXPRESSION "device ray-flux pipeline Vulkan dispatch PASS"
     FAIL_REGULAR_EXPRESSION "SKIP;FAIL")
 endif()
+
+# P5-RAY-ROUTE Process/FluxProcessStrategy injection point.  The engine library
+# owns the PIMPL translation from the device-resident DeviceRayFluxPipeline to
+# the public FluxEngine contract; the smoke validates the CPU-oracle match and
+# fail-closed behavior through a real Process route.  It requires the ViennaPS
+# interface target (Process/model headers), so it is only declared in the full
+# integrated build, matching the level-set Process controller guard.
+if(TARGET ViennaPS)
+  add_library(viennaps_vulkan_ray_flux_engine vulkan_ray_flux_engine.cpp)
+  add_dependencies(viennaps_vulkan_ray_flux_engine
+                   viennaps-vulkan-triangle-hit-device-spv
+                   viennaps-vulkan-triangle-bvh-hit-spv
+                   viennaps-vulkan-ray-record-compaction-spv
+                   viennaps-vulkan-ray-record-radix-sort-spv
+                   viennaps-vulkan-ray-surface-reduction-spv)
+  target_link_libraries(viennaps_vulkan_ray_flux_engine
+                        PUBLIC ViennaPS viennaps_vulkan_device_ray_flux_pipeline
+                               Vulkan::Vulkan)
+  target_include_directories(viennaps_vulkan_ray_flux_engine PUBLIC
+                             "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_compile_features(viennaps_vulkan_ray_flux_engine PRIVATE cxx_std_20)
+  if(MSVC)
+    target_compile_options(viennaps_vulkan_ray_flux_engine PRIVATE /W4 /EHsc)
+  else()
+    target_compile_options(viennaps_vulkan_ray_flux_engine PRIVATE
+                           -Wall -Wextra -Wpedantic)
+  endif()
+
+  add_executable(viennaps-vulkan-ray-flux-process-route-smoke
+                 ray_flux_process_route_smoke.cpp)
+  add_dependencies(viennaps-vulkan-ray-flux-process-route-smoke
+                   viennaps-vulkan-triangle-hit-device-spv
+                   viennaps-vulkan-triangle-bvh-hit-spv
+                   viennaps-vulkan-ray-record-compaction-spv
+                   viennaps-vulkan-ray-record-radix-sort-spv
+                   viennaps-vulkan-ray-surface-reduction-spv)
+  target_compile_features(viennaps-vulkan-ray-flux-process-route-smoke PRIVATE
+                          cxx_std_20)
+  if(MSVC)
+    target_compile_options(viennaps-vulkan-ray-flux-process-route-smoke PRIVATE
+                           /EHsc)
+  endif()
+  target_compile_definitions(viennaps-vulkan-ray-flux-process-route-smoke PRIVATE
+    "VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH}\""
+    "VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV_PATH}\""
+    "VIENNAPS_VULKAN_REDUCTION_SCAN_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_REDUCTION_SCAN_SPV_PATH}\""
+    "VIENNAPS_VULKAN_RAY_RECORD_RADIX_HISTOGRAM_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_RADIX_HISTOGRAM_SPV_PATH}\""
+    "VIENNAPS_VULKAN_RAY_RECORD_RADIX_PREFIX_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_RADIX_PREFIX_SPV_PATH}\""
+    "VIENNAPS_VULKAN_RAY_RECORD_RADIX_SCATTER_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_RADIX_SCATTER_SPV_PATH}\""
+    "VIENNAPS_VULKAN_RAY_SURFACE_SEGMENTS_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_SURFACE_SEGMENTS_SPV_PATH}\""
+    "VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV_PATH}\""
+    "VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH}\"")
+  target_link_libraries(viennaps-vulkan-ray-flux-process-route-smoke PRIVATE
+                        ViennaPS viennaps_vulkan_ray_flux_engine Vulkan::Vulkan)
+  if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
+    add_test(NAME viennaps-vulkan-ray-flux-process-route-smoke
+             COMMAND viennaps-vulkan-ray-flux-process-route-smoke)
+    set_tests_properties(viennaps-vulkan-ray-flux-process-route-smoke PROPERTIES
+      PASS_REGULAR_EXPRESSION "ray-flux process route Vulkan dispatch PASS"
+      FAIL_REGULAR_EXPRESSION "SKIP;FAIL")
+  endif()
+endif()

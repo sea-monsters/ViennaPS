@@ -822,7 +822,7 @@ P3 与 P4 在 P2 后可由不同开发者并行；P6 的线性代数可在 P3 �
 
 每个 Preview 都必须标注支持矩阵，不用一个总开关暗示尚未实现的模型可用。
 
-### 8.3 当前执行快照（2026-08-05）
+### 8.3 当前执行快照（2026-08-06）
 
 当前实现已经跨过“Vulkan runtime / deployment profile / Level Set seam / ray
 device data chain”的可验证基础阶段，并已完成 `P5-RAY-ROUTE` 的本地验收：
@@ -830,7 +830,17 @@ device data chain”的可验证基础阶段，并已完成 `P5-RAY-ROUTE` 的�
 `Process::calculateFlux()` 将 `SingleParticleProcess<float, 2>` 注入到
 `VulkanRayFluxEngine`，与 `CPU_TRIANGLE` 基准比较，totalRelDiff=0.29%、
 maxRelDiff=2.07%、20000/20000 条光线命中，fail-closed 的未准备上下文未沉积任何
-flux 数据。这仍不等于 Vulkan Process Preview 或 P6--P7 Full Physics 发布状态：
+flux 数据。
+
+`P5-RAY-PHYSICS` 已于 2026-08-06 完成本地验收。该切片在
+`include/viennaps/ray/` 中定义了反射、俄罗斯轮盘、事件队列和表面响应的 CPU
+端契约，并复用 ViennaRay 的 `ReflectionDiffuse` / `ReflectionSpecular` /
+`ReflectionConedCosine`、ViennaRay 的轮盘阈值/续重常量，以及
+`SurfaceModel` / `MaterialMap` 的 CPU 契约；公共头文件不出现 Vulkan 类型，
+也不改动 `Process` / `FluxProcessStrategy`。验收测试 `rayPhysics` 在复用的
+Release MSVC C++20 构建中通过：`Test #81: rayPhysics ... Passed 0.54 sec`。
+
+这仍不等于 Vulkan Process Preview 或 P6--P7 Full Physics 发布状态：
 多反射/俄罗斯轮盘、表面物理覆盖、跨厂商矩阵、远端 CI 和 release gate 均未完成。
 
 PD0--PD4 的本地控制面和 `PD5-CI-DOCS-INTEGRATION`、`PD5-INSTALL-EXPORT` 的本地
@@ -930,28 +940,55 @@ P5 的 `P5-JD`、`P5-JE`、`P5-JF` 已在本地 Release Vulkan/Intel Arc 上分�
 
 **正式账本：**
 [p0-p4-cpu-reuse-audit-round1.md](p0-p4-cpu-reuse-audit-round1.md)
-（状态 `RECORDED`；纠偏项本轮未关闭）。
+（状态 `RECORDED`；R1-F1 / R1-F2 已修复关闭，R1-F3 保留建议）。
 
 相对 `D:\Codex_lib\code_reference\ViennaPS` 的只读审查结论摘要：
 
 **总评：架构总体合规**——未另起 Process / Flux / SurfaceModel 生产循环；默认
-仍走 CPU 引擎与 Advect。残留风险集中在 **HRLE rebuild 语义移植** 与 **P3K
-共享路径编排变更**。
+仍走 CPU 引擎与 Advect。**R1-F1 与 R1-F2 已按 executor 活性分路 / 冻结镜像 +
+差分夹具方案纠偏。**
 
 | 切片 / 区域 | 判定 | 要点 |
 |---|---|---|
 | PD0–PD2、PD3–PD4 控制面与证据 | 合规 | 选择/绑定/矩阵；空回调 = 原算法 |
 | P0–P2 原语与 runtime | 合规 | 计算原语 + 契约级 CPU oracle |
 | P3 Level Set update 缝 | 基本合规 | Advect executor；空 = 原路径；RK2/RK3 强制 CPU |
-| P4 HRLE classify/compact/reconstruct | 部分偏离 | `psHrleRebuild*.hpp` 为独立 CPU 契约 + Vulkan 核，非直接调用 Advect 私有 rebuild；有球体 bit-exact 证据，存在上游漂移风险 |
+| P4 HRLE classify/compact/reconstruct | **已纠偏** | `psHrleRebuild*.hpp` 与 `gpu/vulkan/levelset/viennals_rebuild_executor.hpp` 已标为 ViennaLS 5.8.5 `rebuildLS` 冻结语义镜像；新增 `hrleRebuildCpuFixture` 固定 2-D/3-D sphere fingerprint 作为 Advect-CPU 差分 oracle |
 | P4 ray 设备链 | 部分（可接受） | 独立 kernel `runCpu`；生产通量仍 `psCPU*`（路由属后续卡） |
-| P3K `AdvectionHandler::performAdvection` | **偏离** | 相对原版：非有限/负 `timeStep` → `FAILURE`；零进度 → `EARLY_TERMINATION`；扩展零速度哨兵；executor 错误传播。**无 Vulkan 时也改变共享 CPU 早退语义** |
+| P3K `AdvectionHandler::performAdvection` | **已纠偏** | 按 executor 活性分路：空 executor / Manual CPU 恢复原版 4.6.2 语义；有 executor 时保留 P3K fail-closed；ViennaLS patch 同步增加 `hasLevelSetExecutors()` 短路 |
 
-纠偏建议（账本 R1-F1…F3）：
+**纠偏实现摘要（R1-F1 / R1-F2）：**
 
-1. HRLE 端口：锁定与 ViennaLS rebuild 的镜像关系 + Advect-CPU 差分 CI。
-2. P3K：要么文档化为有意产品改进并保留回归，要么收回为可选/仅设备路径，恢复共享 CPU 与原版一致。
-3. 后续光线 Process 路由：优先调用 ViennaRay / CPU triangle 主机辅助，减少归一化副本。
+- `include/viennaps/process/psAdvectionHandler.hpp`：
+  `performAdvection` 检测 `levelSetUpdateExecutor || levelSetRebuildExecutor`。
+  无 executor 分支无条件递增 `totalAdvectionSteps_`，仅识别 `double::max()` 零速度
+  哨兵，直接累加 `processTime`，返回 `SUCCESS`；executor 活性分支保留 LS
+  update/rebuild/time 错误 `FAILURE`、非有限/负步长 `FAILURE`、零进度
+  `EARLY_TERMINATION`、双精度 + `NumericType::max` 零速度哨兵处理。
+- `cmake/patches/viennals-v5.8.5-levelset-update-v2.patch`：新增
+  `hasLevelSetExecutors()`；executor-active 的
+  `validateAdvectionTimeBeforeUpdate()` 与 RK2/RK3 fail-closed 分支保持独立。
+  无 executor 的 `evolveForwardEuler` 保留原版 update/rebuild/lower-layer 调用序列，
+  而非以 time-step 预检查早退；多步 executor-active `advectionTimeError` 与 update/
+  rebuild 错误同样恢复完整 snapshot，禁止向调用方发布部分 step 状态。
+- `include/viennaps/levelset/psHrleRebuildClassification.hpp`、
+  `psHrleRebuildCompaction.hpp`、`psHrleSparseReconstruction.hpp`、
+  `gpu/vulkan/levelset/viennals_rebuild_executor.hpp`：统一添加冻结镜像注释块，
+  声明其为 ViennaLS 5.8.5 + levelset-update-v2 patch 的 `rebuildLS` 语义镜像，非
+  直接调用，上游改动必须复核并重新基线 `hrleRebuildCpuFixture`。
+- 新增 `tests/hrleRebuildCpuFixture`：纯 `viennals::Advect<float,D>` CPU 路径 2-D/3-D
+  sphere 收缩 fixture。reference 不安装 rebuild executor；mirror 经实际 Advect callback
+  调用本地 classification、compaction、sparse reconstruction，并断言 callback 至少执行一次。
+  两者逐 HRLE 位模式和 PointData 比较后再比较量化 surface-node fingerprint；
+  `HRLE_REBUILD_BASELINE=1` 只报告 oracle，不能跳过 differential。
+- 更新 `tests/advectionProgressGuard`、`tests/advectionInnerLoopGuard`、
+  `tests/levelSetUpdateExecutorRouting`：拆分 executor-active fail-closed 场景与无
+  executor legacy 场景，后者断言原版语义（`SUCCESS`、`advectionSteps == 1U`、
+  零进度仍成功等）。2026-08-05 在 Release 与 Debug 配置复验通过。
 
-意图白皮书 §12.1 与状态看板文首同步指向同一轮账本；本报告不把审计本身宣称为
-已完成纠偏。
+**保留建议（R1-F3）：**
+
+后续光线 Process 路由优先调用 ViennaRay / CPU triangle 主机辅助，减少归一化副本。
+
+意图白皮书 §12.1 与状态看板文首同步指向同一轮账本；本报告记录纠偏实现，最终
+验证结果以实际 CTest 运行为准。

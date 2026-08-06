@@ -20,7 +20,8 @@ Authoritative wording:
 
 **Formal ledger:**
 [p0-p4-cpu-reuse-audit-round1.md](p0-p4-cpu-reuse-audit-round1.md)
-(`RECORDED`; follow-ups not closed in this round).
+(`RECORDED`; R1-F1 / R1-F2 closed by 2026-08-05 remediation and local CPU/Vulkan smoke revalidation, R1-F3 remains a
+recommendation).
 
 | Area | Verdict | Note |
 |---|---|---|
@@ -28,14 +29,24 @@ Authoritative wording:
 | Surface coverage/diffusion/neutral seams | Compliant | Managers/strategies reused; empty executor = CPU |
 | `psCPU*Engine` / default Advect | Compliant | Unchanged production defaults |
 | LS update via Advect executors | Mostly compliant | Empty = original Advect |
-| HRLE rebuild ports (`psHrleRebuild*`) | Partial | Semantic CPU+GPU port, not Advect private body; bit-exact sphere oracles exist; upstream drift risk |
+| HRLE rebuild ports (`psHrleRebuild*`) | **Closed** | Frozen semantic mirror of ViennaLS 5.8.5 `rebuildLS`; `hrleRebuildCpuFixture` provides Advect-CPU differential oracle |
 | P4 ray device chain | Partial (acceptable) | Kernel `runCpu` only; production flux still `psCPU*` |
-| **P3K `AdvectionHandler::performAdvection`** | **Deviation** | Shared CPU path: invalid/zero progress early-exit vs reference always-`SUCCESS` time advance |
+| **P3K `AdvectionHandler::performAdvection`** | **Closed** | Executor-active-only fail-closed; empty executor / Manual CPU restored to reference 4.6.2 behavior |
 
-Follow-ups (tracked as R1-F1…F3 in the Round 1 ledger; not claimed fixed here):
-lock HRLE mirror + Advect differential CI; decide whether P3K is intentional
-product fail-closed or must be gated off the shared CPU path; prefer
-ViennaRay/`CPUTriangleEngine` helpers on later ray route.
+Follow-ups (tracked as R1-F1…F3 in the Round 1 ledger):
+
+- **R1-F1** — Closed. HRLE rebuild files carry frozen-mirror labels; differential
+  fixture `hrleRebuildCpuFixture` executes the mirror through the Advect rebuild
+  callback, asserts that callback dispatch occurred, compares canonical HRLE and
+  PointData output with the unmodified CPU path, and must be run in CI and
+  re-baselined on intentional upstream `rebuildLS` changes.
+- **R1-F2** — Closed. `AdvectionHandler::performAdvection` and the ViennaLS patch
+  gate P3K fail-closed behavior on `hasLevelSetExecutors()`; no-executor integration
+  keeps the original update/rebuild sequence, while executor-active time errors roll
+  the complete multi-step snapshot back before returning failure. Legacy tests assert
+  reference CPU semantics.
+- **R1-F3** — Remains an open recommendation for P5+ ray Process routing: prefer
+  ViennaRay / `CPUTriangleEngine` host helpers to reduce normalization duplicates.
 
 ## S1: capability gate, real dispatch, and CPU oracle
 
@@ -2070,6 +2081,46 @@ must treat the static float-control properties as a candidate only: a
 process-isolated, watchdog-bounded numerical smoke must pass bitwise CPU
 differential cases before the strict GPU profile is selected automatically.
 
+### P5-RAY-PHYSICS: CPU-side ray physics contracts
+
+- Status: `DONE-LOCAL` — CPU-side contracts accepted on main 2026-08-06.
+- Predecessor: `P5-JD/JE/JF-REGRESSION-HARDENING` device data chain and
+  `P5-RAY-ROUTE` Process route injection.
+- Exclusive scope:
+  - `include/viennaps/ray/ray_reflection.hpp`
+  - `include/viennaps/ray/ray_roulette.hpp`
+  - `include/viennaps/ray/ray_event_queue.hpp`
+  - `include/viennaps/ray/ray_surface_response.hpp`
+  - `tests/rayPhysics/rayPhysics.cpp` and `tests/rayPhysics/CMakeLists.txt`
+
+This slice defines deterministic, CPU-testable contracts for reflection,
+Russian roulette, event ordering, and material/surface response. It deliberately
+reuses ViennaRay's authoritative CPU helpers and the existing `SurfaceModel` /
+`MaterialMap` CPU contracts; no Vulkan types appear in the public headers and no
+Process / `FluxProcessStrategy` behavior is changed.
+
+| Contract | Reused authority | Verified property |
+|---|---|---|
+| Diffuse/specular/coned-cosine reflection | `viennaray::ReflectionDiffuse` / `ReflectionSpecular` / `ReflectionConedCosine` | Normalized reflected direction, mirror law, and cone degeneracies |
+| Orthonormal basis | `rayInternal::getOrthonormalBasis` | Three orthonormal axes for an arbitrary input vector |
+| Russian roulette | ViennaRay constants `0.1*initialWeight` and `0.3*initialWeight` | High weights continue unchanged; low weights survive with unbiased probability `w/renewWeight` |
+| Event queue | `std::priority_queue` with `(particle, bounce, sequence)` ordering | Deterministic pop order and insertion-order tie-breaking |
+| Surface response | `MaterialMap::isMaterial` and `SurfaceModel::getCoverages` | Masked materials zero weight; multi-mask lists supported; coverage scalar lookup handles missing/out-of-range labels |
+
+Acceptance evidence: `rayPhysics` CTest passes in the reused Release MSVC C++20
+build `.tmp_p5_route_20260805` under `-DVIENNAPS_BUILD_TESTS=ON`:
+
+```bat
+cmake --build .tmp_p5_route_20260805 --config Release --target rayPhysics
+ctest --test-dir .tmp_p5_route_20260805 -C Release -R rayPhysics --output-on-failure
+```
+
+Result: `Test #81: rayPhysics ....................... Passed 0.54 sec`.
+
+This card does **not** add device shaders, multi-bounce end-to-end validation,
+or automatic Process routing; those remain gated by `P5-SURFACE-INTEGRATION` and
+`P5-MODEL-MATRIX`.
+
 ### P5-K1: strict-FP32 numerical evidence profile and routing gate
 
 - Status: accepted locally as the persistence and policy seam; P5-K2 below
@@ -2913,8 +2964,8 @@ correctness oracle on non-CUDA hosts.
 |---|---|---|---|
 | `PD5-CI-REMOTE` | `BLOCKED` — local `PD5-INSTALL-EXPORT` and CI wiring are ready, but the remote default branch is still `master`, has no `build.yml`, and no Vulkan runner is registered. | Remote branch publication, workflow trigger, and run evidence only. | Publish a branch containing the current workflow; capture hosted CPU/no-SDK run IDs/URLs, then unlock release-facing install/export evidence. |
 | `P5-RAY-ROUTE` | `DONE-LOCAL` — single-bounce Process route validated against CPU_TRIANGLE oracle on Intel Arc. | `Process`/`FluxEngine` injection, backend policy, CPU/manual fallback, and ray result transaction. | `ray_flux_process_route_smoke` passes: totalRelDiff 0.29%, maxRelDiff 2.07%, 20000/20000 rays hit; fail-closed unprepared route deposits no flux. | `P5-RAY-PHYSICS` |
-| `P5-RAY-PHYSICS` | `READY-P` after the device ray data chain; it may proceed beside `P5-RAY-ROUTE`. | Boundary/reflection, roulette/event queue, material/surface response, and multi-bounce contracts. | Deterministic transport differential on representative models; unlocks production ray-model acceptance. |
-| `P5-SURFACE-INTEGRATION` | `READY-S` after the existing P5-N2, P5-B2B, P5-COV2, and P5-COV3 seams are revalidated together. | Coverage, surface diffusion, neutral velocity, and Process callback installation. | One shared deployment session, CPU fallback, raw-bit FP32 candidate checks, and no stale callback; unlocks the P5 model matrix. |
+| `P5-RAY-PHYSICS` | `DONE-LOCAL` — CPU-side reflection/roulette/event-queue/surface-response contracts accepted on main 2026-08-06. | Boundary/reflection, roulette/event queue, material/surface response, and multi-bounce contracts. | `rayPhysics` CTest passes in reused Release MSVC C++20 build; no Vulkan types in public headers; no Process/FluxProcessStrategy change. | `P5-SURFACE-INTEGRATION` |
+| `P5-SURFACE-INTEGRATION` | `READY-S` after `P5-RAY-PHYSICS` and the existing P5-N2, P5-B2B, P5-COV2, and P5-COV3 seams are revalidated together. | Coverage, surface diffusion, neutral velocity, and Process callback installation. | One shared deployment session, CPU fallback, raw-bit FP32 candidate checks, and no stale callback; unlocks the P5 model matrix. |
 | `P5-MODEL-MATRIX` | `READY-S` after `P5-RAY-ROUTE`, `P5-RAY-PHYSICS`, and `P5-SURFACE-INTEGRATION`. | Multi-particle/species, ion/neutral transport, fluorocarbon/plasma/TEOS, wet-etch/selective-epitaxy/oxide-regrowth coverage. | Each supported model has a tested support row, conservation/geometry acceptance, and an explicit unsupported/fallback row; unlocks P5 exit. |
 | `P5-DEPLOYMENT-EXIT` | `READY-S` after `PD5-CI-REMOTE`, `P5-MODEL-MATRIX`, and the long top-level `P5-K3E` gate. | Install/export variants, deployment profile, Process preview documentation, and support matrix. | Hosted install/export plus optional VTK-enabled case, deployment-profile persistence, and a release-scoped Vulkan Process preview; unlocks P6/P7 integration. |
 | `P6-LA-BASELINE` | `READY-P` after the existing P2/P3 field contracts; single-agent order places it after the P5 route. | FP64 matrix assembly, SpMV, AXPY/dot/norm, deterministic reduction, BiCGSTAB/Jacobi, OOM admission. | 2D/3D field and matrix CPU/Vulkan differential with convergence/residual history; unlocks oxidation stages. |

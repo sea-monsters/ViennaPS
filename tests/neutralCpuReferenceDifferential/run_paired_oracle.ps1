@@ -1,6 +1,7 @@
 param(
   [ValidateSet('BuildMod', 'BuildReference', 'BuildChecker', 'RunMod',
-               'RunReference', 'Check')]
+               'RunReference', 'Check', 'BuildProbeMod', 'BuildProbeReference',
+               'RunProbeMod', 'RunProbeReference')]
   [string]$Step,
   [string]$OutputDirectory = "$PSScriptRoot\.tmp_paired",
   [string]$ConfiguredBuildDirectory =
@@ -21,6 +22,7 @@ $fixtureProcess = Join-Path $PSScriptRoot 'neutral_cpu_oracle_process.cpp'
 $kdTreeSpecialization =
     Join-Path $PSScriptRoot 'neutral_cpu_oracle_kdtree_specialization.cpp'
 $checkerSource = Join-Path $PSScriptRoot 'neutral_cpu_oracle_checker.cpp'
+$probeSource = Join-Path $PSScriptRoot 'neutral_cpu_oracle_kdtree_probe.cpp'
 $vsDevCmd =
     'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat'
 $ompBin =
@@ -244,6 +246,28 @@ function Build-Checker {
   Invoke-Checked $command 'Checker build'
 }
 
+function Build-Probe([string]$Name, [string]$ViennaPS, [bool]$IsMod) {
+  $definitions = @($commonDefinitions)
+  if ($IsMod) {
+    $definitions += '/DVIENNAPS_NEUTRAL_ORACLE_MOD=1'
+  }
+  $includes = @((Join-Path $ViennaPS 'include\viennaps')) +
+      $dependencyIncludes
+  $includeArgs = ($includes | ForEach-Object { '/I' + (Quote-Arg $_) }) -join ' '
+  $definitionArgs = $definitions -join ' '
+  $probeObject = Join-Path $OutputDirectory "$Name.obj"
+  $pdb = Join-Path $OutputDirectory "$Name.pdb"
+  $executable = Join-Path $OutputDirectory "$Name.exe"
+  $prefix = 'call ' + (Quote-Arg $vsDevCmd) +
+      ' -host_arch=x64 -arch=x64 >nul && cl.exe '
+  Invoke-Checked ($prefix + $compileFlags + ' ' + $definitionArgs + ' ' +
+      $includeArgs + ' /c ' + (Quote-Arg $probeSource) + ' /Fo' +
+      (Quote-Arg $probeObject) + ' /Fd' + (Quote-Arg $pdb)) "$Name build"
+  Invoke-Checked ($prefix + $compileFlags + ' ' + (Quote-Arg $probeObject) +
+      ' /Fe' + (Quote-Arg $executable) + ' /link ' +
+      (Quote-Arg $embreeLibrary)) "$Name link"
+}
+
 function Run-Fixture([string]$Name) {
   if ($Candidate -eq 'ExplicitKDTree') {
     $Name += '-kdtree'
@@ -291,6 +315,17 @@ switch ($Step) {
     Build-Fixture 'neutral_cpu_oracle_reference' $ReferenceViennaPS $false
   }
   'BuildChecker' { Build-Checker }
+  'BuildProbeMod' {
+    Build-Probe 'neutral_cpu_oracle_kdtree_probe_mod' $root $true
+  }
+  'BuildProbeReference' {
+    Build-Probe 'neutral_cpu_oracle_kdtree_probe_reference' `
+        $ReferenceViennaPS $false
+  }
+  'RunProbeMod' { Run-Fixture 'neutral_cpu_oracle_kdtree_probe_mod' }
+  'RunProbeReference' {
+    Run-Fixture 'neutral_cpu_oracle_kdtree_probe_reference'
+  }
   'RunMod' { Run-Fixture 'neutral_cpu_oracle_mod' }
   'RunReference' { Run-Fixture 'neutral_cpu_oracle_reference' }
   'Check' {

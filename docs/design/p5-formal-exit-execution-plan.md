@@ -558,3 +558,25 @@ new focused executable is first produced and one possible network review at
 the final Wave push. The platform may still review either operation; avoiding
 review is never an acceptance criterion and must not motivate weaker tests,
 unsigned-script bypasses, altered credentials, or a relaxed CPU oracle.
+
+## 14. Wave 2 N1E real-tree query probe checkpoint (2026-08-19)
+
+The main line executed the user-approved N1E discrimination boundary after
+`P5-N1` was reclaimed. A caller-owned, test-only probe
+(`tests/neutralCpuReferenceDifferential/neutral_cpu_oracle_kdtree_probe.cpp`,
+built and run through one-action `run_paired_oracle.ps1` probe steps)
+replicates the exact D==2 element-tree construction and the full
+`ElementToPointData::apply()` post-processing frame on the real Neutral
+fixture geometry without executing the ray tracer. Under the serialized
+validation mutex, the Mod build exited 0 at OMP 1/2/4/8 and the reference
+build exited 0 at OMP 1/8 with byte-identical normalized outputs (9 disk
+nodes, 16 elements, 60 contract-checked radius-query results). The historical
+`prepare$omp$1 -> findNearestWithinRadius -> traverseDown` frame is thereby
+exonerated on real data: the composed `0xC0000005` requires the executed
+ray-trace phase or surrounding full-strategy state.
+
+`P5-N1` moves to `RECLAIMED-MAIN / TRACE-PHASE-INDUCED`. This is a boundary
+classification, not a repair: `P5-N2` stays locked, and any ray-trace-phase
+candidate requires separate user approval before dispatch. The probe evidence
+bundle is `.tmp_p5_n1e_probe_20260819/`; process audits after every step found
+no compiler, linker, fixture, or probe descendant.

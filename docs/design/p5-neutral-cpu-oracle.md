@@ -251,3 +251,47 @@ It aligns the current Release failure with the historical
 `ElementToPointData::prepare -> KDTree::findNearestWithinRadius ->
 KDTree::traverseDown` stack. It does not identify or approve a repair. N2,
 Surface RED/GREEN, and support-row expansion remain locked.
+
+## P5-N1E real-tree query probe (2026-08-19)
+
+The user approved a new source-grounded discrimination boundary after the
+main-line source audit: replicate the exact D==2
+`CPUTriangleEngine::updateSurface` element-tree construction and the full
+`ElementToPointData::apply()` post-processing frame on the real fixture
+geometry, without executing the ray tracer. The caller-owned, test-only probe
+`tests/neutralCpuReferenceDifferential/neutral_cpu_oracle_kdtree_probe.cpp`
+builds the same `MakePlane` domain (`gridDelta=0.5`, extents 4/4), generates
+the disk mesh through `viennals::ToDiskMesh` with a translator exactly as
+`FluxProcessStrategy::setupProcess` does, builds the element KDTree through
+`CreateSurfaceMesh` plus `convertLinesToTriangles` exactly as
+`updateSurface` does (`minNodeDistanceFactor=0.05`), validates one
+`findNearestWithinRadius` per disk node (`radius=1.0`, indices and distances
+contract-checked), and then runs `ElementToPointData<float,float,float,1,0>`
+`apply()` — the historical `prepare$omp$1 -> findNearestWithinRadius ->
+traverseDown` frame. The runner gained one-action probe steps
+(`BuildProbeMod`/`BuildProbeReference`/`RunProbeMod`/`RunProbeReference`); the
+probe links the same `embree4.lib` closure but never executes a trace.
+
+Results under the serialized validation mutex, required flags
+`/O2 /Ob2 /DNDEBUG /openmp:llvm /MD /Zi`, Hostx64/x64 MSVC 19.44.35207:
+
+- Mod probe: exit 0 at OMP 1, 2, 4 and 8; 9 disk nodes, 16 elements, 60
+  radius-query results, `PROBE_PASS`.
+- Reference probe: exit 0 at OMP 1 and 8 with the same observables.
+- Normalized outputs are byte-identical across both header roots and all
+  thread counts (raw SHA256: Mod OMP=1
+  `ab20a29a1c62a3e0ef9a86d6fa1f675839927d00bbba14c2a90274c6b31cf052`,
+  reference OMP=1
+  `e189eb6df0b398c60e7c849ec4d1739764b6bc7fcb0eee045eb7b211c649ac4f`; the
+  6-byte raw delta is exactly the `source=mod`/`source=reference` line).
+- Evidence bundle: `.tmp_p5_n1e_probe_20260819/` (probe binaries, outputs and
+  `.phase.log` files); no compiler, linker, fixture, or probe process
+  remained after each step.
+
+Classification: the real-data built tree and the exact post-processing frame
+are exonerated. The composed paired-fixture `0xC0000005` therefore requires
+the executed ray-trace phase (`runRayTracer`/Embree/TBB or the full-strategy
+state around it) to invalidate the tree or query state before
+`postProcessing_.apply()`. This narrows the boundary but is not a repair and
+does not unlock `P5-N2`; a ray-trace-phase repair or corruption-source
+candidate requires a separately approved boundary.

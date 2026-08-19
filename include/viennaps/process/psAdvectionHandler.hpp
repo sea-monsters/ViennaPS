@@ -104,7 +104,17 @@ public:
   }
 
   ProcessResult performAdvection(ProcessContext<NumericType, D> &context) {
-    // Perform the advection step
+    // Perform the advection step.
+    //
+    // CPU-path reuse rule (intent framework §2.2 item 8): when no Level-Set
+    // executor is wired, this function must match the original ViennaPS 4.6.2
+    // behavior in code_reference/ViennaPS. Fail-closed guards are only active
+    // when a Level-Set update or rebuild executor is present.
+    //
+    // Use the kernel's own executor state rather than the mutable ProcessContext
+    // so that re-initialized handlers and context mutations cannot desync the
+    // legacy/fail-closed branch decision.
+    const bool hasExecutor = advectionKernel_.hasLevelSetExecutors();
 
     // Set the maximum advection time.
     if (!context.flags.isALP) {
@@ -116,31 +126,33 @@ public:
     advectionKernel_.apply();
     timer_.finish();
 
-    if (advectionKernel_.hasLevelSetUpdateError()) {
-      viennacore::Logger::getInstance()
-          .addError("Level Set update executor failed: " +
-                        advectionKernel_.getLevelSetUpdateError(),
-                    false)
-          .print();
-      return ProcessResult::FAILURE;
-    }
+    if (hasExecutor) {
+      if (advectionKernel_.hasLevelSetUpdateError()) {
+        viennacore::Logger::getInstance()
+            .addError("Level Set update executor failed: " +
+                          advectionKernel_.getLevelSetUpdateError(),
+                      false)
+            .print();
+        return ProcessResult::FAILURE;
+      }
 
-    if (advectionKernel_.hasLevelSetRebuildError()) {
-      viennacore::Logger::getInstance()
-          .addError("Level Set rebuild executor failed: " +
-                        advectionKernel_.getLevelSetRebuildError(),
-                    false)
-          .print();
-      return ProcessResult::FAILURE;
-    }
+      if (advectionKernel_.hasLevelSetRebuildError()) {
+        viennacore::Logger::getInstance()
+            .addError("Level Set rebuild executor failed: " +
+                          advectionKernel_.getLevelSetRebuildError(),
+                      false)
+            .print();
+        return ProcessResult::FAILURE;
+      }
 
-    if (advectionKernel_.hasAdvectionTimeError()) {
-      viennacore::Logger::getInstance()
-          .addError("Advection time integration failed: " +
-                        advectionKernel_.getAdvectionTimeError(),
-                    false)
-          .print();
-      return ProcessResult::FAILURE;
+      if (advectionKernel_.hasAdvectionTimeError()) {
+        viennacore::Logger::getInstance()
+            .addError("Advection time integration failed: " +
+                          advectionKernel_.getAdvectionTimeError(),
+                      false)
+            .print();
+        return ProcessResult::FAILURE;
+      }
     }
 
     if (context.advectionParams.velocityOutput) {
@@ -154,38 +166,55 @@ public:
     }
 
     context.timeStep = advectionKernel_.getAdvectedTime();
-    if (context.timeStep == std::numeric_limits<double>::max() ||
-        context.timeStep ==
-            static_cast<double>(std::numeric_limits<NumericType>::max())) {
-      VIENNACORE_LOG_WARNING(
-          "Process terminated early: Velocities are zero everywhere.");
-      context.processTime = context.processDuration;
+
+    if (hasExecutor) {
+      // Fail-closed path: executor output must be validated before it can
+      // advance the shared process state.
+      if (context.timeStep == std::numeric_limits<double>::max() ||
+          context.timeStep ==
+              static_cast<double>(std::numeric_limits<NumericType>::max())) {
+        VIENNACORE_LOG_WARNING(
+            "Process terminated early: Velocities are zero everywhere.");
+        context.processTime = context.processDuration;
+        ++totalAdvectionSteps_;
+        return ProcessResult::SUCCESS;
+      }
+
+      if (!std::isfinite(context.timeStep) || context.timeStep < 0.0) {
+        viennacore::Logger::getInstance()
+            .addError("Advection produced an invalid time step.", false)
+            .print();
+        return ProcessResult::FAILURE;
+      }
+
+      const double nextProcessTime = context.processTime + context.timeStep;
+      if (!std::isfinite(nextProcessTime)) {
+        viennacore::Logger::getInstance()
+            .addError("Advection produced a non-finite process time.", false)
+            .print();
+        return ProcessResult::FAILURE;
+      }
+      if (context.timeStep == 0.0 || !(nextProcessTime > context.processTime)) {
+        VIENNACORE_LOG_WARNING(
+            "Process terminated early: Advection made no time progress.");
+        return ProcessResult::EARLY_TERMINATION;
+      }
+
+      context.processTime = nextProcessTime;
       ++totalAdvectionSteps_;
       return ProcessResult::SUCCESS;
     }
 
-    if (!std::isfinite(context.timeStep) || context.timeStep < 0.0) {
-      viennacore::Logger::getInstance()
-          .addError("Advection produced an invalid time step.", false)
-          .print();
-      return ProcessResult::FAILURE;
-    }
-
-    const double nextProcessTime = context.processTime + context.timeStep;
-    if (!std::isfinite(nextProcessTime)) {
-      viennacore::Logger::getInstance()
-          .addError("Advection produced a non-finite process time.", false)
-          .print();
-      return ProcessResult::FAILURE;
-    }
-    if (context.timeStep == 0.0 || !(nextProcessTime > context.processTime)) {
-      VIENNACORE_LOG_WARNING(
-          "Process terminated early: Advection made no time progress.");
-      return ProcessResult::EARLY_TERMINATION;
-    }
-
-    context.processTime = nextProcessTime;
+    // Legacy CPU path: matches code_reference/ViennaPS 4.6.2 exactly.
     ++totalAdvectionSteps_;
+    if (context.timeStep == std::numeric_limits<double>::max()) {
+      VIENNACORE_LOG_WARNING(
+          "Process terminated early: Velocities are zero everywhere.");
+      context.processTime = context.processDuration;
+    } else {
+      context.processTime += context.timeStep;
+    }
+
     return ProcessResult::SUCCESS;
   }
 

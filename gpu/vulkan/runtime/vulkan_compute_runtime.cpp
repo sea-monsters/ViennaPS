@@ -1071,6 +1071,11 @@ void ShaderModule::reset() {
   device_ = VK_NULL_HANDLE;
 }
 
+void ShaderModule::abandon() {
+  module_ = VK_NULL_HANDLE;
+  device_ = VK_NULL_HANDLE;
+}
+
 VkShaderModule ShaderModule::get() const { return module_; }
 
 DescriptorSetLayout::~DescriptorSetLayout() { reset(); }
@@ -1123,6 +1128,11 @@ void DescriptorSetLayout::reset() {
   if (layout_ != VK_NULL_HANDLE && device_ != VK_NULL_HANDLE) {
     vkDestroyDescriptorSetLayout(device_, layout_, nullptr);
   }
+  layout_ = VK_NULL_HANDLE;
+  device_ = VK_NULL_HANDLE;
+}
+
+void DescriptorSetLayout::abandon() {
   layout_ = VK_NULL_HANDLE;
   device_ = VK_NULL_HANDLE;
 }
@@ -1197,6 +1207,11 @@ void PipelineLayout::reset() {
   if (layout_ != VK_NULL_HANDLE && device_ != VK_NULL_HANDLE) {
     vkDestroyPipelineLayout(device_, layout_, nullptr);
   }
+  layout_ = VK_NULL_HANDLE;
+  device_ = VK_NULL_HANDLE;
+}
+
+void PipelineLayout::abandon() {
   layout_ = VK_NULL_HANDLE;
   device_ = VK_NULL_HANDLE;
 }
@@ -1298,6 +1313,11 @@ void ComputePipeline::reset() {
   device_ = VK_NULL_HANDLE;
 }
 
+void ComputePipeline::abandon() {
+  pipeline_ = VK_NULL_HANDLE;
+  device_ = VK_NULL_HANDLE;
+}
+
 VkPipeline ComputePipeline::get() const { return pipeline_; }
 
 DescriptorPool::~DescriptorPool() { reset(); }
@@ -1386,6 +1406,11 @@ void DescriptorPool::reset() {
   if (pool_ != VK_NULL_HANDLE && device_ != VK_NULL_HANDLE) {
     vkDestroyDescriptorPool(device_, pool_, nullptr);
   }
+  pool_ = VK_NULL_HANDLE;
+  device_ = VK_NULL_HANDLE;
+}
+
+void DescriptorPool::abandon() {
   pool_ = VK_NULL_HANDLE;
   device_ = VK_NULL_HANDLE;
 }
@@ -1536,6 +1561,11 @@ void Fence::destroy() {
   if (fence_ != VK_NULL_HANDLE && device_ != VK_NULL_HANDLE) {
     vkDestroyFence(device_, fence_, nullptr);
   }
+  fence_ = VK_NULL_HANDLE;
+  device_ = VK_NULL_HANDLE;
+}
+
+void Fence::abandon() {
   fence_ = VK_NULL_HANDLE;
   device_ = VK_NULL_HANDLE;
 }

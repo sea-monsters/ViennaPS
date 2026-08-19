@@ -67,6 +67,20 @@ public:
                             std::span<const Triangle> triangles,
                             std::span<const float> weights,
                             RayFluxResult &output, std::string &error);
+
+  // Device physics is intentionally fail-closed until event queue, reflection,
+  // roulette, and material state are represented in the device contract. The
+  // rejection path never touches caller output, preserving transaction rules.
+  [[nodiscard]] static constexpr std::string_view devicePhysicsGap() noexcept {
+    return "device ray physics requires an event queue, reflection, roulette, and material state";
+  }
+  [[nodiscard]] bool runGpuPhysics(std::span<const Ray> rays,
+                                   std::span<const Triangle> triangles,
+                                   std::span<const float> weights,
+                                   std::uint32_t maxReflections,
+                                   RayFluxResult &output,
+                                   std::string &error) const;
+
   [[nodiscard]] bool prepareGeometry(std::span<const Triangle> triangles,
                                      std::string &error);
   [[nodiscard]] bool refitPreparedGeometry(

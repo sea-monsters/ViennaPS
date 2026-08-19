@@ -14,6 +14,18 @@ set(VIENNAPS_HRLE_COMPACT_SHADER
     "${CMAKE_CURRENT_SOURCE_DIR}/shaders/hrle_rebuild_compact.comp")
 set(VIENNAPS_HRLE_COMPACT_SPV
     "${CMAKE_CURRENT_BINARY_DIR}/hrle_rebuild_compact.comp.spv")
+set(VIENNAPS_WETETCH_VELOCITY_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/wetetch_velocity.comp")
+set(VIENNAPS_WETETCH_VELOCITY_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/wetetch_velocity.comp.spv")
+set(VIENNAPS_SELECTIVE_EPITAXY_VELOCITY_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/selective_epitaxy_velocity.comp")
+set(VIENNAPS_SELECTIVE_EPITAXY_VELOCITY_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/selective_epitaxy_velocity.comp.spv")
+set(VIENNAPS_TEOS_VELOCITY_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/teos_velocity.comp")
+set(VIENNAPS_TEOS_VELOCITY_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/teos_velocity.comp.spv")
 
 find_program(VIENNAPS_LEVELSET_SHADER_COMPILER
              NAMES glslc glslangValidator
@@ -57,6 +69,69 @@ endif()
 
 add_custom_target(viennaps-vulkan-levelset-update-spv
                   DEPENDS "${VIENNAPS_LEVELSET_UPDATE_SPV}")
+
+if("${VIENNAPS_LEVELSET_SHADER_COMPILER}" MATCHES "glslangValidator")
+  add_custom_command(
+    OUTPUT "${VIENNAPS_WETETCH_VELOCITY_SPV}"
+    COMMAND "${VIENNAPS_LEVELSET_SHADER_COMPILER}" -V
+            "${VIENNAPS_WETETCH_VELOCITY_SHADER}"
+            -o "${VIENNAPS_WETETCH_VELOCITY_SPV}"
+    DEPENDS "${VIENNAPS_WETETCH_VELOCITY_SHADER}"
+    COMMENT "Generating Vulkan WetEtching velocity SPIR-V")
+else()
+  add_custom_command(
+    OUTPUT "${VIENNAPS_WETETCH_VELOCITY_SPV}"
+    COMMAND "${VIENNAPS_LEVELSET_SHADER_COMPILER}"
+            -o "${VIENNAPS_WETETCH_VELOCITY_SPV}"
+            "${VIENNAPS_WETETCH_VELOCITY_SHADER}"
+    DEPENDS "${VIENNAPS_WETETCH_VELOCITY_SHADER}"
+    COMMENT "Generating Vulkan WetEtching velocity SPIR-V")
+endif()
+
+add_custom_target(viennaps-vulkan-wetetch-velocity-spv
+                  DEPENDS "${VIENNAPS_WETETCH_VELOCITY_SPV}")
+
+if("${VIENNAPS_LEVELSET_SHADER_COMPILER}" MATCHES "glslangValidator")
+  add_custom_command(
+    OUTPUT "${VIENNAPS_SELECTIVE_EPITAXY_VELOCITY_SPV}"
+    COMMAND "${VIENNAPS_LEVELSET_SHADER_COMPILER}" -V
+            "${VIENNAPS_SELECTIVE_EPITAXY_VELOCITY_SHADER}"
+            -o "${VIENNAPS_SELECTIVE_EPITAXY_VELOCITY_SPV}"
+    DEPENDS "${VIENNAPS_SELECTIVE_EPITAXY_VELOCITY_SHADER}"
+    COMMENT "Generating Vulkan SelectiveEpitaxy velocity SPIR-V")
+else()
+  add_custom_command(
+    OUTPUT "${VIENNAPS_SELECTIVE_EPITAXY_VELOCITY_SPV}"
+    COMMAND "${VIENNAPS_LEVELSET_SHADER_COMPILER}"
+            -o "${VIENNAPS_SELECTIVE_EPITAXY_VELOCITY_SPV}"
+            "${VIENNAPS_SELECTIVE_EPITAXY_VELOCITY_SHADER}"
+    DEPENDS "${VIENNAPS_SELECTIVE_EPITAXY_VELOCITY_SHADER}"
+    COMMENT "Generating Vulkan SelectiveEpitaxy velocity SPIR-V")
+endif()
+
+add_custom_target(viennaps-vulkan-selective-epitaxy-velocity-spv
+                  DEPENDS "${VIENNAPS_SELECTIVE_EPITAXY_VELOCITY_SPV}")
+
+if("${VIENNAPS_LEVELSET_SHADER_COMPILER}" MATCHES "glslangValidator")
+  add_custom_command(
+    OUTPUT "${VIENNAPS_TEOS_VELOCITY_SPV}"
+    COMMAND "${VIENNAPS_LEVELSET_SHADER_COMPILER}" -V
+            "${VIENNAPS_TEOS_VELOCITY_SHADER}"
+            -o "${VIENNAPS_TEOS_VELOCITY_SPV}"
+    DEPENDS "${VIENNAPS_TEOS_VELOCITY_SHADER}"
+    COMMENT "Generating Vulkan TEOS velocity SPIR-V")
+else()
+  add_custom_command(
+    OUTPUT "${VIENNAPS_TEOS_VELOCITY_SPV}"
+    COMMAND "${VIENNAPS_LEVELSET_SHADER_COMPILER}"
+            -o "${VIENNAPS_TEOS_VELOCITY_SPV}"
+            "${VIENNAPS_TEOS_VELOCITY_SHADER}"
+    DEPENDS "${VIENNAPS_TEOS_VELOCITY_SHADER}"
+    COMMENT "Generating Vulkan TEOS velocity SPIR-V")
+endif()
+
+add_custom_target(viennaps-vulkan-teos-velocity-spv
+                  DEPENDS "${VIENNAPS_TEOS_VELOCITY_SPV}")
 
 if("${VIENNAPS_LEVELSET_SHADER_COMPILER}" MATCHES "glslangValidator")
   add_custom_command(
@@ -135,6 +210,239 @@ if(MSVC)
 else()
   target_compile_options(viennaps_vulkan_levelset_update
                          PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+add_library(viennaps_vulkan_wetetch_velocity
+            wetetch_velocity_executor.cpp)
+set_property(TARGET viennaps_vulkan_wetetch_velocity
+             PROPERTY VIENNAPS_WETETCH_VELOCITY_SPV
+                      "${VIENNAPS_WETETCH_VELOCITY_SPV}")
+add_dependencies(viennaps_vulkan_wetetch_velocity
+                 viennaps-vulkan-wetetch-velocity-spv)
+target_include_directories(viennaps_vulkan_wetetch_velocity
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
+         "${CMAKE_CURRENT_LIST_DIR}/../../../include/viennaps")
+target_link_libraries(viennaps_vulkan_wetetch_velocity
+  PUBLIC viennaps_vulkan_compute_runtime Vulkan::Vulkan)
+target_compile_features(viennaps_vulkan_wetetch_velocity PUBLIC cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps_vulkan_wetetch_velocity PRIVATE /W4 /WX /EHsc)
+else()
+  target_compile_options(viennaps_vulkan_wetetch_velocity
+                         PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+add_library(viennaps_vulkan_selective_epitaxy_velocity
+            selective_epitaxy_velocity_executor.cpp)
+set_property(TARGET viennaps_vulkan_selective_epitaxy_velocity
+             PROPERTY VIENNAPS_SELECTIVE_EPITAXY_VELOCITY_SPV
+                      "${VIENNAPS_SELECTIVE_EPITAXY_VELOCITY_SPV}")
+add_dependencies(viennaps_vulkan_selective_epitaxy_velocity
+                 viennaps-vulkan-selective-epitaxy-velocity-spv)
+target_include_directories(viennaps_vulkan_selective_epitaxy_velocity
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
+         "${CMAKE_CURRENT_LIST_DIR}/../../../include/viennaps")
+target_link_libraries(viennaps_vulkan_selective_epitaxy_velocity
+  PUBLIC viennaps_vulkan_compute_runtime Vulkan::Vulkan)
+target_compile_features(viennaps_vulkan_selective_epitaxy_velocity PUBLIC cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps_vulkan_selective_epitaxy_velocity PRIVATE /W4 /WX /EHsc)
+else()
+  target_compile_options(viennaps_vulkan_selective_epitaxy_velocity
+                         PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+add_library(viennaps_vulkan_teos_velocity teos_velocity_executor.cpp)
+set_property(TARGET viennaps_vulkan_teos_velocity
+             PROPERTY VIENNAPS_TEOS_VELOCITY_SPV
+                      "${VIENNAPS_TEOS_VELOCITY_SPV}")
+add_dependencies(viennaps_vulkan_teos_velocity
+                 viennaps-vulkan-teos-velocity-spv)
+target_include_directories(viennaps_vulkan_teos_velocity
+  PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}"
+         "${CMAKE_CURRENT_LIST_DIR}/../../../include/viennaps")
+target_link_libraries(viennaps_vulkan_teos_velocity
+  PUBLIC viennaps_vulkan_compute_runtime Vulkan::Vulkan)
+target_compile_features(viennaps_vulkan_teos_velocity PUBLIC cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps_vulkan_teos_velocity PRIVATE /W4 /WX /EHsc)
+else()
+  target_compile_options(viennaps_vulkan_teos_velocity
+                         PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+string(REPLACE "\\" "/" _VIENNAPS_SELECTIVE_EPITAXY_VELOCITY_SPV_PATH
+               "${VIENNAPS_SELECTIVE_EPITAXY_VELOCITY_SPV}")
+add_executable(viennaps-vulkan-selective-epitaxy-velocity-executor-smoke
+               selective_epitaxy_velocity_executor_smoke.cpp)
+add_dependencies(viennaps-vulkan-selective-epitaxy-velocity-executor-smoke
+                 viennaps-vulkan-selective-epitaxy-velocity-spv)
+target_compile_definitions(
+  viennaps-vulkan-selective-epitaxy-velocity-executor-smoke PRIVATE
+  "VIENNAPS_VULKAN_SELECTIVE_EPITAXY_VELOCITY_SPV_PATH=\"${_VIENNAPS_SELECTIVE_EPITAXY_VELOCITY_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-selective-epitaxy-velocity-executor-smoke
+                      PRIVATE viennaps_vulkan_selective_epitaxy_velocity ViennaPS)
+target_compile_features(viennaps-vulkan-selective-epitaxy-velocity-executor-smoke
+                         PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps-vulkan-selective-epitaxy-velocity-executor-smoke
+                          PRIVATE /W0 /EHsc)
+else()
+  target_compile_options(viennaps-vulkan-selective-epitaxy-velocity-executor-smoke
+                         PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
+   VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE)
+  add_test(NAME viennaps-vulkan-selective-epitaxy-velocity-executor-smoke
+           COMMAND viennaps-vulkan-selective-epitaxy-velocity-executor-smoke)
+endif()
+
+add_executable(viennaps-vulkan-selective-epitaxy-velocity-process-adapter
+               selective_epitaxy_velocity_process_adapter_smoke.cpp)
+add_dependencies(viennaps-vulkan-selective-epitaxy-velocity-process-adapter
+                 viennaps-vulkan-selective-epitaxy-velocity-spv)
+target_compile_definitions(
+  viennaps-vulkan-selective-epitaxy-velocity-process-adapter PRIVATE
+  "VIENNAPS_VULKAN_SELECTIVE_EPITAXY_VELOCITY_SPV_PATH=\"${_VIENNAPS_SELECTIVE_EPITAXY_VELOCITY_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-selective-epitaxy-velocity-process-adapter
+                      PRIVATE viennaps_vulkan_selective_epitaxy_velocity ViennaPS)
+target_compile_features(viennaps-vulkan-selective-epitaxy-velocity-process-adapter
+                         PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps-vulkan-selective-epitaxy-velocity-process-adapter
+                          PRIVATE /W0 /EHsc)
+else()
+  target_compile_options(viennaps-vulkan-selective-epitaxy-velocity-process-adapter
+                         PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
+   VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE)
+  add_test(NAME viennaps-vulkan-selective-epitaxy-velocity-process-adapter
+           COMMAND viennaps-vulkan-selective-epitaxy-velocity-process-adapter)
+endif()
+
+string(REPLACE "\\" "/" _VIENNAPS_TEOS_VELOCITY_SPV_PATH
+               "${VIENNAPS_TEOS_VELOCITY_SPV}")
+add_executable(viennaps-vulkan-teos-velocity-executor-smoke
+               teos_velocity_executor_smoke.cpp)
+add_dependencies(viennaps-vulkan-teos-velocity-executor-smoke
+                 viennaps-vulkan-teos-velocity-spv)
+target_compile_definitions(
+  viennaps-vulkan-teos-velocity-executor-smoke PRIVATE
+  "VIENNAPS_VULKAN_TEOS_VELOCITY_SPV_PATH=\"${_VIENNAPS_TEOS_VELOCITY_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-teos-velocity-executor-smoke
+                      PRIVATE viennaps_vulkan_teos_velocity ViennaPS)
+target_compile_features(viennaps-vulkan-teos-velocity-executor-smoke
+                         PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps-vulkan-teos-velocity-executor-smoke
+                          PRIVATE /W0 /EHsc)
+else()
+  target_compile_options(viennaps-vulkan-teos-velocity-executor-smoke
+                         PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
+   VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE)
+  add_test(NAME viennaps-vulkan-teos-velocity-executor-smoke
+           COMMAND viennaps-vulkan-teos-velocity-executor-smoke)
+endif()
+
+add_executable(viennaps-vulkan-teos-velocity-process-adapter
+               teos_velocity_process_adapter_smoke.cpp)
+add_dependencies(viennaps-vulkan-teos-velocity-process-adapter
+                 viennaps-vulkan-teos-velocity-spv)
+target_compile_definitions(
+  viennaps-vulkan-teos-velocity-process-adapter PRIVATE
+  "VIENNAPS_VULKAN_TEOS_VELOCITY_SPV_PATH=\"${_VIENNAPS_TEOS_VELOCITY_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-teos-velocity-process-adapter
+                      PRIVATE viennaps_vulkan_teos_velocity ViennaPS)
+target_compile_features(viennaps-vulkan-teos-velocity-process-adapter
+                         PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps-vulkan-teos-velocity-process-adapter
+                          PRIVATE /W0 /EHsc)
+else()
+  target_compile_options(viennaps-vulkan-teos-velocity-process-adapter
+                         PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
+   VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE)
+  add_test(NAME viennaps-vulkan-teos-velocity-process-adapter
+           COMMAND viennaps-vulkan-teos-velocity-process-adapter)
+endif()
+
+string(REPLACE "\\" "/" _VIENNAPS_WETETCH_VELOCITY_SPV_PATH
+               "${VIENNAPS_WETETCH_VELOCITY_SPV}")
+add_executable(viennaps-vulkan-wetetch-velocity-executor-smoke
+               wetetch_velocity_executor_smoke.cpp)
+add_dependencies(viennaps-vulkan-wetetch-velocity-executor-smoke
+                 viennaps-vulkan-wetetch-velocity-spv)
+target_compile_definitions(
+  viennaps-vulkan-wetetch-velocity-executor-smoke PRIVATE
+  "VIENNAPS_VULKAN_WETETCH_VELOCITY_SPV_PATH=\"${_VIENNAPS_WETETCH_VELOCITY_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-wetetch-velocity-executor-smoke
+                      PRIVATE viennaps_vulkan_wetetch_velocity ViennaPS)
+target_compile_features(viennaps-vulkan-wetetch-velocity-executor-smoke
+                         PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps-vulkan-wetetch-velocity-executor-smoke
+                          PRIVATE /W0 /EHsc)
+else()
+  target_compile_options(viennaps-vulkan-wetetch-velocity-executor-smoke
+                         PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
+   VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE)
+  add_test(NAME viennaps-vulkan-wetetch-velocity-executor-smoke
+           COMMAND viennaps-vulkan-wetetch-velocity-executor-smoke)
+endif()
+
+add_executable(viennaps-vulkan-wetetch-velocity-process-adapter-probe
+               wetetch_velocity_process_adapter_smoke.cpp)
+add_dependencies(viennaps-vulkan-wetetch-velocity-process-adapter-probe
+                 viennaps-vulkan-wetetch-velocity-spv)
+target_compile_definitions(
+  viennaps-vulkan-wetetch-velocity-process-adapter-probe PRIVATE
+  "VIENNAPS_VULKAN_WETETCH_VELOCITY_SPV_PATH=\"${_VIENNAPS_WETETCH_VELOCITY_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-wetetch-velocity-process-adapter-probe
+                      PRIVATE viennaps_vulkan_wetetch_velocity ViennaPS)
+target_compile_features(viennaps-vulkan-wetetch-velocity-process-adapter-probe
+                         PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps-vulkan-wetetch-velocity-process-adapter-probe
+                          PRIVATE /W0 /EHsc)
+else()
+  target_compile_options(viennaps-vulkan-wetetch-velocity-process-adapter-probe
+                          PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
+   VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE)
+  add_test(NAME viennaps-vulkan-wetetch-velocity-process-adapter-probe
+           COMMAND viennaps-vulkan-wetetch-velocity-process-adapter-probe)
+endif()
+
+add_executable(viennaps-vulkan-wetetch-velocity-process-adapter
+               wetetch_velocity_process_adapter_smoke.cpp)
+add_dependencies(viennaps-vulkan-wetetch-velocity-process-adapter
+                 viennaps-vulkan-wetetch-velocity-spv)
+target_compile_definitions(
+  viennaps-vulkan-wetetch-velocity-process-adapter PRIVATE
+  "VIENNAPS_VULKAN_WETETCH_VELOCITY_SPV_PATH=\"${_VIENNAPS_WETETCH_VELOCITY_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-wetetch-velocity-process-adapter
+                      PRIVATE viennaps_vulkan_wetetch_velocity ViennaPS)
+target_compile_features(viennaps-vulkan-wetetch-velocity-process-adapter
+                         PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps-vulkan-wetetch-velocity-process-adapter
+                          PRIVATE /W0 /EHsc)
+else()
+  target_compile_options(viennaps-vulkan-wetetch-velocity-process-adapter
+                         PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
+   VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE)
+  add_test(NAME viennaps-vulkan-wetetch-velocity-process-adapter
+           COMMAND viennaps-vulkan-wetetch-velocity-process-adapter)
 endif()
 
 string(REPLACE "\\" "/" _VIENNAPS_LEVELSET_UPDATE_SPV_PATH

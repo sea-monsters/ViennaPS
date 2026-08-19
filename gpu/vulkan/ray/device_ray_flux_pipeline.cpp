@@ -382,6 +382,21 @@ bool DeviceRayFluxPipeline::runGpu(std::span<const Ray> rays,
   return true;
 }
 
+bool DeviceRayFluxPipeline::runGpuPhysics(
+    std::span<const Ray> rays, std::span<const Triangle> triangles,
+    std::span<const float> weights, const std::uint32_t maxReflections,
+    RayFluxResult &output, std::string &error) const {
+  // Keep this boundary before any validation or dispatch so every unsupported
+  // request is transactionally rejected, including malformed input spans.
+  (void)rays;
+  (void)triangles;
+  (void)weights;
+  (void)maxReflections;
+  (void)output;
+  error.assign(devicePhysicsGap());
+  return false;
+}
+
 bool DeviceRayFluxPipeline::prepareGeometry(std::span<const Triangle> triangles,
                                             std::string &error) {
   error.clear();

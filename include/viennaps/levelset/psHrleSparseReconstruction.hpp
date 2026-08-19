@@ -1,6 +1,21 @@
 // Copyright 2026 ViennaPS
 // SPDX-License-Identifier: MIT
 
+//
+// Frozen semantic mirror of viennals::Advect<T,D>::rebuildLS() as implemented
+// in ViennaLS 5.8.5 with the levelset-update-v2 patch.
+//
+// This header materializes the compacted rebuild decisions back into a
+// canonical viennahrle::Domain and records source point IDs for point-data
+// translation. It is part of the rebuildLS mirror, not a direct call into the
+// upstream private rebuild body.
+//
+// Any upstream change to rebuildLS must be reviewed against this mirror and
+// the hrleRebuildCpuFixture differential test must be re-baselined.
+//
+// Card: R1-F1 / P4-HRLE-REBUILD-MIRROR
+//
+
 #pragma once
 
 #include <cmath>

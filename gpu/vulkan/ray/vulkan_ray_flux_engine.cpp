@@ -5,8 +5,12 @@
 
 #include "../runtime/deployment_compute_context.hpp"
 #include "device_ray_flux_pipeline.hpp"
+#include "multibounce_decision_producer.hpp"
+#include "multibounce_frontier_queue.hpp"
+#include "triangle_hit_device.hpp"
 
 #include <process/psCPUTriangleEngine.hpp>
+#include <models/psSingleParticleProcess.hpp>
 
 #include <rayParticle.hpp>
 #include <raySource.hpp>
@@ -15,11 +19,14 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
 #include <limits>
 #include <optional>
 #include <random>
 #include <span>
+#include <sstream>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -90,9 +97,16 @@ template <typename NumericType, int D> struct VulkanRayFluxEngine<NumericType, D
   std::shared_ptr<vulkan::runtime::DeploymentComputeContext> context;
   VulkanRayFluxSpirvPaths paths;
   bool allowCpuFallback = true;
+  bool vulkanEligible = false;
 
   bool useVulkan = false;
+  bool multibounceEligible = false;
+  bool useMultibounce = false;
   vulkan::ray::DeviceRayFluxPipeline pipeline;
+  vulkan::ray::DeviceTriangleHitPrimitive multibounceHit;
+  vulkan::ray::MultibounceFrontierQueue multibounceQueue;
+  std::uint64_t multibounceSessionGeneration = 0U;
+  std::string multibounceLastError;
 
   CPUTriangleEngineType cpuEngine;
 
@@ -109,12 +123,27 @@ template <typename NumericType, int D> struct VulkanRayFluxEngine<NumericType, D
   impl_detail::DefaultSourceSetup<NumericType, D> sourceSetup_;
   viennaray::SmartPointer<viennaray::Source<NumericType>> defaultSource_;
   unsigned int numGeometryPoints_ = 0;
+  // ViennaRay's KernelConfig starts at one and advances after every successful
+  // TraceTriangle::apply().  Maintain that source-generation sequence even
+  // though only the eligible intersection/reduction segment runs on Vulkan.
+  unsigned int cpuRunNumber_ = 1;
   // Domain boundary conditions for the analytic boundary reproduction in
   // generateRays.  The device pipeline has no boundary geometry, so rays that
   // escape the lateral domain edges must be reflected/periodic/ignored on the
   // host to match the CPU_TRIANGLE oracle.
   std::array<viennaray::BoundaryCondition, D> boundaryConds_{};
   unsigned int maxBoundaryHits_ = 1000;
+
+  struct MultibounceRayState {
+    vulkan::ray::Ray ray{};
+    viennacore::RNG rng{0U};
+    float initialWeight{0.0F};
+    float weight{0.0F};
+    std::uint32_t reflectionCount{0U};
+    std::uint32_t bounce{0U};
+    std::uint32_t sequence{0U};
+    bool active{true};
+  };
 
   explicit Impl(std::shared_ptr<vulkan::runtime::DeploymentComputeContext> ctx,
                 VulkanRayFluxSpirvPaths spirv, bool allowFallback)
@@ -136,11 +165,27 @@ template <typename NumericType, int D> struct VulkanRayFluxEngine<NumericType, D
       error = "no Vulkan compute session available";
       return false;
     }
-    vulkan::ray::DeviceRayFluxSpirv spirv{
-        paths.triangleHit,     paths.recordCompaction, paths.reductionScan,
-        paths.radixHistogram,  paths.radixPrefix,      paths.radixScatter,
-        paths.surfaceSegments, paths.surfaceReduce,    paths.triangleBvh};
-    return pipeline.initialize(*session, spirv, error);
+    if (!multibounceEligible) {
+      vulkan::ray::DeviceRayFluxSpirv spirv{
+          paths.triangleHit,     paths.recordCompaction, paths.reductionScan,
+          paths.radixHistogram,  paths.radixPrefix,      paths.radixScatter,
+          paths.surfaceSegments, paths.surfaceReduce,    paths.triangleBvh};
+      if (!pipeline.initialize(*session, spirv, error))
+        return false;
+    }
+
+    if (multibounceEligible) {
+      if (paths.multibounceFrontierQueue.empty()) {
+        error = "bounded multi-bounce frontier SPIR-V path is empty";
+        return false;
+      }
+      if (!multibounceHit.initialize(*session, paths.triangleHit, error) ||
+          !multibounceQueue.initialize(*session,
+                                       paths.multibounceFrontierQueue, error))
+        return false;
+      multibounceSessionGeneration = session->generation();
+    }
+    return true;
   }
 
   ProcessResult updateSurfaceMesh(ProcessContext<NumericType, D> &context) {
@@ -382,14 +427,16 @@ template <typename NumericType, int D> struct VulkanRayFluxEngine<NumericType, D
     // samples the identical ray population as the CPU_TRIANGLE oracle.
     // ViennaRay's TraceKernel seeds each ray independently with
     //   RNG(tea<3>(idx, runNumber + rngSeed))
-    // (rayTraceKernel.hpp:100,120) rather than advancing one shared RNG.  For
-    // the first calculateSourceFluxes call the CPU runNumber is 0, matching
-    // this engine's first dispatch.  Without this the two paths draw different
-    // random rays and the flux comparison is pure sampling noise.
+    // (rayTraceKernel.hpp:100,120) rather than advancing one shared RNG.
+    // KernelConfig starts at runNumber == 1 and TraceTriangle increments it
+    // after each apply(), so retain the matching per-engine dispatch count.
+    // Without this the two paths draw different random rays and the flux
+    // comparison is pure sampling noise.
     const unsigned int seed = static_cast<unsigned int>(
         context.rayTracingParams.useRandomSeeds
             ? std::random_device{}()
-            : context.rayTracingParams.rngSeed);
+            : context.rayTracingParams.rngSeed +
+                  cpuRunNumber_);
 
     const auto &box = sourceSetup_.adjustedBox;
     const int firstDir = sourceSetup_.traceSettings[1];
@@ -434,15 +481,23 @@ template <typename NumericType, int D> struct VulkanRayFluxEngine<NumericType, D
 
       // The device pipeline has no boundary geometry, so reproduce the CPU
       // lateral-boundary reflection on the host before dispatch.
-      applyBoxBoundary(origin, direction, box, firstDir, secondDir, firstCond,
-                       secondCond, maxBoundaryHits_);
+      const auto boundaryResult =
+          applyBoxBoundary(origin, direction, box, firstDir, secondDir,
+                           firstCond, secondCond, maxBoundaryHits_);
+      // IGNORE boundaries and an exhausted boundary budget terminate this ray
+      // in ViennaRay.  Keep it out of the device submission, while preserving
+      // rayCount as the normalization denominator below.
+      if ((boundaryResult & 0x80000000U) != 0U)
+        continue;
 
       vulkan::ray::Ray ray{};
       for (int j = 0; j < 3; ++j) {
         ray.origin[j] = origin[j];
         ray.direction[j] = direction[j];
       }
-      ray.tMin = 0.0F;
+      // ViennaRay's fillRayPosition initializes every trace ray with a
+      // 1e-4 tnear. Keep the device hit and CPU oracle on that same contract.
+      ray.tMin = 1e-4F;
       ray.tMax = std::numeric_limits<float>::max();
       rays.push_back(ray);
       weights.push_back(static_cast<float>(source->getInitialRayWeight(i)));
@@ -450,9 +505,398 @@ template <typename NumericType, int D> struct VulkanRayFluxEngine<NumericType, D
     return {std::move(rays), std::move(weights)};
   }
 
-  // Geometric triangle area, matching ViennaRay's getPrimArea so the host-side
-  // normalization aligns with the CPU oracle.
-  [[nodiscard]] static float triangleArea(const vulkan::ray::Triangle &tri) {
+  [[nodiscard]] bool buildMultibounceStates(
+      const ProcessContext<NumericType, D> &context,
+      const viennaray::Source<NumericType> *source,
+      std::vector<MultibounceRayState> &states, std::string &error) const {
+    if constexpr (!(std::is_same_v<NumericType, float> && D == 2)) {
+      (void)context;
+      (void)source;
+      (void)states;
+      (void)error;
+      return false;
+    } else {
+    error.clear();
+    states.clear();
+    if (source == nullptr || model_ == nullptr ||
+        model_->getParticleTypes().size() != 1U)
+      return false;
+    const auto &particle = model_->getParticleTypes().front();
+    if (!particle)
+      return false;
+    const auto numPoints = source->getNumPoints();
+    const auto rayCount = numPoints * context.rayTracingParams.raysPerPoint;
+    const unsigned int seed = static_cast<unsigned int>(
+        context.rayTracingParams.useRandomSeeds
+            ? std::random_device{}()
+            : context.rayTracingParams.rngSeed + cpuRunNumber_);
+    const auto &box = sourceSetup_.adjustedBox;
+    const int firstDir = sourceSetup_.traceSettings[1];
+    const int secondDir = sourceSetup_.traceSettings[2];
+    const auto firstCond = boundaryConds_[firstDir];
+    const auto secondCond =
+        (D == 3) ? boundaryConds_[secondDir]
+                 : viennaray::BoundaryCondition::IGNORE_BOUNDARY;
+
+    states.reserve(rayCount);
+    for (std::size_t i = 0; i < rayCount; ++i) {
+      const auto particleSeed =
+          viennacore::tea<3>(static_cast<unsigned int>(i), seed);
+      viennacore::RNG rng(particleSeed);
+      particle->initNew(rng);
+      auto particleDirection = particle->initNewWithDirection(rng);
+      const auto originAndDirection = source->getOriginAndDirection(i, rng);
+      Vec3D<float> origin{static_cast<float>(originAndDirection[0][0]),
+                          static_cast<float>(originAndDirection[0][1]),
+                          static_cast<float>(originAndDirection[0][2])};
+      Vec3D<float> direction{static_cast<float>(originAndDirection[1][0]),
+                             static_cast<float>(originAndDirection[1][1]),
+                             static_cast<float>(originAndDirection[1][2])};
+      if (particleDirection[0] != 0.0F || particleDirection[1] != 0.0F ||
+          particleDirection[2] != 0.0F)
+        direction = particleDirection;
+      if (D == 2 && direction[2] != 0.0F) {
+        direction[2] = 0.0F;
+        const float length = std::sqrt(direction[0] * direction[0] +
+                                       direction[1] * direction[1]);
+        if (length > 0.0F) {
+          direction[0] /= length;
+          direction[1] /= length;
+        }
+      }
+      const auto boundaryResult =
+          applyBoxBoundary(origin, direction, box, firstDir, secondDir,
+                           firstCond, secondCond, maxBoundaryHits_);
+      if ((boundaryResult & 0x80000000U) != 0U)
+        continue;
+      MultibounceRayState state;
+      state.ray.origin = {origin[0], origin[1], origin[2]};
+      state.ray.direction = {direction[0], direction[1], direction[2]};
+      // Match rayInternal::fillRayPosition() for initial and successor rays;
+      // this prevents a reflected ray from re-hitting its source triangle.
+      state.ray.tMin = 1e-4F;
+      state.ray.tMax = std::numeric_limits<float>::max();
+      state.rng = std::move(rng);
+      state.initialWeight = static_cast<float>(source->getInitialRayWeight(i));
+      state.weight = state.initialWeight;
+      state.sequence = static_cast<std::uint32_t>(states.size());
+      states.push_back(std::move(state));
+    }
+    return true;
+    }
+  }
+
+  [[nodiscard]] static Vec3D<float>
+  triangleNormal(const vulkan::ray::Triangle &triangle) {
+    const Vec3D<float> edge1{triangle.b[0] - triangle.a[0],
+                             triangle.b[1] - triangle.a[1],
+                             triangle.b[2] - triangle.a[2]};
+    const Vec3D<float> edge2{triangle.c[0] - triangle.a[0],
+                             triangle.c[1] - triangle.a[1],
+                             triangle.c[2] - triangle.a[2]};
+    Vec3D<float> normal{edge1[1] * edge2[2] - edge1[2] * edge2[1],
+                        edge1[2] * edge2[0] - edge1[0] * edge2[2],
+                        edge1[0] * edge2[1] - edge1[1] * edge2[0]};
+    const float length = std::sqrt(normal[0] * normal[0] +
+                                   normal[1] * normal[1] +
+                                   normal[2] * normal[2]);
+    if (length > 0.0F) {
+      normal[0] /= length;
+      normal[1] /= length;
+      normal[2] /= length;
+    }
+    return normal;
+  }
+
+  [[nodiscard]] static std::uint32_t hitUlpDistance(const float left,
+                                                    const float right) {
+    const auto ordered = [](const std::uint32_t bits) {
+      return (bits & 0x80000000U) != 0U ? ~bits : bits ^ 0x80000000U;
+    };
+    const auto lhs = ordered(std::bit_cast<std::uint32_t>(left));
+    const auto rhs = ordered(std::bit_cast<std::uint32_t>(right));
+    return lhs > rhs ? lhs - rhs : rhs - lhs;
+  }
+
+  [[nodiscard]] bool runMultibounceHits(
+      std::span<const MultibounceRayState> states,
+      std::vector<std::size_t> &stateIndices,
+      std::vector<vulkan::ray::TriangleHit> &hits, std::string &error) {
+    error.clear();
+    stateIndices.clear();
+    std::vector<vulkan::ray::Ray> rays;
+    rays.reserve(states.size());
+    for (std::size_t i = 0; i < states.size(); ++i) {
+      if (!states[i].active)
+        continue;
+      stateIndices.push_back(i);
+      rays.push_back(states[i].ray);
+    }
+    hits.assign(rays.size(), vulkan::ray::TriangleHit::miss());
+    if (rays.empty())
+      return true;
+    vulkan::runtime::DeviceBuffer origins, directions, triangles, deviceHits;
+    if (!multibounceHit.createRayBuffers(rays.size(), origins, directions,
+                                         error) ||
+        !multibounceHit.createTriangleBuffer(deviceTriangles_.size(),
+                                             triangles, error) ||
+        !multibounceHit.createHitBuffer(rays.size(), deviceHits, error) ||
+        !multibounceHit.uploadRays(rays, origins, directions, error) ||
+        !multibounceHit.uploadTriangles(deviceTriangles_, triangles, error) ||
+        !multibounceHit.dispatch(origins, directions, triangles, rays.size(),
+                                 deviceTriangles_.size(), deviceHits,
+                                 rays.size(), error) ||
+        !multibounceHit.downloadHits(rays.size(), deviceHits, hits, error))
+      return false;
+    std::vector<vulkan::ray::TriangleHit> cpuHits(hits.size());
+    if (!vulkan::ray::intersectCpu(rays, deviceTriangles_, cpuHits, error))
+      return false;
+    constexpr std::uint32_t kHitUlpTolerance = 4U;
+    for (std::size_t i = 0; i < hits.size(); ++i) {
+      const bool sameHit = hits[i].triangleIndex == cpuHits[i].triangleIndex &&
+                           hitUlpDistance(hits[i].t, cpuHits[i].t) <=
+                               kHitUlpTolerance &&
+                           hitUlpDistance(hits[i].u, cpuHits[i].u) <=
+                               kHitUlpTolerance &&
+                           hitUlpDistance(hits[i].v, cpuHits[i].v) <=
+                               kHitUlpTolerance;
+      if (!sameHit) {
+        std::ostringstream diagnostic;
+        diagnostic << "multi-bounce device hit exceeds CPU FP32 hit oracle"
+                   << " (ULP tolerance=" << kHitUlpTolerance << ")"
+                   << " lane=" << i << " gpu=(" << hits[i].t << ","
+                   << hits[i].triangleIndex << "," << hits[i].u << ","
+                   << hits[i].v << ") cpu=(" << cpuHits[i].t << ","
+                   << cpuHits[i].triangleIndex << "," << cpuHits[i].u << ","
+                   << cpuHits[i].v << ") bits gpu=(0x" << std::hex
+                   << std::bit_cast<std::uint32_t>(hits[i].t) << ",0x"
+                   << std::bit_cast<std::uint32_t>(hits[i].u) << ",0x"
+                   << std::bit_cast<std::uint32_t>(hits[i].v) << ") cpu=(0x"
+                   << std::bit_cast<std::uint32_t>(cpuHits[i].t) << ",0x"
+                   << std::bit_cast<std::uint32_t>(cpuHits[i].u) << ",0x"
+                   << std::bit_cast<std::uint32_t>(cpuHits[i].v) << ")";
+        error = diagnostic.str();
+        return false;
+      }
+    }
+    return true;
+  }
+
+  ProcessResult calculateMultibounceSourceFluxes(
+      ProcessContext<NumericType, D> &context,
+      SmartPointer<PointData<NumericType>> &fluxes,
+      const viennaray::Source<NumericType> *source) {
+    if constexpr (!(std::is_same_v<NumericType, float> && D == 2)) {
+      (void)context;
+      (void)fluxes;
+      (void)source;
+      return ProcessResult::FAILURE;
+    } else {
+    multibounceLastError.clear();
+    auto *session = this->context ? this->context->session() : nullptr;
+    if (session == nullptr || !session->isValid() ||
+        session->generation() != multibounceSessionGeneration) {
+      multibounceLastError = "multi-bounce Vulkan session is stale";
+      return ProcessResult::FAILURE;
+    }
+    std::vector<MultibounceRayState> states;
+    std::string error;
+    if (!buildMultibounceStates(context, source, states, error)) {
+      multibounceLastError = error.empty() ? "failed to build multi-bounce ray states"
+                                           : error;
+      return ProcessResult::FAILURE;
+    }
+    const auto particle = model_->getParticleTypes().front().get();
+    auto localData = PointData<float>::New();
+    for (const auto &label : particle->getLocalDataLabels())
+      localData->insertNextScalarData(deviceTriangles_.size(), 0.0F, label);
+    std::vector<NumericType> elementFlux(deviceTriangles_.size(), NumericType(0));
+    const std::uint32_t maxReflections = context.rayTracingParams.maxReflections;
+    const std::uint32_t maxRounds = maxReflections + 1U;
+    for (std::uint32_t round = 0U; round < maxRounds; ++round) {
+      std::vector<std::size_t> stateIndices;
+      std::vector<vulkan::ray::TriangleHit> hits;
+      if (!runMultibounceHits(states, stateIndices, hits, error)) {
+        multibounceLastError = error.empty() ? "device hit dispatch failed" : error;
+        return ProcessResult::FAILURE;
+      }
+      if (stateIndices.empty())
+        break;
+      std::vector<std::size_t> laneStates;
+      vulkan::ray::MultibounceFrontier frontier;
+      frontier.decisionStride = maxRounds;
+      frontier.events.reserve(stateIndices.size());
+      frontier.decisions.reserve(stateIndices.size() * maxRounds);
+      for (std::size_t lane = 0; lane < stateIndices.size(); ++lane) {
+        auto &state = states[stateIndices[lane]];
+        const auto &hit = hits[lane];
+        if (hit.isMiss() || hit.triangleIndex >= deviceTriangles_.size()) {
+          state.active = false;
+          continue;
+        }
+        const auto &triangle = deviceTriangles_[hit.triangleIndex];
+        const auto normal = triangleNormal(triangle);
+        const float dot = state.ray.direction[0] * normal[0] +
+                          state.ray.direction[1] * normal[1] +
+                          state.ray.direction[2] * normal[2];
+        if (!(dot <= 0.0F)) {
+          state.active = false;
+          continue;
+        }
+        const Vec3D<float> hitPoint{
+            state.ray.origin[0] + state.ray.direction[0] * hit.t,
+            state.ray.origin[1] + state.ray.direction[1] * hit.t,
+            state.ray.origin[2] + state.ray.direction[2] * hit.t};
+        vulkan::ray::MultibounceEvent event{};
+        event.origin[0] = state.ray.origin[0];
+        event.origin[1] = state.ray.origin[1];
+        event.origin[2] = state.ray.origin[2];
+        event.direction[0] = state.ray.direction[0];
+        event.direction[1] = state.ray.direction[1];
+        event.direction[2] = state.ray.direction[2];
+        event.particle = 0U;
+        event.bounce = state.bounce;
+        event.sequence = state.sequence;
+        event.activeFlag = 1U;
+        event.surfaceId = hit.triangleIndex;
+        event.weight = state.weight;
+        event.nextWeight = state.weight;
+        vulkan::ray::MultibounceDecision decision{};
+        vulkan::ray::MultibounceDecisionInput input{};
+        input.particle = particle;
+        input.rng = &state.rng;
+        input.localData = localData.get();
+        input.rayDirection = {state.ray.direction[0], state.ray.direction[1],
+                              state.ray.direction[2]};
+        input.geometricNormal = normal;
+        input.hitPoint = hitPoint;
+        input.particleId = 0U;
+        input.bounce = state.bounce;
+        input.sequence = state.sequence;
+        input.surfaceId = hit.triangleIndex;
+        input.primitiveId = hit.triangleIndex;
+        input.materialId = 0;
+        input.initialWeight = state.initialWeight;
+        input.weight = state.weight;
+        input.contribution = state.weight;
+        input.reflectionCount = state.reflectionCount;
+        input.maxReflections = maxReflections;
+        input.frontFace = true;
+        if (!vulkan::ray::MultibounceDecisionProducer::produce(input, decision,
+                                                               error)) {
+          multibounceLastError = error;
+          return ProcessResult::FAILURE;
+        }
+        frontier.events.push_back(event);
+        laneStates.push_back(stateIndices[lane]);
+        for (std::uint32_t slot = 0U; slot < maxRounds; ++slot)
+          frontier.decisions.push_back(slot == state.bounce
+                                          ? decision
+                                          : vulkan::ray::MultibounceDecision{});
+      }
+      if (frontier.events.empty())
+        continue;
+      vulkan::ray::MultibounceFrontierLimits limits{};
+      limits.maxTotalEvents = static_cast<std::uint32_t>(states.size());
+      limits.maxFrontierEvents = static_cast<std::uint32_t>(states.size());
+      limits.maxRounds = maxRounds;
+      limits.maxReflections = maxReflections;
+      vulkan::ray::MultibounceFrontierResult result;
+      if (!multibounceQueue.run(std::span<const vulkan::ray::MultibounceFrontier>(
+                                    &frontier, 1U),
+                                limits, result, error)) {
+        multibounceLastError = error.empty() ? "frontier queue dispatch failed" : error;
+        return ProcessResult::FAILURE;
+      }
+      for (const auto &acc : result.accumulation) {
+        if (acc.surfaceId >= elementFlux.size()) {
+          multibounceLastError = "frontier accumulation surface id is out of range";
+          return ProcessResult::FAILURE;
+        }
+        elementFlux[acc.surfaceId] +=
+            static_cast<NumericType>(std::bit_cast<float>(acc.weightBits));
+      }
+      for (const auto stateIndex : laneStates) {
+        auto &state = states[stateIndex];
+        const auto it = std::find_if(
+            result.terminalEvents.begin(), result.terminalEvents.end(),
+            [&](const auto &event) { return event.sequence == state.sequence; });
+        if (it == result.terminalEvents.end())
+          return ProcessResult::FAILURE;
+        state.active = it->activeFlag != 0U;
+        if (state.active) {
+          state.ray.origin = {it->origin[0], it->origin[1], it->origin[2]};
+          state.ray.direction = {it->direction[0], it->direction[1],
+                                 it->direction[2]};
+          state.weight = it->weight;
+          state.bounce = it->bounce;
+          ++state.reflectionCount;
+          Vec3D<float> nextOrigin{state.ray.origin[0], state.ray.origin[1],
+                                  state.ray.origin[2]};
+          Vec3D<float> nextDirection{state.ray.direction[0],
+                                     state.ray.direction[1],
+                                     state.ray.direction[2]};
+          const auto boundaryResult = applyBoxBoundary(
+              nextOrigin, nextDirection, sourceSetup_.adjustedBox,
+              sourceSetup_.traceSettings[1], sourceSetup_.traceSettings[2],
+              boundaryConds_[sourceSetup_.traceSettings[1]],
+              (D == 3) ? boundaryConds_[sourceSetup_.traceSettings[2]]
+                       : viennaray::BoundaryCondition::IGNORE_BOUNDARY,
+              maxBoundaryHits_);
+          state.ray.origin = {nextOrigin[0], nextOrigin[1], nextOrigin[2]};
+          state.ray.direction = {nextDirection[0], nextDirection[1],
+                                 nextDirection[2]};
+          if ((boundaryResult & 0x80000000U) != 0U)
+            state.active = false;
+        }
+      }
+    }
+    if (localData->getScalarDataSize() != 1U) {
+      multibounceLastError = "multi-bounce local-data label count is not one";
+      return ProcessResult::FAILURE;
+    }
+    const auto *localFlux = localData->getScalarData(0);
+    if (localFlux == nullptr || localFlux->size() != elementFlux.size()) {
+      multibounceLastError = "multi-bounce local-data shape mismatch";
+      return ProcessResult::FAILURE;
+    }
+    for (std::size_t i = 0; i < elementFlux.size(); ++i) {
+      if (std::bit_cast<std::uint32_t>(static_cast<float>(elementFlux[i])) !=
+          std::bit_cast<std::uint32_t>((*localFlux)[i])) {
+        multibounceLastError = "multi-bounce device accumulation differs from CPU callback data";
+        return ProcessResult::FAILURE;
+      }
+    }
+    normalizeFlux(elementFlux, source, source->getNumPoints() *
+                                      context.rayTracingParams.raysPerPoint,
+                  context.rayTracingParams.normalizationType);
+    std::vector<std::vector<NumericType>> elementFluxes;
+    elementFluxes.push_back(std::move(elementFlux));
+    postProcessing_.setPointData(fluxes);
+    postProcessing_.setElementDataArrays(std::move(elementFluxes));
+    postProcessing_.apply();
+    context.triangleMesh = surfaceMesh_;
+    ++cpuRunNumber_;
+    return ProcessResult::SUCCESS;
+    }
+  }
+
+  // Match ViennaRay's getPrimArea.  Its 2D line-to-triangle ribbon has a
+  // synthetic thickness, but its physical primitive area is half the original
+  // line length, not the 3D ribbon triangle area.
+  [[nodiscard]] static float triangleArea(const vulkan::ray::Triangle &tri,
+                                          const std::size_t triangleIndex) {
+    if constexpr (D == 2) {
+      const float abx = tri.b[0] - tri.a[0];
+      const float aby = tri.b[1] - tri.a[1];
+      const float abz = tri.b[2] - tri.a[2];
+      const float acx = tri.c[0] - tri.a[0];
+      const float acy = tri.c[1] - tri.a[1];
+      const float acz = tri.c[2] - tri.a[2];
+      const float abLength = std::sqrt(abx * abx + aby * aby + abz * abz);
+      const float acLength = std::sqrt(acx * acx + acy * acy + acz * acz);
+      return 0.5F * (triangleIndex % 2U == 0U ? abLength : acLength);
+    }
     const float abx = tri.b[0] - tri.a[0];
     const float aby = tri.b[1] - tri.a[1];
     const float abz = tri.b[2] - tri.a[2];
@@ -475,11 +919,10 @@ template <typename NumericType, int D> struct VulkanRayFluxEngine<NumericType, D
     switch (normType) {
     case viennaray::NormalizationType::MAX: {
       const auto maxv = *std::max_element(flux.begin(), flux.end());
-      if (maxv <= NumericType(0))
-        return;
       for (std::size_t idx = 0; idx < flux.size(); ++idx) {
         flux[idx] /=
-            maxv * static_cast<NumericType>(triangleArea(deviceTriangles_[idx]));
+            maxv * static_cast<NumericType>(
+                       triangleArea(deviceTriangles_[idx], idx));
       }
       return;
     }
@@ -490,7 +933,7 @@ template <typename NumericType, int D> struct VulkanRayFluxEngine<NumericType, D
           sourceArea / static_cast<NumericType>(totalRays);
       for (std::size_t idx = 0; idx < flux.size(); ++idx) {
         flux[idx] *= normFactor / static_cast<NumericType>(
-                                      triangleArea(deviceTriangles_[idx]));
+                                      triangleArea(deviceTriangles_[idx], idx));
       }
       return;
     }
@@ -521,25 +964,58 @@ VulkanRayFluxEngine<NumericType, D>::checkInput(ProcessContext<NumericType, D> &
   }
   impl_->model_ = model;
 
-  // P5-RAY-ROUTE supports single-bounce, no-reflection transport only.
-  if (context.rayTracingParams.maxReflections > 0) {
-    // Use LOG_WARNING, not LOG_ERROR: VIENNACORE_LOG_ERROR throws
-    // std::runtime_error (vcLogger print() with shouldAbort=true), which would
-    // escape Process::calculateFlux and terminate instead of failing closed.
-    // The engine signals failure via the returned ProcessResult; Process
-    // propagates it.  This preserves the fail-closed contract (invariant #4).
-    VIENNACORE_LOG_WARNING(
-        "VulkanRayFluxEngine: maxReflections > 0 is not supported yet.");
-    return ProcessResult::INVALID_INPUT;
+  // P5-RAY-ROUTE has evidence only for the concrete single-particle FP32 2D
+  // model.  Keep the predicate explicit so a ProcessModelCPU with different
+  // particle/source semantics cannot reach device dispatch.  The bounded
+  // frontier extension is a separately admitted one-reflection row; it also
+  // excludes coverage/global-data callbacks until their own oracle exists.
+  bool supported = false;
+  bool boundedMultibounce = false;
+  if constexpr (std::is_same_v<NumericType, float> && D == 2) {
+    auto single = std::dynamic_pointer_cast<SingleParticleProcess<float, 2>>(
+        context.model);
+    const bool baseModel =
+        single != nullptr && single->getParticleTypes().size() == 1U &&
+        single->getParticleDataLabels().size() == 1U &&
+        single->getSource() == nullptr;
+    const bool singleBounce =
+        baseModel && context.rayTracingParams.maxReflections == 0U;
+    boundedMultibounce =
+        baseModel && context.rayTracingParams.maxReflections == 1U &&
+        !context.flags.useCoverages && !context.flags.hasSurfaceDesorption &&
+        !impl_->paths.multibounceFrontierQueue.empty();
+    supported = singleBounce || boundedMultibounce;
   }
 
-  return ProcessResult::SUCCESS;
+  impl_->vulkanEligible = supported;
+  impl_->multibounceEligible = boundedMultibounce;
+  if (supported)
+    return ProcessResult::SUCCESS;
+
+  // Use LOG_WARNING, not LOG_ERROR: LOG_ERROR throws in this build.  Manual
+  // Vulkan must fail closed before publication; AUTO keeps the CPU contract.
+  VIENNACORE_LOG_WARNING(
+      "VulkanRayFluxEngine: process model/parameters are outside the "
+      "evidenced FP32 2D single-particle route.");
+  if (!impl_->allowCpuFallback)
+    return ProcessResult::INVALID_INPUT;
+
+  return impl_->cpuEngine.checkInput(context);
 }
 
 template <typename NumericType, int D>
 ProcessResult
 VulkanRayFluxEngine<NumericType, D>::initialize(ProcessContext<NumericType, D> &context) {
   assert(impl_->model_ != nullptr);
+
+  if (!impl_->vulkanEligible) {
+    impl_->useVulkan = false;
+    impl_->useMultibounce = false;
+    const auto cpuCheck = impl_->cpuEngine.checkInput(context);
+    if (cpuCheck != ProcessResult::SUCCESS)
+      return cpuCheck;
+    return impl_->cpuEngine.initialize(context);
+  }
 
   std::string error;
   if (!impl_->initializePipeline(error)) {
@@ -553,11 +1029,16 @@ VulkanRayFluxEngine<NumericType, D>::initialize(ProcessContext<NumericType, D> &
     VIENNACORE_LOG_INFO("Vulkan ray-flux pipeline unavailable (" + error +
                         "); falling back to CPU triangle engine.");
     impl_->useVulkan = false;
+    impl_->useMultibounce = false;
   } else {
     impl_->useVulkan = true;
+    impl_->useMultibounce = impl_->multibounceEligible;
   }
 
   if (!impl_->useVulkan) {
+    const auto cpuCheck = impl_->cpuEngine.checkInput(context);
+    if (cpuCheck != ProcessResult::SUCCESS)
+      return cpuCheck;
     return impl_->cpuEngine.initialize(context);
   }
 
@@ -611,6 +1092,11 @@ template <typename NumericType, int D>
 ProcessResult
 VulkanRayFluxEngine<NumericType, D>::updateSurface(ProcessContext<NumericType, D> &context) {
   this->timer_.start();
+  if (!impl_->useVulkan) {
+    const auto result = impl_->cpuEngine.updateSurface(context);
+    this->timer_.finish();
+    return result;
+  }
   const auto result = impl_->updateSurfaceMesh(context);
   if (result != ProcessResult::SUCCESS) {
     this->timer_.finish();
@@ -664,6 +1150,30 @@ ProcessResult VulkanRayFluxEngine<NumericType, D>::calculateSourceFluxes(
     return ProcessResult::SUCCESS;
   }
 
+  if (impl_->useMultibounce) {
+    const auto result = impl_->calculateMultibounceSourceFluxes(
+        context, fluxes, source);
+    if (result == ProcessResult::SUCCESS) {
+      ++this->fluxCalculationsCount_;
+      this->timer_.finish();
+      return result;
+    }
+    VIENNACORE_LOG_WARNING(
+        "bounded Vulkan multi-bounce route failed; discarding staged output: " +
+        std::string(VulkanRayFluxEngine<NumericType, D>::devicePhysicsGap()) +
+        " (" + impl_->multibounceLastError + ")");
+    impl_->useMultibounce = false;
+    impl_->useVulkan = false;
+    if (impl_->allowCpuFallback) {
+      const auto cpuResult =
+          impl_->cpuEngine.calculateSourceFluxes(context, fluxes);
+      this->timer_.finish();
+      return cpuResult;
+    }
+    this->timer_.finish();
+    return ProcessResult::FAILURE;
+  }
+
   auto [rays, weights] = impl_->generateRays(context, source, totalRays);
 
   std::vector<std::uint32_t> outSurface(totalRays, 0U);
@@ -674,10 +1184,28 @@ ProcessResult VulkanRayFluxEngine<NumericType, D>::calculateSourceFluxes(
   if (!impl_->pipeline.runGpu(rays, impl_->deviceTriangles_, weights, output,
                               error)) {
     VIENNACORE_LOG_WARNING("Vulkan ray-flux dispatch failed: " + error);
+    if (impl_->allowCpuFallback) {
+      // The CPU triangle engine was initialized alongside the Vulkan route and
+      // owns the same Process/model semantics.  A runtime device failure must
+      // therefore discard the staged device result and retry this exact
+      // request through CPU in AUTO mode; MANUAL remains fail-closed below.
+      impl_->useVulkan = false;
+      impl_->useMultibounce = false;
+      const auto cpuCheck = impl_->cpuEngine.checkInput(context);
+      if (cpuCheck != ProcessResult::SUCCESS) {
+        this->timer_.finish();
+        return cpuCheck;
+      }
+      const auto cpuResult =
+          impl_->cpuEngine.calculateSourceFluxes(context, fluxes);
+      this->timer_.finish();
+      return cpuResult;
+    }
     this->timer_.finish();
     return ProcessResult::FAILURE;
   }
   ++this->fluxCalculationsCount_;
+  ++impl_->cpuRunNumber_;
 
   // Accumulate the device hit weights into a per-triangle flux, one entry per
   // particle data label.  For the single-bounce route each particle type

@@ -1,8 +1,10 @@
 diff --git a/include/viennals/lsAdvect.hpp b/include/viennals/lsAdvect.hpp
-index 0d9ad9b..2512b0b 100644
+index 0d9ad9b..c86f294 100644
 --- a/include/viennals/lsAdvect.hpp
 +++ b/include/viennals/lsAdvect.hpp
-@@ -4,4 +4,8 @@
+@@ -2,8 +2,12 @@
+ 
+ #include <lsPreCompileMacros.hpp>
  
 +#include <cmath>
 +#include <exception>
@@ -11,7 +13,11 @@ index 0d9ad9b..2512b0b 100644
 +#include <string>
 +#include <utility>
  #include <vector>
-@@ -58,2 +62,46 @@ template <class T, int D> class Advect {
+ 
+ #include <hrleSparseIterator.hpp>
+@@ -56,6 +60,50 @@ template <class T, int D> class Advect {
+       viennahrle::ConstSparseIterator<typename Domain<T, D>::DomainType>;
+   using hrleIndexType = viennahrle::IndexType;
  
 +public:
 +  using LevelSetUpdateRate = std::pair<std::pair<T, T>, T>;
@@ -58,7 +64,11 @@ index 0d9ad9b..2512b0b 100644
 +
 +private:
    // Allow the time integration struct to access private members
-@@ -83,2 +131,13 @@ template <class T, int D> class Advect {
+   friend struct lsInternal::AdvectTimeIntegration<T, D>;
+ 
+@@ -81,10 +129,21 @@ template <class T, int D> class Advect {
+   std::vector<SmartPointer<Domain<T, D>>> initialLevelSets;
+   std::function<bool(SmartPointer<Domain<T, D>>)> velocityUpdateCallback =
        nullptr;
 +  LevelSetUpdateExecutor levelSetUpdateExecutor = nullptr;
 +  LevelSetUpdateFailurePolicy levelSetUpdateFailurePolicy =
@@ -72,12 +82,16 @@ index 0d9ad9b..2512b0b 100644
 +  bool advectionTimeError = false;
 +  std::string advectionTimeErrorMessage;
  
-@@ -86,3 +145,3 @@ template <class T, int D> class Advect {
+   // this vector will hold the maximum time step for each point and the
    // corresponding velocity
 -  std::vector<std::vector<std::pair<std::pair<T, T>, T>>> storedRates;
 +  LevelSetUpdateRates storedRates;
    double currentTimeStep = -1.;
-@@ -237,3 +296,129 @@ template <class T, int D> class Advect {
+ 
+   VectorType<T, D> findGlobalAlphas() const {
+@@ -235,7 +294,133 @@ template <class T, int D> class Advect {
+     return movedDown;
+   }
  
 +  bool tryLevelSetRebuildExecutor(const T cutoff, const int finalWidth) {
 +    if (!levelSetRebuildExecutor)
@@ -207,7 +221,11 @@ index 0d9ad9b..2512b0b 100644
 +    }
 +
      // TODO: this function uses Manhattan distances for renormalisation,
-@@ -249,10 +434,2 @@ template <class T, int D> class Advect {
+     // since this is the quickest. For visualisation applications, better
+     // renormalisation is needed, so it might be good to implement
+@@ -247,14 +432,6 @@ template <class T, int D> class Advect {
+ 
+     // Determine cutoff and width based on discretization scheme to avoid
      // immediate re-expansion
 -    T cutoff = 1.0;
 -    int finalWidth = 2;
@@ -218,7 +236,11 @@ index 0d9ad9b..2512b0b 100644
 -    }
 -
      newDomain.initialize(domain.getNewSegmentation(),
-@@ -683,2 +860,115 @@ template <class T, int D> class Advect {
+                          domain.getAllocation() *
+                              (2.0 / levelSets.back()->getLevelSetWidth()));
+@@ -681,6 +858,119 @@ template <class T, int D> class Advect {
+     }
+   }
  
 +  void captureLevelSetUpdateSnapshot() {
 +    if ((!levelSetUpdateExecutor && !levelSetRebuildExecutor) ||
@@ -334,7 +356,11 @@ index 0d9ad9b..2512b0b 100644
 +  }
 +
    // Level Sets below are also considered in order to adjust the advection
-@@ -701,2 +991,7 @@ template <class T, int D> class Advect {
+   // depth accordingly if there would be a material change.
+   void updateLevelSet(double dt) {
+@@ -699,6 +989,11 @@ template <class T, int D> class Advect {
+     // domain segments --> DO NOT CHANGE SEGMENTATION HERE (true parameter)
+     Reduce<T, D>(levelSets.back(), 1, true).apply();
  
 +    if (tryLevelSetUpdateExecutor(dt)) {
 +      storedRates.clear();
@@ -342,13 +368,21 @@ index 0d9ad9b..2512b0b 100644
 +    }
 +
      const bool saveVelocities = saveAdvectionVelocities;
-@@ -802,2 +1097,5 @@ template <class T, int D> class Advect {
+     std::vector<std::vector<double>> dissipationVectors(
+         levelSets.back()->getNumberOfSegments());
+@@ -800,6 +1095,9 @@ template <class T, int D> class Advect {
+   }
+ 
    void adjustLowerLayers() {
 +    if (levelSetUpdateExecutorFailed || levelSetRebuildExecutorFailed)
 +      return;
 +
      // Adjust all level sets below the advected one
-@@ -831,2 +1129,28 @@ template <class T, int D> class Advect {
+     if (spatialScheme !=
+         viennals::SpatialSchemeEnum::STENCIL_LOCAL_LAX_FRIEDRICHS_1ST_ORDER) {
+@@ -829,6 +1127,35 @@ template <class T, int D> class Advect {
+     }
+   }
  
 +  void setAdvectionTimeError(std::string message) {
 +    advectionTimeError = true;
@@ -361,6 +395,9 @@ index 0d9ad9b..2512b0b 100644
 +  }
 +
 +  bool validateAdvectionTimeBeforeUpdate() {
++    if (!hasLevelSetExecutors())
++      return true;
++
 +    if (isZeroVelocityTimeStep(currentTimeStep))
 +      return false;
 +
@@ -377,7 +414,11 @@ index 0d9ad9b..2512b0b 100644
 +  }
 +
  public:
-@@ -970,2 +1294,43 @@ public:
+   static constexpr char velocityLabel[] = "AdvectionVelocities";
+   static constexpr char dissipationLabel[] = "Dissipation";
+@@ -968,6 +1295,51 @@ public:
+     velocityUpdateCallback = callback;
+   }
  
 +  /// Set an optional executor for the value-update phase between rate
 +  /// calculation and sparse-domain rebuild. Returning FALLBACK uses the
@@ -396,6 +437,10 @@ index 0d9ad9b..2512b0b 100644
 +  void setLevelSetUpdateFailurePolicy(
 +      LevelSetUpdateFailurePolicy policy) {
 +    levelSetUpdateFailurePolicy = policy;
++  }
++
++  bool hasLevelSetExecutors() const {
++    return levelSetUpdateExecutor || levelSetRebuildExecutor;
 +  }
 +
 +  bool hasLevelSetUpdateError() const {
@@ -421,12 +466,20 @@ index 0d9ad9b..2512b0b 100644
 +  }
 +
    // Prepare the levelset for advection, based on the provided spatial
-@@ -979,2 +1344,4 @@ public:
+   // discretization scheme.
+   void prepareLS() {
+@@ -977,6 +1349,8 @@ public:
+       return;
+     }
  
 +    captureLevelSetUpdateSnapshot();
 +
      if (spatialScheme == SpatialSchemeEnum::ENGQUIST_OSHER_1ST_ORDER) {
-@@ -1017,4 +1384,12 @@ public:
+       lsInternal::EngquistOsher<T, D, 1>::prepareLS(levelSets.back());
+     } else if (spatialScheme == SpatialSchemeEnum::ENGQUIST_OSHER_2ND_ORDER) {
+@@ -1015,29 +1389,126 @@ public:
+   }
+ 
    void apply() {
 +    levelSetUpdateExecutorFailed = false;
 +    levelSetUpdateExecutorError.clear();
@@ -439,107 +492,122 @@ index 0d9ad9b..2512b0b 100644
      if (levelSets.empty()) {
 +      discardLevelSetUpdateSnapshot();
        VIENNACORE_LOG_ERROR("No level sets passed to Advect. Not advecting.");
-@@ -1023,2 +1398,3 @@ public:
+       return;
+     }
      if (velocities == nullptr) {
 +      discardLevelSetUpdateSnapshot();
        VIENNACORE_LOG_ERROR(
-@@ -1028,5 +1404,40 @@ public:
- 
+           "No velocity field passed to Advect. Not advecting.");
+       return;
+     }
 +    captureLevelSetUpdateSnapshot();
-+
+ 
      if (advectionTime == 0.) {
 -      advectedTime = advect(std::numeric_limits<double>::max());
 +      const double timeStep = advect(std::numeric_limits<double>::max());
 +      numberOfTimeSteps = 0;
-+      if (levelSetUpdateExecutorFailed || levelSetRebuildExecutorFailed) {
-+        restoreLevelSetUpdateSnapshot();
-+        advectedTime = 0.0;
-+        return;
-+      }
-+      if (advectionTimeError) {
-+        discardLevelSetUpdateSnapshot();
-+        advectedTime = 0.0;
-+        return;
-+      }
-+      if (isZeroVelocityTimeStep(timeStep)) {
-+        discardLevelSetUpdateSnapshot();
-+        advectedTime = timeStep;
-+        numberOfTimeSteps = 1;
-+        return;
-+      }
-+      const double nextTime = timeStep;
-+      const bool validTime = std::isfinite(timeStep) && timeStep >= 0.0 &&
-+                             std::isfinite(nextTime);
-+      const bool madeProgress = nextTime > 0.0;
-+      if (!validTime || (!performOnlySingleStep && !madeProgress)) {
-+        if (!performOnlySingleStep) {
-+          setAdvectionTimeError(
-+              validTime ? "Advection made no time progress."
-+                        : "Advection produced an invalid time step.");
++      if (hasLevelSetExecutors()) {
++        if (levelSetUpdateExecutorFailed || levelSetRebuildExecutorFailed) {
++          restoreLevelSetUpdateSnapshot();
++          advectedTime = 0.0;
++          return;
++        }
++        if (advectionTimeError) {
 +          discardLevelSetUpdateSnapshot();
 +          advectedTime = 0.0;
 +          return;
++        }
++        if (isZeroVelocityTimeStep(timeStep)) {
++          discardLevelSetUpdateSnapshot();
++          advectedTime = timeStep;
++          numberOfTimeSteps = 1;
++          return;
++        }
++        const double nextTime = timeStep;
++        const bool validTime = std::isfinite(timeStep) && timeStep >= 0.0 &&
++                               std::isfinite(nextTime);
++        const bool madeProgress = nextTime > 0.0;
++        if (!validTime || (!performOnlySingleStep && !madeProgress)) {
++          if (!performOnlySingleStep) {
++            setAdvectionTimeError(
++                validTime ? "Advection made no time progress."
++                          : "Advection produced an invalid time step.");
++            discardLevelSetUpdateSnapshot();
++            advectedTime = 0.0;
++            return;
++          }
 +        }
 +      }
 +      advectedTime = timeStep;
        numberOfTimeSteps = 1;
 +      discardLevelSetUpdateSnapshot();
      } else {
-@@ -1035,3 +1446,42 @@ public:
+       double currentTime = 0.0;
+       numberOfTimeSteps = 0;
        while (currentTime < advectionTime) {
 -        currentTime += advect(advectionTime - currentTime);
 +        const double timeStep = advect(advectionTime - currentTime);
-+        if (levelSetUpdateExecutorFailed || levelSetRebuildExecutorFailed)
-+          break;
-+        if (advectionTimeError)
-+          break;
-+        if (isZeroVelocityTimeStep(timeStep)) {
-+          currentTime = timeStep;
-+          ++numberOfTimeSteps;
-+          break;
-+        }
-+        if (!std::isfinite(timeStep) || timeStep < 0.0) {
-+          if (performOnlySingleStep) {
++        if (hasLevelSetExecutors()) {
++          if (levelSetUpdateExecutorFailed || levelSetRebuildExecutorFailed)
++            break;
++          if (advectionTimeError)
++            break;
++          if (isZeroVelocityTimeStep(timeStep)) {
 +            currentTime = timeStep;
 +            ++numberOfTimeSteps;
 +            break;
 +          }
-+          setAdvectionTimeError("Advection produced an invalid time step.");
-+          break;
-+        }
-+        const double nextTime = currentTime + timeStep;
-+        if (!std::isfinite(nextTime)) {
-+          if (performOnlySingleStep) {
-+            currentTime = nextTime;
-+            ++numberOfTimeSteps;
++          if (!std::isfinite(timeStep) || timeStep < 0.0) {
++            if (performOnlySingleStep) {
++              currentTime = timeStep;
++              ++numberOfTimeSteps;
++              break;
++            }
++            setAdvectionTimeError("Advection produced an invalid time step.");
 +            break;
 +          }
-+          setAdvectionTimeError(
-+              "Advection produced a non-finite accumulated time.");
-+          break;
-+        }
-+        if (!(nextTime > currentTime)) {
-+          if (performOnlySingleStep) {
-+            currentTime = nextTime;
-+            ++numberOfTimeSteps;
++          const double nextTime = currentTime + timeStep;
++          if (!std::isfinite(nextTime)) {
++            if (performOnlySingleStep) {
++              currentTime = nextTime;
++              ++numberOfTimeSteps;
++              break;
++            }
++            setAdvectionTimeError(
++                "Advection produced a non-finite accumulated time.");
 +            break;
 +          }
-+          setAdvectionTimeError("Advection made no time progress.");
-+          break;
++          if (!(nextTime > currentTime)) {
++            if (performOnlySingleStep) {
++              currentTime = nextTime;
++              ++numberOfTimeSteps;
++              break;
++            }
++            setAdvectionTimeError("Advection made no time progress.");
++            break;
++          }
 +        }
-+        currentTime = nextTime;
++        currentTime = currentTime + timeStep;
          ++numberOfTimeSteps;
-@@ -1040,2 +1490,8 @@ public:
+         if (performOnlySingleStep)
+           break;
        }
-+      if (levelSetUpdateExecutorFailed || levelSetRebuildExecutorFailed) {
-+        restoreLevelSetUpdateSnapshot();
-+        currentTime = 0.0;
++      if (hasLevelSetExecutors()) {
++        if (levelSetUpdateExecutorFailed || levelSetRebuildExecutorFailed ||
++            advectionTimeError) {
++          restoreLevelSetUpdateSnapshot();
++          currentTime = 0.0;
++        } else {
++          discardLevelSetUpdateSnapshot();
++        }
 +      } else {
 +        discardLevelSetUpdateSnapshot();
 +      }
        advectedTime = currentTime;
+     }
+   }
 diff --git a/include/viennals/lsAdvectIntegrationSchemes.hpp b/include/viennals/lsAdvectIntegrationSchemes.hpp
-index dc28b3e..123beb2 100644
+index dc28b3e..540fe84 100644
 --- a/include/viennals/lsAdvectIntegrationSchemes.hpp
 +++ b/include/viennals/lsAdvectIntegrationSchemes.hpp
 @@ -1,5 +1,8 @@
@@ -551,11 +619,12 @@ index dc28b3e..123beb2 100644
  #include <lsBooleanOperation.hpp>
  #include <lsDomain.hpp>
  
-@@ -48,10 +51,22 @@ template <class T, int D> struct AdvectTimeIntegration {
+@@ -48,10 +51,23 @@ template <class T, int D> struct AdvectTimeIntegration {
      if (kernel.currentTimeStep < 0. || kernel.storedRates.empty())
        kernel.computeRates(maxTimeStep);
  
-+    if (!kernel.validateAdvectionTimeBeforeUpdate()) {
++    if (kernel.hasLevelSetExecutors() &&
++        !kernel.validateAdvectionTimeBeforeUpdate()) {
 +      const double rejectedTimeStep = kernel.currentTimeStep;
 +      kernel.storedRates.clear();
 +      return rejectedTimeStep;
@@ -563,106 +632,134 @@ index dc28b3e..123beb2 100644
 +
      kernel.updateLevelSet(kernel.currentTimeStep);
  
-+    if (kernel.hasLevelSetUpdateError())
++    if (kernel.hasLevelSetExecutors() && kernel.hasLevelSetUpdateError())
 +      return 0.;
 +
      kernel.rebuildLS();
  
-+    if (kernel.hasLevelSetRebuildError())
++    if (kernel.hasLevelSetExecutors() && kernel.hasLevelSetRebuildError())
 +      return 0.;
 +
      if (updateLowerLayers)
        kernel.adjustLowerLayers();
  
-@@ -82,9 +97,19 @@ template <class T, int D> struct AdvectTimeIntegration {
+@@ -82,8 +98,23 @@ template <class T, int D> struct AdvectTimeIntegration {
      double dt1 = evolveForwardEuler(kernel, maxTimeStep,
                                      kernel.velocityUpdateCallback != nullptr);
  
 -    if (dt1 <= 0.)
-+    if (kernel.hasLevelSetUpdateError() || kernel.hasLevelSetRebuildError() ||
-+        kernel.hasAdvectionTimeError())
-+      return dt1;
+-      return 0.;
++    if (kernel.hasLevelSetExecutors()) {
++      if (kernel.hasLevelSetUpdateError() || kernel.hasLevelSetRebuildError() ||
++          kernel.hasAdvectionTimeError())
++        return dt1;
 +
-+    if (!std::isfinite(dt1) || dt1 < 0.)
-+      return dt1;
++      if (!std::isfinite(dt1) || dt1 < 0.)
++        return dt1;
 +
-+    if (dt1 == 0.)
-       return 0.;
++      if (dt1 == 0.)
++        return 0.;
++
++      if (kernel.isZeroVelocityTimeStep(dt1))
++        return dt1;
++    } else {
++      if (dt1 <= 0.)
++        return 0.;
++    }
  
-+    if (kernel.isZeroVelocityTimeStep(dt1))
-+      return dt1;
-+
      if (kernel.velocityUpdateCallback)
        kernel.velocityUpdateCallback(kernel.levelSets.back());
- 
-@@ -93,6 +118,16 @@ template <class T, int D> struct AdvectTimeIntegration {
+@@ -93,6 +124,23 @@ template <class T, int D> struct AdvectTimeIntegration {
      // Update to u* = u^(1) + dt * L(u^(1))
      double dt2 = evolveForwardEuler(kernel, dt1, false);
  
-+    if (kernel.hasLevelSetUpdateError() || kernel.hasLevelSetRebuildError() ||
-+        kernel.hasAdvectionTimeError())
-+      return 0.;
++    if (kernel.hasLevelSetExecutors()) {
++      if (kernel.hasLevelSetUpdateError() || kernel.hasLevelSetRebuildError() ||
++          kernel.hasAdvectionTimeError())
++        return 0.;
 +
-+    if (!std::isfinite(dt2) || dt2 <= 0.)
-+      return dt2;
++      if (!std::isfinite(dt2) || dt2 <= 0.)
++        return dt2;
 +
-+    if (kernel.isZeroVelocityTimeStep(dt2))
-+      return dt2;
++      if (kernel.isZeroVelocityTimeStep(dt2))
++        return dt2;
++    } else {
++      // Legacy CPU path: a non-positive intermediate step aborts the RK stage
++      // exactly as the original ViennaLS code did.
++      if (dt2 <= 0.)
++        return 0.;
++    }
 +
      // Combine: u^(n+1) = 0.5 * u^n + 0.5 * u*
      bool etched = kernel.combineLevelSets(0.5, 0.5);
  
-@@ -123,9 +158,19 @@ template <class T, int D> struct AdvectTimeIntegration {
+@@ -123,8 +171,23 @@ template <class T, int D> struct AdvectTimeIntegration {
      double dt1 = evolveForwardEuler(kernel, maxTimeStep,
                                      kernel.velocityUpdateCallback != nullptr);
  
 -    if (dt1 <= 0.)
-+    if (kernel.hasLevelSetUpdateError() || kernel.hasLevelSetRebuildError() ||
-+        kernel.hasAdvectionTimeError())
-+      return dt1;
+-      return 0.;
++    if (kernel.hasLevelSetExecutors()) {
++      if (kernel.hasLevelSetUpdateError() || kernel.hasLevelSetRebuildError() ||
++          kernel.hasAdvectionTimeError())
++        return dt1;
 +
-+    if (!std::isfinite(dt1) || dt1 < 0.)
-+      return dt1;
++      if (!std::isfinite(dt1) || dt1 < 0.)
++        return dt1;
 +
-+    if (dt1 == 0.)
-       return 0.;
++      if (dt1 == 0.)
++        return 0.;
++
++      if (kernel.isZeroVelocityTimeStep(dt1))
++        return dt1;
++    } else {
++      if (dt1 <= 0.)
++        return 0.;
++    }
  
-+    if (kernel.isZeroVelocityTimeStep(dt1))
-+      return dt1;
-+
      if (kernel.velocityUpdateCallback)
        kernel.velocityUpdateCallback(kernel.levelSets.back());
- 
-@@ -133,6 +178,16 @@ template <class T, int D> struct AdvectTimeIntegration {
+@@ -133,6 +196,21 @@ template <class T, int D> struct AdvectTimeIntegration {
      // u* = u^(1) + dt * L(u^(1))
      double dt2 = evolveForwardEuler(kernel, dt1, false);
  
-+    if (kernel.hasLevelSetUpdateError() || kernel.hasLevelSetRebuildError() ||
-+        kernel.hasAdvectionTimeError())
-+      return 0.;
++    if (kernel.hasLevelSetExecutors()) {
++      if (kernel.hasLevelSetUpdateError() || kernel.hasLevelSetRebuildError() ||
++          kernel.hasAdvectionTimeError())
++        return 0.;
 +
-+    if (!std::isfinite(dt2) || dt2 <= 0.)
-+      return dt2;
++      if (!std::isfinite(dt2) || dt2 <= 0.)
++        return dt2;
 +
-+    if (kernel.isZeroVelocityTimeStep(dt2))
-+      return dt2;
++      if (kernel.isZeroVelocityTimeStep(dt2))
++        return dt2;
++    } else {
++      if (dt2 <= 0.)
++        return 0.;
++    }
 +
      // Combine to get u^(2) = 0.75 * u^n + 0.25 * u*.
      bool etched1 = kernel.combineLevelSets(0.75, 0.25);
  
-@@ -153,6 +208,16 @@ template <class T, int D> struct AdvectTimeIntegration {
+@@ -153,6 +231,21 @@ template <class T, int D> struct AdvectTimeIntegration {
      // u** = u^(2) + dt * L(u^(2))
      double dt3 = evolveForwardEuler(kernel, dt1, false);
  
-+    if (kernel.hasLevelSetUpdateError() ||
-+        kernel.hasAdvectionTimeError())
-+      return 0.;
++    if (kernel.hasLevelSetExecutors()) {
++      if (kernel.hasLevelSetUpdateError() ||
++          kernel.hasAdvectionTimeError())
++        return 0.;
 +
-+    if (!std::isfinite(dt3) || dt3 <= 0.)
-+      return dt3;
++      if (!std::isfinite(dt3) || dt3 <= 0.)
++        return dt3;
 +
-+    if (kernel.isZeroVelocityTimeStep(dt3))
-+      return dt3;
++      if (kernel.isZeroVelocityTimeStep(dt3))
++        return dt3;
++    } else {
++      if (dt3 <= 0.)
++        return 0.;
++    }
 +
      // Combine to get u^(n+1) = 1/3 * u^n + 2/3 * u**.
      bool etched2 = kernel.combineLevelSets(1.0 / 3.0, 2.0 / 3.0);
+ 

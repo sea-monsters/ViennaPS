@@ -2,8 +2,16 @@
 
 #include "../materials/psMaterialMap.hpp"
 #include "../process/psProcessModel.hpp"
+#include "psWetEtchingVelocityExecutor.hpp"
 
 #include <vcVectorType.hpp>
+
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace viennaps {
 
@@ -24,6 +32,9 @@ class WetEtchingVelocityField : public VelocityField<NumericType, D> {
   const NumericType r111;
   const NumericType r311;
   const std::vector<std::pair<Material, NumericType>> &materials;
+  std::array<NumericType, 3> direction100Input{};
+  std::array<NumericType, 3> direction010Input{};
+  WetEtchVelocityExecutor<NumericType> executor_{};
 
 public:
   WetEtchingVelocityField(
@@ -33,7 +44,10 @@ public:
       const NumericType passedR311,
       const std::vector<std::pair<Material, NumericType>> &passedmaterials)
       : r100(passedR100), r110(passedR110), r111(passedR111), r311(passedR311),
-        materials(passedmaterials) {
+        materials(passedmaterials), direction100Input{direction100[0],
+                                                       direction100[1],
+                                                       direction100[2]},
+        direction010Input{direction010[0], direction010[1], direction010[2]} {
 
     directions[0] = Normalize(direction100);
     directions[1] = Normalize(direction010);
@@ -42,6 +56,10 @@ public:
         directions[1] -
         ScaleImpl(DotProduct(directions[0], directions[1]), directions[0]);
     directions[2] = CrossProduct(directions[0], directions[1]);
+  }
+
+  void setExecutor(WetEtchVelocityExecutor<NumericType> executor) {
+    executor_ = std::move(executor);
   }
 
   NumericType getScalarVelocity(const Vec3D<NumericType> &coordinate,
@@ -79,7 +97,48 @@ public:
                      N[0];
         }
 
-        return velocity * etchingMaterial.second;
+        const NumericType cpuVelocity = velocity * etchingMaterial.second;
+        if (!executor_ || !std::isfinite(static_cast<double>(cpuVelocity)))
+          return cpuVelocity;
+
+        // The CPU formula above is authoritative.  The optional executor is
+        // only a numeric candidate for this already selected point; a failed
+        // or incomplete transaction falls back to the exact CPU value.
+        const std::array<NumericType, 3> coordinateValue{
+            coordinate[0], coordinate[1], coordinate[2]};
+        const std::array<NumericType, 3> normalValue{nv[0], nv[1], nv[2]};
+        const std::int32_t materialId = static_cast<std::int32_t>(
+            etchingMaterial.first.legacyId());
+        std::vector<WetEtchMaterialRate<NumericType>> rateTable;
+        rateTable.reserve(materials.size());
+        for (const auto &entry : materials) {
+          rateTable.push_back({static_cast<std::int32_t>(entry.first.legacyId()),
+                               entry.second});
+        }
+        const std::array<NumericType, 1> cpuOracle{cpuVelocity};
+        std::array<NumericType, 1> output{cpuVelocity};
+        WetEtchVelocityParameters<NumericType> parameters;
+        parameters.direction100 = direction100Input;
+        parameters.direction010 = direction010Input;
+        parameters.r100 = r100;
+        parameters.r110 = r110;
+        parameters.r111 = r111;
+        parameters.r311 = r311;
+        parameters.materialRates = rateTable;
+        WetEtchVelocityWork<NumericType> work;
+        work.coordinates = std::span<const std::array<NumericType, 3>>(
+            &coordinateValue, 1U);
+        work.normals =
+            std::span<const std::array<NumericType, 3>>(&normalValue, 1U);
+        work.materialIds = std::span<const std::int32_t>(&materialId, 1U);
+        work.cpuOracle = std::span<const NumericType>(cpuOracle.data(), 1U);
+        work.output = std::span<NumericType>(output.data(), 1U);
+        work.parameters = parameters;
+        std::string error;
+        if (executor_(work, error) && work.complete && work.writtenCount == 1U &&
+            std::isfinite(static_cast<double>(output[0])))
+          return output[0];
+        return cpuVelocity;
       }
     }
 
@@ -93,6 +152,8 @@ public:
 template <typename NumericType, int D>
 class WetEtching : public ProcessModelCPU<NumericType, D> {
 public:
+  using VelocityExecutor = WetEtchVelocityExecutor<NumericType>;
+
   // The constructor expects the materials where etching is allowed including
   // the corresponding rates.
   WetEtching(const std::vector<std::pair<Material, NumericType>> materialRates)
@@ -116,6 +177,23 @@ public:
     initialize();
   }
 
+  /// Installs an optional numeric executor for the crystal velocity operation.
+  /// CPU formula evaluation and Process/LevelSet ordering remain authoritative;
+  /// an executor failure is intentionally handled as CPU fallback.
+  void setVelocityExecutor(VelocityExecutor executor) {
+    velocityExecutor_ = std::move(executor);
+    auto field = std::dynamic_pointer_cast<
+        impl::WetEtchingVelocityField<NumericType, D>>(this->getVelocityField());
+    if (field)
+      field->setExecutor(velocityExecutor_);
+  }
+
+  void clearVelocityExecutor() { setVelocityExecutor({}); }
+
+  [[nodiscard]] bool hasVelocityExecutor() const {
+    return static_cast<bool>(velocityExecutor_);
+  }
+
 private:
   void initialize() {
     // default surface model
@@ -125,6 +203,7 @@ private:
     auto velField =
         SmartPointer<impl::WetEtchingVelocityField<NumericType, D>>::New(
             direction100, direction010, r100, r110, r111, r311, materials);
+    velField->setExecutor(velocityExecutor_);
 
     this->setSurfaceModel(surfModel);
     this->setVelocityField(velField);
@@ -156,6 +235,7 @@ private:
   NumericType r311 = 0.0300166666667;
 
   std::vector<std::pair<Material, NumericType>> materials;
+  VelocityExecutor velocityExecutor_{};
   using ProcessModelCPU<NumericType, D>::processMetaData;
 };
 

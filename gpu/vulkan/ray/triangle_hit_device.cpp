@@ -43,6 +43,7 @@ bool DeviceTriangleHitPrimitive::setup(const std::string_view path,
       return false;
     session_ = &ownedSession_;
   }
+  sessionGeneration_ = session_->generation();
   runtime::SpirvProgram program{};
   if (!runtime::readSpirv(path, program, error) ||
       !shaderModule_.create(session_->device(), program, error)) {
@@ -89,20 +90,34 @@ bool DeviceTriangleHitPrimitive::initialize(runtime::ComputeSession &session,
 }
 void DeviceTriangleHitPrimitive::reset() {
   const bool own = session_ == &ownedSession_;
-  fence_.destroy();
-  pipeline_.reset();
-  descriptorPool_.reset();
-  pipelineLayout_.reset();
-  descriptorSetLayout_.reset();
-  shaderModule_.reset();
+  const bool live = session_ != nullptr && session_->isValid() &&
+                   sessionGeneration_ != 0U &&
+                   session_->generation() == sessionGeneration_;
+  if (live) {
+    fence_.destroy();
+    pipeline_.reset();
+    descriptorPool_.reset();
+    pipelineLayout_.reset();
+    descriptorSetLayout_.reset();
+    shaderModule_.reset();
+  } else {
+    fence_.abandon();
+    pipeline_.abandon();
+    descriptorPool_.abandon();
+    pipelineLayout_.abandon();
+    descriptorSetLayout_.abandon();
+    shaderModule_.abandon();
+  }
   descriptorSet_ = VK_NULL_HANDLE;
   commandBuffer_ = VK_NULL_HANDLE;
   session_ = nullptr;
+  sessionGeneration_ = 0U;
   if (own)
     ownedSession_.reset();
 }
 bool DeviceTriangleHitPrimitive::isInitialized() const {
-  return session_ != nullptr && session_->isValid() &&
+  return session_ != nullptr && sessionGeneration_ != 0U &&
+         session_->isValid() && session_->generation() == sessionGeneration_ &&
          shaderModule_.get() != VK_NULL_HANDLE &&
          descriptorSetLayout_.get() != VK_NULL_HANDLE &&
          pipelineLayout_.get() != VK_NULL_HANDLE &&

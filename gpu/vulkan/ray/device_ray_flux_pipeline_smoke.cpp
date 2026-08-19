@@ -121,6 +121,28 @@ int main() {
   if (!require_result(pipeline.initialize(spirv, error), "initialize", error))
     return 1;
 
+  if (!require_equal(
+          DeviceRayFluxPipeline::devicePhysicsGap() ==
+              "device ray physics requires an event queue, reflection, roulette, and material state",
+          "device physics gap contract"))
+    return 1;
+  std::vector<std::uint32_t> physicsSurface(rays.size(), kSurfaceSentinel);
+  std::vector<float> physicsWeight(rays.size(), kWeightSentinel);
+  RayFluxResult physicsAttempt{physicsSurface, physicsWeight, 83U};
+  if (!require_result(
+          !pipeline.runGpuPhysics(rays, triangles, weights, 1U, physicsAttempt,
+                                  error),
+          "device reflection physics rejects unsupported request", error) ||
+      !require_equal(error == DeviceRayFluxPipeline::devicePhysicsGap(),
+                     "device physics rejection error contract") ||
+      !require_equal(
+          physicsAttempt.count == 83U &&
+              physicsSurface ==
+                  std::vector<std::uint32_t>(rays.size(), kSurfaceSentinel) &&
+              physicsWeight == std::vector<float>(rays.size(), kWeightSentinel),
+          "device physics rejection output unchanged"))
+    return 1;
+
   std::vector<std::uint32_t> gpuSurface(rays.size(), kSurfaceSentinel);
   std::vector<float> gpuWeight(rays.size(), kWeightSentinel);
   RayFluxResult gpu{gpuSurface, gpuWeight, 99U};
@@ -454,6 +476,22 @@ int main() {
                          resetSurface[0] == kSurfaceSentinel &&
                          resetWeight[0] == kWeightSentinel,
                      "prepared BVH reset output unchanged"))
+    return 1;
+
+  // A lost/teardown device session must fail closed before publishing any
+  // staged result.  This is the deterministic local equivalent of a device
+  // loss; real VK_ERROR_DEVICE_LOST injection remains outside this smoke.
+  pipeline.reset();
+  std::vector<std::uint32_t> lostSurface(tieRays.size(), kSurfaceSentinel);
+  std::vector<float> lostWeight(tieRays.size(), kWeightSentinel);
+  RayFluxResult lostResult{lostSurface, lostWeight, 75U};
+  if (!require_result(!pipeline.runGpu(tieRays, tieTriangles, tieWeights,
+                                       lostResult, error),
+                      "device session loss rejects dispatch", error) ||
+      !require_equal(lostResult.count == 75U &&
+                         lostSurface[0] == kSurfaceSentinel &&
+                         lostWeight[0] == kWeightSentinel,
+                     "device session loss output unchanged"))
     return 1;
   std::cout << "device ray-flux pipeline Vulkan dispatch PASS\n";
   return 0;

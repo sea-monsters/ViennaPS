@@ -54,3 +54,14 @@ _Avoid_: Minimum GPU, recommended hardware
 The per-run explanation of which backend and capability tier were selected or
 rejected for every accelerated stage.
 _Avoid_: Debug log, GPU log
+
+**P5 Functional Closure**:
+The state in which every P5 functional and model row has an accepted Vulkan
+route or an explicit, verified CPU fallback or unsupported classification.
+_Avoid_: P5 locally done, all models on Vulkan
+
+**P5 Formal Exit**:
+The release-facing milestone that combines P5 Functional Closure with the
+required deployment, validation, support-matrix, hosted-evidence, and cleanup
+gates, and is the only P5 state that permits progression to later phases.
+_Avoid_: P5 done, local completion

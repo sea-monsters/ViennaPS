@@ -348,7 +348,7 @@ target_compile_features(viennaps_vulkan_reduction_scan_primitives
   PRIVATE cxx_std_20)
 if(MSVC)
   target_compile_options(viennaps_vulkan_reduction_scan_primitives
-                         PRIVATE /W4 /WX)
+                         PRIVATE /W4 /WX /EHsc)
 else()
   target_compile_options(viennaps_vulkan_reduction_scan_primitives
                          PRIVATE -Wall -Wextra -Wpedantic -Werror)

@@ -1,6 +1,23 @@
 // Copyright 2026 ViennaPS
 // SPDX-License-Identifier: MIT
 
+//
+// Frozen semantic mirror of viennals::Advect<T,D>::rebuildLS() as implemented
+// in ViennaLS 5.8.5 with the levelset-update-v2 patch.
+//
+// This file implements the LevelSetRebuildExecutor callback that is installed
+// into viennals::Advect. The callback collects HRLE candidates, dispatches
+// Vulkan classification/compaction, and materializes the result back into a
+// canonical CPU domain. The underlying classification/ compaction/
+// reconstruction logic mirrors rebuildLS; it is not a direct call into the
+// upstream private rebuild body.
+//
+// Any upstream change to rebuildLS must be reviewed against this mirror and
+// the hrleRebuildCpuFixture differential test must be re-baselined.
+//
+// Card: R1-F1 / P4-HRLE-REBUILD-MIRROR
+//
+
 #pragma once
 
 #include "hrle_rebuild_pipeline.hpp"

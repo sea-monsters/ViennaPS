@@ -1,0 +1,87 @@
+#version 450
+layout(local_size_x = 64) in;
+
+struct Event {
+  vec4 origin;
+  vec4 direction;
+  uint particle;
+  uint bounce;
+  uint sequence;
+  uint activeFlag;
+  uint surfaceId;
+  float weight;
+  float nextWeight;
+  uint action;
+};
+struct Decision {
+  uint particle;
+  uint bounce;
+  uint sequence;
+  uint surfaceId;
+  float weight;
+  float nextWeight;
+  float contribution;
+  uint action;
+  vec4 successorOrigin;
+  vec4 successorDirection;
+};
+struct Accum { uint surfaceId; uint weightBits; uint activeFlag; uint sequence; };
+
+layout(std430, binding = 0) readonly buffer EventsIn { Event inputEvents[]; };
+layout(std430, binding = 1) readonly buffer Decisions { Decision decisions[]; };
+layout(std430, binding = 2) buffer EventsOut { Event outputEvents[]; };
+layout(std430, binding = 3) buffer Accumulation { Accum accumulations[]; };
+layout(std430, binding = 4) buffer Status { uint status; };
+
+layout(push_constant) uniform Push {
+  uint laneCount;
+  uint decisionStride;
+  uint maxReflections;
+  uint reserved;
+} pushConstants;
+
+void main() {
+  uint lane = gl_GlobalInvocationID.x;
+  if (lane >= pushConstants.laneCount) return;
+  Event event = inputEvents[lane];
+  if (event.activeFlag == 0u) {
+    outputEvents[lane] = event;
+    accumulations[lane] = Accum(0u, 0u, 0u, event.sequence);
+    return;
+  }
+  if (event.bounce >= pushConstants.decisionStride ||
+      event.bounce > pushConstants.maxReflections) {
+    atomicOr(status, 1u);
+    return;
+  }
+  Decision decision = decisions[lane * pushConstants.decisionStride + event.bounce];
+  if (decision.particle != event.particle ||
+      decision.sequence != event.sequence || decision.bounce != event.bounce) {
+    atomicOr(status, 2u);
+    return;
+  }
+  if (decision.action > 2u || decision.weight != event.weight ||
+      isnan(decision.weight) || isinf(decision.weight) ||
+      isnan(decision.nextWeight) || isinf(decision.nextWeight) ||
+      isnan(decision.contribution) || isinf(decision.contribution)) {
+    atomicOr(status, 4u);
+    return;
+  }
+  if (event.bounce == 0xffffffffu) {
+    atomicOr(status, 8u);
+    return;
+  }
+  Event next = event;
+  next.origin = decision.successorOrigin;
+  next.direction = decision.successorDirection;
+  next.surfaceId = decision.surfaceId;
+  next.weight = decision.nextWeight;
+  next.nextWeight = decision.nextWeight;
+  next.action = decision.action;
+  next.bounce = event.bounce + 1u;
+  next.activeFlag = decision.action == 1u ? 1u : 0u;
+  outputEvents[lane] = next;
+  accumulations[lane] = Accum(decision.surfaceId,
+                              floatBitsToUint(decision.contribution),
+                              next.activeFlag, event.sequence);
+}

@@ -1,8 +1,13 @@
 #pragma once
 
 #include "../process/psProcessModel.hpp"
+#include "psTEOSVelocityExecutor.hpp"
 
 #include <rayParticle.hpp>
+
+#include <cmath>
+#include <utility>
+#include <vector>
 
 namespace viennaps {
 
@@ -14,10 +19,15 @@ class SingleTEOSSurfaceModel : public SurfaceModel<NumericType> {
   using SurfaceModel<NumericType>::coverages;
   const NumericType depositionRate;
   const NumericType reactionOrder;
+  TEOSVelocityExecutor<NumericType> executor_{};
 
 public:
   SingleTEOSSurfaceModel(NumericType passedRate, NumericType passedOrder)
       : depositionRate(passedRate), reactionOrder(passedOrder) {}
+
+  void setExecutor(TEOSVelocityExecutor<NumericType> executor) {
+    executor_ = std::move(executor);
+  }
 
   SmartPointer<std::vector<NumericType>>
   calculateVelocities(SmartPointer<PointData<NumericType>> rates,
@@ -31,6 +41,33 @@ public:
     for (size_t i = 0; i < velocity.size(); i++) {
       velocity[i] =
           depositionRate * std::pow(particleFlux->at(i), reactionOrder);
+    }
+
+    if (!executor_ || velocity.empty())
+      return SmartPointer<std::vector<NumericType>>::New(std::move(velocity));
+
+    // The CPU formula above is authoritative.  The optional executor is only
+    // a candidate for the already accumulated single-precursor flux.
+    for (const auto value : velocity) {
+      if (!std::isfinite(static_cast<double>(value)))
+        return SmartPointer<std::vector<NumericType>>::New(std::move(velocity));
+    }
+    std::vector<NumericType> flux(particleFlux->begin(), particleFlux->end());
+    std::vector<NumericType> output = velocity;
+    TEOSVelocityWork<NumericType> work;
+    work.particleFlux = std::span<const NumericType>(flux.data(), flux.size());
+    work.cpuOracle =
+        std::span<const NumericType>(velocity.data(), velocity.size());
+    work.output = std::span<NumericType>(output.data(), output.size());
+    work.parameters = {depositionRate, reactionOrder};
+    std::string error;
+    if (executor_(work, error) && work.complete &&
+        work.writtenCount == output.size()) {
+      bool finite = true;
+      for (const auto value : output)
+        finite = finite && std::isfinite(static_cast<double>(value));
+      if (finite)
+        return SmartPointer<std::vector<NumericType>>::New(std::move(output));
     }
 
     return SmartPointer<std::vector<NumericType>>::New(std::move(velocity));
@@ -183,6 +220,8 @@ private:
 template <class NumericType, int D>
 class TEOSDeposition : public ProcessModelCPU<NumericType, D> {
 public:
+  using VelocityExecutor = TEOSVelocityExecutor<NumericType>;
+
   TEOSDeposition(NumericType stickingProbabilityP1, NumericType rateP1,
                  NumericType orderP1, NumericType stickingProbabilityP2 = 0.,
                  NumericType rateP2 = 0., NumericType orderP2 = 0.) {
@@ -202,6 +241,7 @@ public:
       auto surfModel =
           SmartPointer<impl::SingleTEOSSurfaceModel<NumericType>>::New(rateP1,
                                                                        orderP1);
+      surfModel->setExecutor(velocityExecutor_);
 
       this->setSurfaceModel(surfModel);
       this->insertNextParticleType(particle);
@@ -210,6 +250,7 @@ public:
       this->processMetaData["StickingProbability"] = {stickingProbabilityP1};
       this->processMetaData["Rate"] = {rateP1};
       this->processMetaData["Order"] = {orderP1};
+      singleMode_ = true;
     } else {
       // multi (two) particle model
 
@@ -237,6 +278,31 @@ public:
       this->processMetaData["Order"] = {orderP1, orderP2};
     }
   }
+
+  /// Install an optional numeric executor for the single-precursor reaction
+  /// power.  Particle transport, sticking, coverage and Process ordering stay
+  /// on the CPU; multi-precursor TEOS deliberately remains CPU-only.
+  void setVelocityExecutor(VelocityExecutor executor) {
+    if (!singleMode_) {
+      velocityExecutor_ = {};
+      return;
+    }
+    velocityExecutor_ = std::move(executor);
+    auto field = std::dynamic_pointer_cast<
+        impl::SingleTEOSSurfaceModel<NumericType>>(this->getSurfaceModel());
+    if (field)
+      field->setExecutor(velocityExecutor_);
+  }
+
+  void clearVelocityExecutor() { setVelocityExecutor({}); }
+
+  [[nodiscard]] bool hasVelocityExecutor() const {
+    return singleMode_ && static_cast<bool>(velocityExecutor_);
+  }
+
+private:
+  VelocityExecutor velocityExecutor_{};
+  bool singleMode_ = false;
 };
 
 PS_PRECOMPILE_PRECISION_DIMENSION(TEOSDeposition)

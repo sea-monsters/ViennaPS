@@ -16,6 +16,7 @@
 #include <compute/capabilityProfileIO.hpp>
 
 #include <geometries/psMakePlane.hpp>
+#include <models/psMultiParticleProcess.hpp>
 #include <models/psSingleParticleProcess.hpp>
 #include <process/psProcess.hpp>
 #include <psDomain.hpp>
@@ -26,6 +27,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <exception>
 #include <iomanip>
 #include <iostream>
 #include <memory>
@@ -61,6 +63,9 @@
 #ifndef VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH
 #define VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH ""
 #endif
+#ifndef VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SPV_PATH
+#define VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SPV_PATH ""
+#endif
 
 namespace {
 
@@ -80,6 +85,17 @@ bool require(const bool condition, const char *what) {
 // by label rather than by index.  Returns an empty vector when the label is
 // absent, which is exactly the fail-closed condition.
 constexpr const char *kFluxLabel = "particleFlux";
+
+template <typename T> class UnsupportedSource final : public viennaray::Source<T> {
+public:
+  std::array<viennacore::Vec3D<T>, 2>
+  getOriginAndDirection(std::size_t, viennacore::RNG &) const override {
+    return {{{T(0), T(1), T(0)}, {T(0), T(-1), T(0)}}};
+  }
+
+  [[nodiscard]] std::size_t getNumPoints() const override { return 1U; }
+  [[nodiscard]] T getSourceArea() const override { return T(1); }
+};
 
 template <typename T>
 std::vector<T> readFluxScalarByLabel(
@@ -110,6 +126,8 @@ viennaps::VulkanRayFluxSpirvPaths makeSpirv() {
   paths.surfaceSegments = VIENNAPS_VULKAN_RAY_SURFACE_SEGMENTS_SPV_PATH;
   paths.surfaceReduce = VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV_PATH;
   paths.triangleBvh = VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH;
+  paths.multibounceFrontierQueue =
+      VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SPV_PATH;
   return paths;
 }
 
@@ -121,11 +139,84 @@ viennaps::RayTracingParameters singleBounceParams() {
   return params;
 }
 
+template <typename T, int D>
+bool checkManualRejected(
+    const viennacore::SmartPointer<viennaps::ProcessModelBase<T, D>> &model,
+    const viennaps::RayTracingParameters &params, const char *what) {
+  viennaps::ProcessContext<T, D> processContext;
+  processContext.model = model;
+  processContext.rayTracingParams = params;
+  auto deploymentContext = std::make_shared<
+      viennaps::vulkan::runtime::DeploymentComputeContext>();
+  viennaps::VulkanRayFluxSpirvPaths emptyPaths;
+  viennaps::VulkanRayFluxEngine<T, D> engine(deploymentContext, emptyPaths,
+                                             false);
+  return require(engine.checkInput(processContext) ==
+                     viennaps::ProcessResult::INVALID_INPUT,
+                 what);
+}
+
+template <typename T, int D> class CountingAdvectionCallback final
+    : public viennaps::AdvectionCallback<T, D> {
+public:
+  bool applyPreAdvect(const T) override {
+    ++preCount;
+    return true;
+  }
+
+  bool applyPostAdvect(const T) override {
+    ++postCount;
+    return true;
+  }
+
+  unsigned preCount = 0U;
+  unsigned postCount = 0U;
+};
+
+template <typename T, int D> struct DomainSnapshot {
+  std::vector<std::vector<T>> surfaceValues;
+  std::size_t levelSetCount = 0U;
+  typename viennaps::Domain<T, D>::MetaDataType metadata;
+};
+
+template <typename T, int D>
+DomainSnapshot<T, D>
+snapshotDomain(const viennaps::SmartPointer<viennaps::Domain<T, D>> &domain) {
+  DomainSnapshot<T, D> snapshot;
+  snapshot.levelSetCount = domain->getNumberOfLevelSets();
+  snapshot.metadata = domain->getMetaData();
+  const auto &surface = domain->getSurface()->getDomain();
+  snapshot.surfaceValues.resize(surface.getNumberOfSegments());
+  for (unsigned p = 0; p < surface.getNumberOfSegments(); ++p)
+    snapshot.surfaceValues[p] = surface.getDomainSegment(p).definedValues;
+  return snapshot;
+}
+
+template <typename T, int D>
+bool sameDomainSnapshot(
+    const viennaps::SmartPointer<viennaps::Domain<T, D>> &domain,
+    const DomainSnapshot<T, D> &snapshot) {
+  if (domain->getNumberOfLevelSets() != snapshot.levelSetCount ||
+      domain->getMetaData() != snapshot.metadata)
+    return false;
+  const auto &surface = domain->getSurface()->getDomain();
+  if (surface.getNumberOfSegments() != snapshot.surfaceValues.size())
+    return false;
+  for (unsigned p = 0; p < surface.getNumberOfSegments(); ++p)
+    if (surface.getDomainSegment(p).definedValues != snapshot.surfaceValues[p])
+      return false;
+  return true;
+}
+
 } // namespace
 
 int main() {
   using T = float;
   constexpr int D = 2;
+  // The 2-D CPU geometry represents each line as a thin triangle ribbon, but
+  // normalizes it by the physical line length.  Keep this non-unit so the
+  // route differential exercises that CPU-owned area convention.
+  constexpr T kOracleGridDelta = 0.5F;
 
   viennacore::Logger::setLogLevel(viennacore::LogLevel::WARNING);
 
@@ -134,6 +225,148 @@ int main() {
                    !spirv.triangleBvh.empty(),
                "required SPIR-V paths configured"))
     return 1;
+
+  if (!require(
+          viennaps::VulkanRayFluxEngine<T, D>::devicePhysicsGap() ==
+              "generic device multi-bounce physics is unavailable; only the bounded CPU-decision frontier route is admitted",
+          "device physics negative contract is explicit"))
+    return 1;
+
+  // The device route is intentionally narrower than ProcessModelCPU: only
+  // the evidenced SingleParticleProcess<float, 2> semantics are eligible.
+  // These checks are deterministic and do not require a Vulkan adapter.
+  {
+    auto multi =
+        viennaps::SmartPointer<viennaps::MultiParticleProcess<T, D>>::New();
+    multi->addNeutralParticle(1.0F);
+    multi->addNeutralParticle(1.0F);
+    if (!checkManualRejected<T, D>(multi, singleBounceParams(),
+                                   "manual multi-particle route rejected"))
+      return 1;
+
+    auto reflected =
+        viennaps::SmartPointer<viennaps::SingleParticleProcess<T, D>>::New();
+    auto reflectedParams = singleBounceParams();
+    reflectedParams.maxReflections = 1;
+    if (!checkManualRejected<T, D>(reflected, reflectedParams,
+                                   "manual reflection route rejected"))
+      return 1;
+
+    // Freeze the CPU/ViennaRay multi-bounce oracle at a fixed seed.  This is
+    // intentionally a negative device contract: the identical configuration
+    // must remain on the CPU path until a device-resident event queue,
+    // reflection, roulette, and transaction differential is accepted.
+    std::vector<T> reflectedCpuFlux;
+    {
+      auto oracleModel =
+          viennaps::SmartPointer<viennaps::SingleParticleProcess<T, D>>::New(
+              1.0F, 1.0F, 1.0F);
+      auto oracleDomain =
+          viennaps::Domain<T, D>::New(kOracleGridDelta, 10.0F, 10.0F);
+      viennaps::MakePlane<T, D>(oracleDomain, 0.0F).apply();
+      viennaps::Process<T, D> oracleProcess(oracleDomain, oracleModel);
+      oracleProcess.setFluxEngineType(viennaps::FluxEngineType::CPU_TRIANGLE);
+      oracleProcess.setParameters(reflectedParams);
+      std::string oracleLabel;
+      reflectedCpuFlux = readFluxScalarByLabel<T>(
+          oracleProcess.calculateFlux(), oracleLabel);
+      if (!require(!reflectedCpuFlux.empty() && oracleLabel == kFluxLabel,
+                   "fixed-seed CPU multi-bounce oracle produced flux"))
+        return 1;
+    }
+
+    auto doubleModel =
+        viennaps::SmartPointer<viennaps::SingleParticleProcess<double, 2>>::New();
+    if (!checkManualRejected<double, 2>(
+            doubleModel, singleBounceParams(),
+            "manual unsupported precision route rejected"))
+      return 1;
+
+    auto threeDimensional =
+        viennaps::SmartPointer<viennaps::SingleParticleProcess<float, 3>>::New();
+    if (!checkManualRejected<float, 3>(
+            threeDimensional, singleBounceParams(),
+            "manual unsupported dimension route rejected"))
+      return 1;
+
+    viennacore::SmartPointer<viennaray::Source<T>> customSource =
+        std::make_shared<UnsupportedSource<T>>();
+    auto customSourceModel =
+        viennaps::SmartPointer<viennaps::SingleParticleProcess<T, D>>::New();
+    customSourceModel->setSource(customSource);
+    if (!checkManualRejected<T, D>(customSourceModel, singleBounceParams(),
+                                   "manual custom source route rejected"))
+      return 1;
+
+    // AUTO must not merely accept the unsupported configuration: it must
+    // execute the unchanged CPU triangle route without requiring a prepared
+    // Vulkan context.
+    auto fallbackModel =
+        viennaps::SmartPointer<viennaps::SingleParticleProcess<T, D>>::New(
+            1.0F, 1.0F, 1.0F);
+    auto fallbackDomain =
+        viennaps::Domain<T, D>::New(kOracleGridDelta, 10.0F, 10.0F);
+    viennaps::MakePlane<T, D>(fallbackDomain, 0.0F).apply();
+    viennaps::Process<T, D> fallbackProcess(fallbackDomain, fallbackModel);
+    fallbackProcess.setFluxEngineOverride(
+        std::make_unique<viennaps::VulkanRayFluxEngine<T, D>>(
+            std::make_shared<
+                viennaps::vulkan::runtime::DeploymentComputeContext>(),
+            spirv, true));
+    fallbackProcess.setParameters(reflectedParams);
+    auto fallbackMesh = fallbackProcess.calculateFlux();
+    std::string fallbackLabel;
+    const auto fallbackFlux =
+        readFluxScalarByLabel<T>(fallbackMesh, fallbackLabel);
+    if (!require(!fallbackFlux.empty(),
+                 "AUTO ineligible route falls back to CPU triangle flux"))
+      return 1;
+    if (!require(fallbackFlux == reflectedCpuFlux &&
+                     fallbackLabel == kFluxLabel,
+                 "AUTO reflection fallback matches fixed-seed CPU oracle"))
+      return 1;
+
+    // The same unsupported configuration must retain the CPU route through a
+    // multi-step Process::apply() transaction when AUTO fallback is enabled.
+    auto fallbackApplyModel =
+        viennaps::SmartPointer<viennaps::MultiParticleProcess<T, D>>::New();
+    fallbackApplyModel->addNeutralParticle(10.0F);
+    fallbackApplyModel->addNeutralParticle(10.0F);
+    auto fallbackCallback =
+        viennacore::SmartPointer<CountingAdvectionCallback<T, D>>::New();
+    fallbackApplyModel->setAdvectionCallback(fallbackCallback);
+    auto fallbackApplyDomain =
+        viennaps::Domain<T, D>::New(1.0F, 10.0F, 10.0F);
+    viennaps::MakePlane<T, D>(fallbackApplyDomain, 0.0F).apply();
+    viennaps::Process<T, D> fallbackApplyProcess(fallbackApplyDomain,
+                                                  fallbackApplyModel);
+    fallbackApplyProcess.setFluxEngineOverride(
+        std::make_unique<viennaps::VulkanRayFluxEngine<T, D>>(
+            std::make_shared<
+                viennaps::vulkan::runtime::DeploymentComputeContext>(),
+            spirv, true));
+    fallbackApplyProcess.setProcessDuration(0.1);
+    fallbackApplyProcess.setParameters(singleBounceParams());
+    viennaps::AdvectionParameters fallbackAdvection;
+    fallbackAdvection.timeStepRatio = 0.05;
+    fallbackApplyProcess.setParameters(fallbackAdvection);
+    fallbackApplyProcess.setLevelSetUpdateExecutor(
+        [](const auto &update, auto &output, std::string &) {
+          output.values.resize(update.domain.getNumberOfSegments());
+          for (unsigned p = 0; p < update.domain.getNumberOfSegments(); ++p)
+            output.values[p] = update.domain.getDomainSegment(p).definedValues;
+          return viennals::Advect<T, D>::LevelSetUpdateStatus::HANDLED;
+        });
+    fallbackApplyProcess.apply();
+    if (!require(
+            fallbackApplyProcess.getLastProcessResult() ==
+                viennaps::ProcessResult::SUCCESS,
+            "AUTO unsupported route applies through CPU fallback"))
+      return 1;
+    if (!require(fallbackCallback->postCount >= 2U,
+                 "AUTO CPU fallback completed multiple apply steps"))
+      return 1;
+  }
 
   // ---------------------------------------------------------------------
   // (1) CPU_TRIANGLE oracle.
@@ -144,7 +377,7 @@ int main() {
   std::vector<T> cpuFlux;
   std::string cpuLabel;
   {
-    auto domain = viennaps::Domain<T, D>::New(1.0, 10.0, 10.0);
+    auto domain = viennaps::Domain<T, D>::New(kOracleGridDelta, 10.0, 10.0);
     viennaps::MakePlane<T, D>(domain, 0.0).apply();
     viennaps::Process<T, D> process(domain, cpuModel);
     process.setFluxEngineType(viennaps::FluxEngineType::CPU_TRIANGLE);
@@ -270,7 +503,7 @@ int main() {
     auto vkModel =
         viennaps::SmartPointer<viennaps::SingleParticleProcess<T, D>>::New(
             1.0, 1.0, 1.0);
-    auto domain = viennaps::Domain<T, D>::New(1.0, 10.0, 10.0);
+    auto domain = viennaps::Domain<T, D>::New(kOracleGridDelta, 10.0, 10.0);
     viennaps::MakePlane<T, D>(domain, 0.0).apply();
 
     viennaps::Process<T, D> process(domain, vkModel);
@@ -360,6 +593,39 @@ int main() {
     const auto failedFlux = readFluxScalarByLabel<T>(diskMesh, failedLabel);
     if (!require(failedFlux.empty(),
                  "unprepared no-fallback route must deposit no flux data"))
+      return 1;
+  }
+
+  // Manual Vulkan failure must fail closed before a Process::apply()
+  // transaction can publish geometry or metadata changes.
+  {
+    auto unprepared = std::make_shared<
+        viennaps::vulkan::runtime::DeploymentComputeContext>();
+    auto model =
+        viennaps::SmartPointer<viennaps::SingleParticleProcess<T, D>>::New(
+            1.0F, 1.0F, 1.0F);
+    auto domain = viennaps::Domain<T, D>::New(1.0F, 10.0F, 10.0F);
+    viennaps::MakePlane<T, D>(domain, 0.0F).apply();
+    domain->addMetaData("transactionSentinel", 7.0);
+    const auto before = snapshotDomain<T, D>(domain);
+
+    viennaps::Process<T, D> process(domain, model);
+    process.setFluxEngineOverride(
+        std::make_unique<viennaps::VulkanRayFluxEngine<T, D>>(unprepared,
+                                                              spirv, false));
+    process.setProcessDuration(1.0);
+    process.setParameters(singleBounceParams());
+    try {
+      process.apply();
+    } catch (const std::exception &) {
+      // ViennaCore's error logger may throw after Process records FAILURE.
+    }
+    if (!require(process.getLastProcessResult() ==
+                     viennaps::ProcessResult::FAILURE,
+                 "manual Vulkan apply failure is fail-closed"))
+      return 1;
+    if (!require(sameDomainSnapshot<T, D>(domain, before),
+                 "manual Vulkan failure preserves geometry and metadata"))
       return 1;
   }
 

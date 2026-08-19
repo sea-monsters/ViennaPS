@@ -210,6 +210,9 @@ public:
   [[nodiscard]] bool create(VulkanDevice &device, const SpirvProgram &program,
                             std::string &error);
   void reset();
+  // Drops a handle after its owning VkDevice has already been destroyed. This
+  // deliberately performs no Vulkan call; normal callers must use reset().
+  void abandon();
   [[nodiscard]] VkShaderModule get() const;
 
 private:
@@ -232,6 +235,7 @@ public:
          std::span<const VkDescriptorSetLayoutBinding> bindings,
          std::string &error);
   void reset();
+  void abandon();
   [[nodiscard]] VkDescriptorSetLayout get() const;
 
 private:
@@ -257,6 +261,7 @@ public:
          std::span<const VkPushConstantRange> pushConstantRanges,
          std::string &error);
   void reset();
+  void abandon();
   [[nodiscard]] VkPipelineLayout get() const;
 
 private:
@@ -288,6 +293,7 @@ public:
                             const ComputePipelineOptions &options,
                             std::string &error);
   void reset();
+  void abandon();
   [[nodiscard]] VkPipeline get() const;
 
 private:
@@ -317,6 +323,7 @@ public:
   [[nodiscard]] bool allocate(VkDescriptorSetLayout layout,
                               VkDescriptorSet &set, std::string &error);
   void reset();
+  void abandon();
   [[nodiscard]] VkDescriptorPool get() const;
 
 private:
@@ -361,6 +368,7 @@ public:
   void reset() const;
   void reset(VulkanDevice &device);
   void destroy();
+  void abandon();
 
   [[nodiscard]] VkFence get() const;
 

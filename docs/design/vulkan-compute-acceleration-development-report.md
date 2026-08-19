@@ -648,6 +648,14 @@ Lavapipe 是 CPU 软件 Vulkan，只证明 API/着色器正确性，不代表真
   `ViennaTools::ViennaPS` 目标和传递依赖对干净消费者有效；它不启用 VTK、
   CUDA 或 Vulkan，也不替代硬件 lane。
 
+- 本地另有显式的 `cmake/run-pd5-vulkan-install-export.cmake` 场景。它要求
+  Vulkan SDK，使用 `VIENNAPS_INSTALL_VULKAN_PAYLOAD=ON` 安装 runtime、GLSL、
+  SPIR-V 和导出 target，并以 `tests/vulkanInstallExportConsumer` 验证；该
+  场景已在 Release/Intel Arc 主机构建树通过；独立 consumer 还覆盖了安装后
+  profile 的序列化、provision/reload 和 stale-fingerprint fail-closed 选择，
+  但尚未成为 hosted CI job，也
+  不代表 Process preview 或自动后端 promotion。
+
 - `vulkan-hardware` 只接受 `workflow_dispatch` 的
   `run_vulkan_hardware=true`，并要求 `self-hosted`、`vulkan` 两个 runner 标签。
   该 job 不在 push 或 pull request 上自动运行，也不替托管 runner 安装 SDK；SDK、
@@ -845,8 +853,10 @@ Release MSVC C++20 构建中通过：`Test #81: rayPhysics ... Passed 0.54 sec`�
 
 PD0--PD4 的本地控制面和 `PD5-CI-DOCS-INTEGRATION`、`PD5-INSTALL-EXPORT` 的本地
 CPU/no-SDK 验收已经有记录；这只能说明本地证据链可重放。GitHub 远端 CI 仍是独立
-门禁：截至本快照，远端默认分支为 `master`，默认分支没有 `build.yml`，没有已登记的
-Vulkan runner，也没有可引用的远端 run URL，因此不能把远端 CI 计入完成度。
+门禁：最后一次本地抓取的 `origin/HEAD` 指向 `origin/master`，该快照含有旧版
+`build.yml`，但没有当前 PD5 `path-hygiene`、`install-export` 或 Vulkan hardware
+job。该本地 ref 不能证明当前远端默认分支或 runner 注册状态；目前也没有可引用的
+远端 run URL。因此不能把远端 CI 计入完成度。
 
 P5 的 `P5-JD`、`P5-JE`、`P5-JF` 已在本地 Release Vulkan/Intel Arc 上分别完成设备
 驻留组合、单 compute submission 组合和严格 FP32 fail-closed 状态传播；当前重验证的
@@ -868,6 +878,24 @@ P5 的 `P5-JD`、`P5-JE`、`P5-JF` 已在本地 Release Vulkan/Intel Arc 上分�
 这些阶段的状态、前置证据、独占文件边界和验收条件以
 [实现状态与任务看板](vulkan-compute-acceleration-status.md) 为准；本节只更新
 总开发计划的当前位置，不把实现进度宣称为完成。
+
+### 8.4 P5 Formal Exit 收口执行（2026-08-19）
+
+P5 的剩余工作现已完全受
+[P5 Formal Exit 执行计划](p5-formal-exit-execution-plan.md) 约束。用户已确认
+计划中的三个推荐决策：采用正式退出而非局部完成口径；允许在隔离 worktree
+内测试 MSVC/OpenMP/ViennaCore 修复候选，但生产采用必须等配对 oracle 和主线
+验收；允许主线审查当前 dirty tree 后建立 `codex/p5-closeout-base` 检查点。
+
+当前唯一功能关键路径是：基线冻结 -> Neutral Release 配对 CPU oracle -> 完整
+Surface Process RED/GREEN -> 15 行模型矩阵聚合 -> P5 Final Audit。K3E 长时测试
+预检和本地 install/export、VTK、远端 CI 准备可以在基线冻结后并行，但不能越过
+功能前置门修改完成状态。最多同时运行三个 `gpt-5.6-luna/xhigh` 子代理；连续
+任务复用同一代理，每卡只允许一次有命名失败和新证据目标的修正，第二次失败
+立即回收主线。主线独占任务验收、问题修复、看板状态和最终发布声明。
+
+该记录表示“收口工作按计划执行”，不表示 P5 已完成。只有
+`P5-E0-FINAL-AUDIT` 可以把 `P5-DEPLOYMENT-EXIT` 更新为 `DONE`。
 
 ## 9. 风险登记
 
@@ -942,7 +970,8 @@ P5 的 `P5-JD`、`P5-JE`、`P5-JF` 已在本地 Release Vulkan/Intel Arc 上分�
 [p0-p4-cpu-reuse-audit-round1.md](p0-p4-cpu-reuse-audit-round1.md)
 （状态 `RECORDED`；R1-F1 / R1-F2 已修复关闭，R1-F3 保留建议）。
 
-相对 `D:\Codex_lib\code_reference\ViennaPS` 的只读审查结论摘要：
+相对未修改的 ViennaPS reference tree（由 `VIENNAPS_CPU_REFERENCE_ROOT`
+提供路径）的只读审查结论摘要：
 
 **总评：架构总体合规**——未另起 Process / Flux / SurfaceModel 生产循环；默认
 仍走 CPU 引擎与 Advect。**R1-F1 与 R1-F2 已按 executor 活性分路 / 冻结镜像 +

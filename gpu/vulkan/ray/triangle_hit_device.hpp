@@ -3,6 +3,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <string>
 #include <string_view>
@@ -90,6 +91,7 @@ private:
   runtime::Fence fence_{};
   VkDescriptorSet descriptorSet_ = VK_NULL_HANDLE;
   VkCommandBuffer commandBuffer_ = VK_NULL_HANDLE;
+  std::uint64_t sessionGeneration_ = 0U;
 };
 
 using DeviceTriangleHit = DeviceTriangleHitPrimitive;

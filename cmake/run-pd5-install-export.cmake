@@ -20,6 +20,13 @@ set(install_prefix "${VIENNAPS_INSTALL_EXPORT_WORK_DIR}/prefix")
 set(consumer_build_dir "${VIENNAPS_INSTALL_EXPORT_WORK_DIR}/consumer-build")
 set(consumer_source_dir "${VIENNAPS_SOURCE_DIR}/tests/installExportConsumer")
 set(source_config_args)
+if(DEFINED CPM_SOURCE_CACHE)
+  # This acceptance scenario starts a fresh source build.  Preserve a
+  # caller-provided, content-addressed CPM cache so offline/restricted
+  # environments exercise the same dependency bootstrap contract as the
+  # primary build, without recording a machine path in the project.
+  list(APPEND source_config_args "-DCPM_SOURCE_CACHE=${CPM_SOURCE_CACHE}")
+endif()
 if(DEFINED CPM_ViennaLS_SOURCE)
   list(APPEND source_config_args "-DCPM_ViennaLS_SOURCE=${CPM_ViennaLS_SOURCE}")
 endif()
@@ -47,7 +54,17 @@ run_checked(
   -DVIENNAPS_BUILD_VULKAN_SMOKE=OFF
   ${source_config_args}
 )
-run_checked("${CMAKE_COMMAND}" --build "${source_build_dir}" --config Release)
+set(source_build_command "${CMAKE_COMMAND}" --build "${source_build_dir}"
+                         --config Release)
+if(DEFINED VIENNAPS_INSTALL_EXPORT_PARALLEL)
+  if(NOT VIENNAPS_INSTALL_EXPORT_PARALLEL MATCHES "^[1-9][0-9]*$")
+    message(FATAL_ERROR
+            "VIENNAPS_INSTALL_EXPORT_PARALLEL must be a positive integer.")
+  endif()
+  list(APPEND source_build_command --parallel
+       "${VIENNAPS_INSTALL_EXPORT_PARALLEL}")
+endif()
+run_checked(${source_build_command})
 run_checked("${CMAKE_COMMAND}" --install "${source_build_dir}" --config Release)
 run_checked(
   "${CMAKE_COMMAND}" -S "${consumer_source_dir}" -B "${consumer_build_dir}"

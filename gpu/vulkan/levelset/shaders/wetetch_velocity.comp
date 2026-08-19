@@ -1,0 +1,114 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer CoordinateBuffer {
+  vec4 values[];
+} coordinates;
+
+layout(set = 0, binding = 1, std430) readonly buffer NormalBuffer {
+  vec4 values[];
+} normals;
+
+layout(set = 0, binding = 2, std430) readonly buffer MaterialBuffer {
+  int values[];
+} materialIds;
+
+layout(set = 0, binding = 3, std430) buffer VelocityBuffer {
+  float values[];
+} velocities;
+
+layout(set = 0, binding = 4, std430) readonly buffer RateIdBuffer {
+  int values[];
+} rateIds;
+
+layout(set = 0, binding = 5, std430) readonly buffer RateValueBuffer {
+  float values[];
+} rateValues;
+
+layout(push_constant) uniform Params {
+  vec4 direction100;
+  vec4 direction010;
+  vec4 rates;
+  uint elementCount;
+  uint materialRateCount;
+} params;
+
+float materialRate(const int material) {
+  for (uint index = 0u; index < params.materialRateCount; ++index) {
+    if (rateIds.values[index] == material) {
+      return rateValues.values[index];
+    }
+  }
+  return 0.0;
+}
+
+void sortDescending(inout vec3 value) {
+  if (value.x < value.y) {
+    const float swapValue = value.x;
+    value.x = value.y;
+    value.y = swapValue;
+  }
+  if (value.y < value.z) {
+    const float swapValue = value.y;
+    value.y = value.z;
+    value.z = swapValue;
+  }
+  if (value.x < value.y) {
+    const float swapValue = value.x;
+    value.x = value.y;
+    value.y = swapValue;
+  }
+}
+
+void main() {
+  const uint index = gl_GlobalInvocationID.x;
+  if (index >= params.elementCount) {
+    return;
+  }
+
+  // Keep the coordinate buffer in the ABI even though this formula is
+  // pointwise in normal/material.  The explicit read prevents an optimizer
+  // from treating the buffer as an accidental alias in validation builds.
+  const vec4 coordinate = coordinates.values[index];
+  precise float result = coordinate.w * 0.0;
+
+  const vec3 axis0 = normalize(params.direction100.xyz);
+  vec3 axis1 = normalize(params.direction010.xyz);
+  axis1 = axis1 - dot(axis0, axis1) * axis0;
+  const vec3 axis2 = cross(axis0, axis1);
+
+  const vec3 inputNormal = normals.values[index].xyz;
+  const float normalLength = length(inputNormal);
+  if (abs(normalLength - 1.0) <= 1e-4) {
+    vec3 normal = inputNormal;
+    normal.z = 0.0;
+    normal = normalize(normal);
+
+    vec3 projected = vec3(abs(dot(axis0, normal)),
+                          abs(dot(axis1, normal)),
+                          abs(dot(axis2, normal)));
+    sortDescending(projected);
+
+    if (projected.x > 0.0) {
+      const float branch = dot(projected, vec3(-1.0, 1.0, 2.0));
+      if (branch < 0.0) {
+        result = (params.rates.x *
+                      (projected.x - projected.y - 2.0 * projected.z) +
+                  params.rates.y * (projected.y - projected.z) +
+                  3.0 * params.rates.w * projected.z) /
+                 projected.x;
+      } else {
+        result = (params.rates.z *
+                      ((projected.y - projected.x) * 0.5 + projected.z) +
+                  params.rates.y * (projected.y - projected.z) +
+                  1.5 * params.rates.w *
+                      (projected.x - projected.y)) /
+                 projected.x;
+      }
+      result *= materialRate(materialIds.values[index]);
+    }
+  }
+
+  velocities.values[index] = result;
+}

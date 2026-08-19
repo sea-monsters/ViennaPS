@@ -28,6 +28,9 @@ option(VIENNAPS_VTK_RENDERING "Enable VTK rendering support" ON)
 
 option(VIENNAPS_USE_GPU "Enable GPU support" OFF)
 option(VIENNAPS_ENABLE_VULKAN "Enable the experimental Vulkan compute backend" OFF)
+option(VIENNAPS_INSTALL_VULKAN_PAYLOAD
+       "Install the opt-in Vulkan runtime, shader sources, and SPIR-V payload"
+       OFF)
 option(VIENNAPS_BUILD_VULKAN_PROBE "Build the Vulkan device capability probe"
        ${VIENNAPS_ENABLE_VULKAN})
 option(VIENNAPS_BUILD_VULKAN_SMOKE "Build the Vulkan compute smoke test"
@@ -46,6 +49,22 @@ option(VIENNAPS_BUILD_TESTS "Build tests" OFF)
 
 option(VIENNAPS_BUILD_PYTHON "Build python bindings" OFF)
 option(VIENNAPS_PACKAGE_PYTHON "Build python bindings with intent to publish wheel" OFF)
+
+if(VIENNAPS_INSTALL_VULKAN_PAYLOAD)
+  if(NOT VIENNAPS_ENABLE_VULKAN)
+    message(FATAL_ERROR
+            "VIENNAPS_INSTALL_VULKAN_PAYLOAD requires VIENNAPS_ENABLE_VULKAN=ON")
+  endif()
+
+  # A payload is intentionally explicit and complete: do not silently install
+  # only whichever optional smoke family happened to be enabled by the caller.
+  set(VIENNAPS_BUILD_VULKAN_PROBE ON)
+  set(VIENNAPS_BUILD_VULKAN_SMOKE ON)
+  set(VIENNAPS_BUILD_VULKAN_PRIMITIVES_SMOKE ON)
+  set(VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE ON)
+  set(VIENNAPS_BUILD_VULKAN_RAY_SMOKE ON)
+  set(VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE ON)
+endif()
 
 # --------------------------------------------------------------------------------------------------------
 # Library options
@@ -417,6 +436,11 @@ endif()
 # Install Target
 # --------------------------------------------------------------------------------------------------------
 
+set(_VIENNAPS_PACKAGE_DEPENDENCIES "ViennaCore;ViennaLS;ViennaRay;ViennaCS")
+if(VIENNAPS_INSTALL_VULKAN_PAYLOAD)
+  list(APPEND _VIENNAPS_PACKAGE_DEPENDENCIES Vulkan)
+endif()
+
 packageProject(
   NAME ${PROJECT_NAME} NAMESPACE ViennaTools
   VERSION ${PROJECT_VERSION}
@@ -424,4 +448,4 @@ packageProject(
   INCLUDE_DIR ${PROJECT_SOURCE_DIR}/include/viennaps
   INCLUDE_DESTINATION include/viennaps-${PROJECT_VERSION}
   COMPATIBILITY SameMajorVersion
-  DEPENDENCIES "ViennaCore;ViennaLS;ViennaRay;ViennaCS")
+  DEPENDENCIES ${_VIENNAPS_PACKAGE_DEPENDENCIES})

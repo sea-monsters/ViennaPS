@@ -717,7 +717,7 @@ target_include_directories(viennaps_vulkan_triangle_bvh_hit PUBLIC
                            "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_features(viennaps_vulkan_triangle_bvh_hit PRIVATE cxx_std_20)
 if(MSVC)
-  target_compile_options(viennaps_vulkan_triangle_bvh_hit PRIVATE /W4 /WX)
+  target_compile_options(viennaps_vulkan_triangle_bvh_hit PRIVATE /W4 /WX /EHsc)
 else()
   target_compile_options(viennaps_vulkan_triangle_bvh_hit PRIVATE
                          -Wall -Wextra -Wpedantic -Werror)
@@ -808,6 +808,224 @@ if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
     FAIL_REGULAR_EXPRESSION "SKIP;FAIL")
 endif()
 
+# P5-RAY-MULTIBOUNCE-SLICE-01: device-only event queue transition checkpoint.
+set(VIENNAPS_VULKAN_MULTIBOUNCE_EVENT_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/multibounce_event.comp")
+set(VIENNAPS_VULKAN_MULTIBOUNCE_EVENT_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/multibounce_event.comp.spv")
+if("${VIENNAPS_VULKAN_RAY_SHADER_COMPILER}" MATCHES ".*glslangValidator.*")
+  add_custom_command(OUTPUT ${VIENNAPS_VULKAN_MULTIBOUNCE_EVENT_SPV}
+    COMMAND ${VIENNAPS_VULKAN_RAY_SHADER_COMPILER} -V
+            ${VIENNAPS_VULKAN_MULTIBOUNCE_EVENT_SHADER} -o
+            ${VIENNAPS_VULKAN_MULTIBOUNCE_EVENT_SPV}
+    DEPENDS ${VIENNAPS_VULKAN_MULTIBOUNCE_EVENT_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+else()
+  add_custom_command(OUTPUT ${VIENNAPS_VULKAN_MULTIBOUNCE_EVENT_SPV}
+    COMMAND ${VIENNAPS_VULKAN_RAY_SHADER_COMPILER} -o
+            ${VIENNAPS_VULKAN_MULTIBOUNCE_EVENT_SPV}
+            ${VIENNAPS_VULKAN_MULTIBOUNCE_EVENT_SHADER}
+    DEPENDS ${VIENNAPS_VULKAN_MULTIBOUNCE_EVENT_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+endif()
+add_custom_target(viennaps-vulkan-multibounce-event-spv
+                  DEPENDS ${VIENNAPS_VULKAN_MULTIBOUNCE_EVENT_SPV})
+add_library(viennaps_vulkan_multibounce_event multibounce_event.cpp)
+add_dependencies(viennaps_vulkan_multibounce_event
+                 viennaps-vulkan-multibounce-event-spv)
+target_link_libraries(viennaps_vulkan_multibounce_event PUBLIC
+                      viennaps_vulkan_compute_runtime Vulkan::Vulkan)
+target_include_directories(viennaps_vulkan_multibounce_event PUBLIC
+                           "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(viennaps_vulkan_multibounce_event PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps_vulkan_multibounce_event PRIVATE /W4 /WX)
+else()
+  target_compile_options(viennaps_vulkan_multibounce_event PRIVATE
+                         -Wall -Wextra -Wpedantic -Werror)
+endif()
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_MULTIBOUNCE_EVENT_SPV_PATH
+       "${VIENNAPS_VULKAN_MULTIBOUNCE_EVENT_SPV}")
+add_executable(viennaps-vulkan-multibounce-event-smoke
+               multibounce_event_smoke.cpp)
+add_dependencies(viennaps-vulkan-multibounce-event-smoke
+                 viennaps-vulkan-multibounce-event-spv)
+target_compile_features(viennaps-vulkan-multibounce-event-smoke PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps-vulkan-multibounce-event-smoke PRIVATE /EHsc)
+endif()
+target_compile_definitions(viennaps-vulkan-multibounce-event-smoke PRIVATE
+  "VIENNAPS_VULKAN_MULTIBOUNCE_EVENT_SPV_PATH=\"${VIENNAPS_VULKAN_MULTIBOUNCE_EVENT_SPV_PATH}\"")
+target_link_libraries(viennaps-vulkan-multibounce-event-smoke PRIVATE
+                      viennaps_vulkan_multibounce_event Vulkan::Vulkan)
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
+  add_test(NAME viennaps-vulkan-multibounce-event-smoke
+           COMMAND viennaps-vulkan-multibounce-event-smoke)
+  set_tests_properties(viennaps-vulkan-multibounce-event-smoke PROPERTIES
+    PASS_REGULAR_EXPRESSION "multibounce event Vulkan dispatch PASS"
+    FAIL_REGULAR_EXPRESSION "FAIL")
+endif()
+
+# P5-RAY-MULTIBOUNCE-GENERAL-QUEUE: bounded host/device frontier executor.
+set(VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SHADER
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/multibounce_frontier_queue.comp")
+set(VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SPV
+    "${CMAKE_CURRENT_BINARY_DIR}/multibounce_frontier_queue.comp.spv")
+if("${VIENNAPS_VULKAN_RAY_SHADER_COMPILER}" MATCHES ".*glslangValidator.*")
+  add_custom_command(OUTPUT ${VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SPV}
+    COMMAND ${VIENNAPS_VULKAN_RAY_SHADER_COMPILER} -V
+            ${VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SHADER} -o
+            ${VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SPV}
+    DEPENDS ${VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+else()
+  add_custom_command(OUTPUT ${VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SPV}
+    COMMAND ${VIENNAPS_VULKAN_RAY_SHADER_COMPILER} -o
+            ${VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SPV}
+            ${VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SHADER}
+    DEPENDS ${VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SHADER}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+endif()
+add_custom_target(viennaps-vulkan-multibounce-frontier-queue-spv
+                  DEPENDS ${VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SPV})
+add_library(viennaps_vulkan_multibounce_frontier_queue
+            multibounce_frontier_queue.cpp)
+add_dependencies(viennaps_vulkan_multibounce_frontier_queue
+                 viennaps-vulkan-multibounce-frontier-queue-spv)
+target_link_libraries(viennaps_vulkan_multibounce_frontier_queue PUBLIC
+                      viennaps_vulkan_compute_runtime
+                      viennaps_vulkan_multibounce_event Vulkan::Vulkan)
+target_include_directories(viennaps_vulkan_multibounce_frontier_queue PUBLIC
+                           "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_features(viennaps_vulkan_multibounce_frontier_queue PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps_vulkan_multibounce_frontier_queue PRIVATE /W4 /WX /EHsc)
+else()
+  target_compile_options(viennaps_vulkan_multibounce_frontier_queue PRIVATE
+                         -Wall -Wextra -Wpedantic -Werror)
+endif()
+string(REPLACE "\\" "/" VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SPV_PATH
+       "${VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SPV}")
+# P5-RAY-MULTIBOUNCE-SLICE-02: CPU ViennaRay decision producer. This target is
+# integrated only where the ViennaPS/ViennaRay interface target is available.
+if(TARGET ViennaPS)
+  add_library(viennaps_vulkan_multibounce_decision_producer
+              multibounce_decision_producer.cpp)
+  target_link_libraries(viennaps_vulkan_multibounce_decision_producer PUBLIC
+                        ViennaPS viennaps_vulkan_multibounce_event)
+  target_include_directories(viennaps_vulkan_multibounce_decision_producer
+                             PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+  target_compile_features(viennaps_vulkan_multibounce_decision_producer
+                          PRIVATE cxx_std_20)
+  if(MSVC)
+    target_compile_options(viennaps_vulkan_multibounce_decision_producer
+                           PRIVATE /W4 /EHsc)
+  else()
+    target_compile_options(viennaps_vulkan_multibounce_decision_producer
+                           PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  endif()
+  add_executable(viennaps-vulkan-multibounce-decision-producer-smoke
+                 multibounce_decision_producer_smoke.cpp)
+  target_link_libraries(viennaps-vulkan-multibounce-decision-producer-smoke
+                        PRIVATE ViennaPS
+                                viennaps_vulkan_multibounce_decision_producer)
+  target_compile_features(viennaps-vulkan-multibounce-decision-producer-smoke
+                          PRIVATE cxx_std_20)
+  target_compile_definitions(viennaps-vulkan-multibounce-decision-producer-smoke
+    PRIVATE
+      "VIENNAPS_VULKAN_MULTIBOUNCE_EVENT_SPV_PATH=\"${VIENNAPS_VULKAN_MULTIBOUNCE_EVENT_SPV_PATH}\"")
+  if(MSVC)
+    target_compile_options(viennaps-vulkan-multibounce-decision-producer-smoke
+                           PRIVATE /W4 /EHsc)
+  endif()
+  if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
+    add_test(NAME viennaps-vulkan-multibounce-decision-producer-smoke
+             COMMAND viennaps-vulkan-multibounce-decision-producer-smoke)
+    set_tests_properties(viennaps-vulkan-multibounce-decision-producer-smoke
+      PROPERTIES PASS_REGULAR_EXPRESSION "multibounce decision producer PASS"
+                 FAIL_REGULAR_EXPRESSION "FAIL")
+  endif()
+
+  # P5-RAY-MULTIBOUNCE-SLICE-03: one device hit -> CPU decision -> device
+  # application handoff. No host bounce loop or route promotion is implied.
+  add_executable(viennaps-vulkan-multibounce-hit-decision-chain-smoke
+                 multibounce_hit_decision_chain_smoke.cpp)
+  target_link_libraries(viennaps-vulkan-multibounce-hit-decision-chain-smoke
+                        PRIVATE ViennaPS
+                                viennaps_vulkan_triangle_hit_device
+                                viennaps_vulkan_multibounce_decision_producer
+                                viennaps_vulkan_multibounce_event Vulkan::Vulkan)
+  target_compile_features(viennaps-vulkan-multibounce-hit-decision-chain-smoke
+                          PRIVATE cxx_std_20)
+  target_compile_definitions(
+    viennaps-vulkan-multibounce-hit-decision-chain-smoke PRIVATE
+      "VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH}\""
+      "VIENNAPS_VULKAN_MULTIBOUNCE_EVENT_SPV_PATH=\"${VIENNAPS_VULKAN_MULTIBOUNCE_EVENT_SPV_PATH}\"")
+  if(MSVC)
+    target_compile_options(viennaps-vulkan-multibounce-hit-decision-chain-smoke
+                           PRIVATE /W4 /EHsc)
+  endif()
+  if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
+    add_test(NAME viennaps-vulkan-multibounce-hit-decision-chain-smoke
+             COMMAND viennaps-vulkan-multibounce-hit-decision-chain-smoke)
+    set_tests_properties(viennaps-vulkan-multibounce-hit-decision-chain-smoke
+      PROPERTIES PASS_REGULAR_EXPRESSION "multibounce hit decision chain PASS"
+                 FAIL_REGULAR_EXPRESSION "FAIL")
+  endif()
+
+  # P5-RAY-MULTIBOUNCE-SLICE-04: explicit two-hit unrolling only.
+  add_executable(viennaps-vulkan-multibounce-two-hit-chain-smoke
+                 multibounce_two_hit_chain_smoke.cpp)
+  target_link_libraries(viennaps-vulkan-multibounce-two-hit-chain-smoke
+                        PRIVATE ViennaPS
+                                viennaps_vulkan_triangle_hit_device
+                                viennaps_vulkan_multibounce_decision_producer
+                                viennaps_vulkan_multibounce_event Vulkan::Vulkan)
+  target_compile_features(viennaps-vulkan-multibounce-two-hit-chain-smoke
+                          PRIVATE cxx_std_20)
+  target_compile_definitions(viennaps-vulkan-multibounce-two-hit-chain-smoke
+    PRIVATE
+      "VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH}\""
+      "VIENNAPS_VULKAN_MULTIBOUNCE_EVENT_SPV_PATH=\"${VIENNAPS_VULKAN_MULTIBOUNCE_EVENT_SPV_PATH}\"")
+  if(MSVC)
+    target_compile_options(viennaps-vulkan-multibounce-two-hit-chain-smoke
+                           PRIVATE /W4 /EHsc)
+  endif()
+  if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
+    add_test(NAME viennaps-vulkan-multibounce-two-hit-chain-smoke
+             COMMAND viennaps-vulkan-multibounce-two-hit-chain-smoke)
+    set_tests_properties(viennaps-vulkan-multibounce-two-hit-chain-smoke
+      PROPERTIES PASS_REGULAR_EXPRESSION "multibounce two-hit chain PASS"
+                 FAIL_REGULAR_EXPRESSION "FAIL")
+  endif()
+
+  add_executable(viennaps-vulkan-multibounce-frontier-queue-smoke
+                 multibounce_frontier_queue_smoke.cpp)
+  add_dependencies(viennaps-vulkan-multibounce-frontier-queue-smoke
+                   viennaps-vulkan-multibounce-frontier-queue-spv
+                   viennaps-vulkan-triangle-hit-device-spv)
+  target_link_libraries(viennaps-vulkan-multibounce-frontier-queue-smoke PRIVATE
+                        ViennaPS
+                        viennaps_vulkan_multibounce_frontier_queue
+                        viennaps_vulkan_multibounce_decision_producer
+                        viennaps_vulkan_triangle_hit_device
+                        Vulkan::Vulkan)
+  target_compile_features(viennaps-vulkan-multibounce-frontier-queue-smoke PRIVATE cxx_std_20)
+  target_compile_definitions(viennaps-vulkan-multibounce-frontier-queue-smoke PRIVATE
+    "VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SPV_PATH=\"${VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SPV_PATH}\""
+    "VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH}\"")
+  if(MSVC)
+    target_compile_options(viennaps-vulkan-multibounce-frontier-queue-smoke PRIVATE /W4 /EHsc)
+  endif()
+  if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
+    add_test(NAME viennaps-vulkan-multibounce-frontier-queue-smoke
+             COMMAND viennaps-vulkan-multibounce-frontier-queue-smoke)
+    set_tests_properties(viennaps-vulkan-multibounce-frontier-queue-smoke PROPERTIES
+      PASS_REGULAR_EXPRESSION "multibounce frontier queue Vulkan dispatch PASS"
+      FAIL_REGULAR_EXPRESSION "FAIL")
+  endif()
+endif()
+
 # P5-RAY-ROUTE Process/FluxProcessStrategy injection point.  The engine library
 # owns the PIMPL translation from the device-resident DeviceRayFluxPipeline to
 # the public FluxEngine contract; the smoke validates the CPU-oracle match and
@@ -821,13 +1039,18 @@ if(TARGET ViennaPS)
                    viennaps-vulkan-triangle-bvh-hit-spv
                    viennaps-vulkan-ray-record-compaction-spv
                    viennaps-vulkan-ray-record-radix-sort-spv
-                   viennaps-vulkan-ray-surface-reduction-spv)
+                   viennaps-vulkan-ray-surface-reduction-spv
+                   viennaps-vulkan-multibounce-frontier-queue-spv)
   target_link_libraries(viennaps_vulkan_ray_flux_engine
                         PUBLIC ViennaPS viennaps_vulkan_device_ray_flux_pipeline
+                               viennaps_vulkan_multibounce_frontier_queue
+                               viennaps_vulkan_multibounce_decision_producer
                                Vulkan::Vulkan)
   target_include_directories(viennaps_vulkan_ray_flux_engine PUBLIC
                              "${CMAKE_CURRENT_SOURCE_DIR}")
   target_compile_features(viennaps_vulkan_ray_flux_engine PRIVATE cxx_std_20)
+  target_compile_definitions(viennaps_vulkan_ray_flux_engine PRIVATE
+    "VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SPV_PATH=\"${VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SPV_PATH}\"")
   if(MSVC)
     target_compile_options(viennaps_vulkan_ray_flux_engine PRIVATE /W4 /EHsc)
   else()
@@ -842,7 +1065,8 @@ if(TARGET ViennaPS)
                    viennaps-vulkan-triangle-bvh-hit-spv
                    viennaps-vulkan-ray-record-compaction-spv
                    viennaps-vulkan-ray-record-radix-sort-spv
-                   viennaps-vulkan-ray-surface-reduction-spv)
+                   viennaps-vulkan-ray-surface-reduction-spv
+                   viennaps-vulkan-multibounce-frontier-queue-spv)
   target_compile_features(viennaps-vulkan-ray-flux-process-route-smoke PRIVATE
                           cxx_std_20)
   if(MSVC)
@@ -858,7 +1082,8 @@ if(TARGET ViennaPS)
     "VIENNAPS_VULKAN_RAY_RECORD_RADIX_SCATTER_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_RADIX_SCATTER_SPV_PATH}\""
     "VIENNAPS_VULKAN_RAY_SURFACE_SEGMENTS_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_SURFACE_SEGMENTS_SPV_PATH}\""
     "VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV_PATH}\""
-    "VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH}\"")
+    "VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH}\""
+    "VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SPV_PATH=\"${VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SPV_PATH}\"")
   target_link_libraries(viennaps-vulkan-ray-flux-process-route-smoke PRIVATE
                         ViennaPS viennaps_vulkan_ray_flux_engine Vulkan::Vulkan)
   if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
@@ -868,4 +1093,196 @@ if(TARGET ViennaPS)
       PASS_REGULAR_EXPRESSION "ray-flux process route Vulkan dispatch PASS"
       FAIL_REGULAR_EXPRESSION "SKIP;FAIL")
   endif()
+
+  # P5-RAY-MULTIBOUNCE-SLICE-05: the narrowly admitted one-reflection
+  # Process route.  CPU Process/FluxProcessStrategy and callback/RNG semantics
+  # remain authoritative; this smoke only admits the bounded device hit and
+  # frontier compute stages after the CPU/Vulkan differential.
+  add_executable(viennaps-vulkan-multibounce-process-route-smoke
+                 multibounce_process_route_smoke.cpp)
+  add_dependencies(viennaps-vulkan-multibounce-process-route-smoke
+                   viennaps-vulkan-triangle-hit-device-spv
+                   viennaps-vulkan-triangle-bvh-hit-spv
+                   viennaps-vulkan-ray-record-compaction-spv
+                   viennaps-vulkan-ray-record-radix-sort-spv
+                   viennaps-vulkan-ray-surface-reduction-spv
+                   viennaps-vulkan-multibounce-frontier-queue-spv)
+  target_compile_features(viennaps-vulkan-multibounce-process-route-smoke
+                           PRIVATE cxx_std_20)
+  if(MSVC)
+    target_compile_options(viennaps-vulkan-multibounce-process-route-smoke
+                           PRIVATE /EHsc)
+  endif()
+  target_compile_definitions(viennaps-vulkan-multibounce-process-route-smoke
+                             PRIVATE
+    "VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH}\""
+    "VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV_PATH}\""
+    "VIENNAPS_VULKAN_REDUCTION_SCAN_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_REDUCTION_SCAN_SPV_PATH}\""
+    "VIENNAPS_VULKAN_RAY_RECORD_RADIX_HISTOGRAM_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_RADIX_HISTOGRAM_SPV_PATH}\""
+    "VIENNAPS_VULKAN_RAY_RECORD_RADIX_PREFIX_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_RADIX_PREFIX_SPV_PATH}\""
+    "VIENNAPS_VULKAN_RAY_RECORD_RADIX_SCATTER_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_RADIX_SCATTER_SPV_PATH}\""
+    "VIENNAPS_VULKAN_RAY_SURFACE_SEGMENTS_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_SURFACE_SEGMENTS_SPV_PATH}\""
+    "VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV_PATH}\""
+    "VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH}\""
+    "VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SPV_PATH=\"${VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SPV_PATH}\"")
+  target_link_libraries(viennaps-vulkan-multibounce-process-route-smoke
+                        PRIVATE ViennaPS viennaps_vulkan_ray_flux_engine
+                                Vulkan::Vulkan)
+  if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
+    add_test(NAME viennaps-vulkan-multibounce-process-route-smoke
+             COMMAND viennaps-vulkan-multibounce-process-route-smoke)
+    set_tests_properties(viennaps-vulkan-multibounce-process-route-smoke
+                         PROPERTIES
+                           PASS_REGULAR_EXPRESSION
+                           "multibounce Process route Vulkan dispatch PASS"
+                           FAIL_REGULAR_EXPRESSION "SKIP;FAIL")
+  endif()
+
+  # P5-MODEL-MATRIX row contract: every inventory row outside the strict
+  # SingleParticleProcess<float, 2> slice must remain CPU fallback in AUTO and
+  # fail closed for an explicit MANUAL Vulkan request.
+  add_executable(viennaps-vulkan-model-matrix-fallback-smoke
+                 model_matrix_fallback_smoke.cpp)
+  target_compile_features(viennaps-vulkan-model-matrix-fallback-smoke PRIVATE
+                          cxx_std_20)
+  if(MSVC)
+    target_compile_options(viennaps-vulkan-model-matrix-fallback-smoke PRIVATE
+                           /EHsc)
+  endif()
+  target_link_libraries(viennaps-vulkan-model-matrix-fallback-smoke PRIVATE
+                        ViennaPS viennaps_vulkan_ray_flux_engine Vulkan::Vulkan)
+  if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
+    add_test(NAME viennaps-vulkan-model-matrix-fallback-smoke
+             COMMAND viennaps-vulkan-model-matrix-fallback-smoke)
+    set_tests_properties(viennaps-vulkan-model-matrix-fallback-smoke PROPERTIES
+      PASS_REGULAR_EXPRESSION "model-matrix fallback rows PASS"
+      FAIL_REGULAR_EXPRESSION "FAIL")
+  endif()
+
+  add_executable(viennaps-vulkan-model-matrix-row01-conservation-smoke
+                 model_matrix_row01_conservation_smoke.cpp)
+  add_dependencies(viennaps-vulkan-model-matrix-row01-conservation-smoke
+                   viennaps-vulkan-triangle-hit-device-spv
+                   viennaps-vulkan-triangle-bvh-hit-spv
+                   viennaps-vulkan-ray-record-compaction-spv
+                   viennaps-vulkan-ray-record-radix-sort-spv
+                   viennaps-vulkan-ray-surface-reduction-spv)
+  target_compile_features(viennaps-vulkan-model-matrix-row01-conservation-smoke
+                          PRIVATE cxx_std_20)
+  if(MSVC)
+    target_compile_options(viennaps-vulkan-model-matrix-row01-conservation-smoke
+                           PRIVATE /EHsc)
+  endif()
+  target_compile_definitions(viennaps-vulkan-model-matrix-row01-conservation-smoke
+                             PRIVATE
+      "VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH}\""
+      "VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV_PATH}\""
+      "VIENNAPS_VULKAN_REDUCTION_SCAN_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_REDUCTION_SCAN_SPV_PATH}\""
+      "VIENNAPS_VULKAN_RAY_RECORD_RADIX_HISTOGRAM_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_RADIX_HISTOGRAM_SPV_PATH}\""
+      "VIENNAPS_VULKAN_RAY_RECORD_RADIX_PREFIX_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_RADIX_PREFIX_SPV_PATH}\""
+      "VIENNAPS_VULKAN_RAY_RECORD_RADIX_SCATTER_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_RADIX_SCATTER_SPV_PATH}\""
+      "VIENNAPS_VULKAN_RAY_SURFACE_SEGMENTS_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_SURFACE_SEGMENTS_SPV_PATH}\""
+      "VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV_PATH}\""
+      "VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH}\"")
+  target_link_libraries(viennaps-vulkan-model-matrix-row01-conservation-smoke
+                        PRIVATE ViennaPS viennaps_vulkan_ray_flux_engine
+                                Vulkan::Vulkan)
+  if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
+    add_test(NAME viennaps-vulkan-model-matrix-row01-conservation-smoke
+             COMMAND viennaps-vulkan-model-matrix-row01-conservation-smoke)
+    set_tests_properties(viennaps-vulkan-model-matrix-row01-conservation-smoke
+                         PROPERTIES
+                           PASS_REGULAR_EXPRESSION "model-matrix row01 conservation PASS"
+                           FAIL_REGULAR_EXPRESSION "FAIL;RED")
+  endif()
+
+  # P5-SURFACE-INTEGRATION five-stage shared deployment session smoke.  It needs
+  # the level-set, surface, and ray SPIR-V paths in scope, so it is declared here
+  # where all targets have already been defined.
+  add_executable(viennaps-vulkan-levelset-surface-ray-deployment-smoke
+                 ../levelset/levelset_surface_ray_deployment_smoke.cpp)
+  add_dependencies(viennaps-vulkan-levelset-surface-ray-deployment-smoke
+                   viennaps-vulkan-levelset-update-spv
+                   viennaps-vulkan-hrle-classification-spv
+                   viennaps-vulkan-reduction-scan-smoke-spv
+                   viennaps-vulkan-hrle-compaction-spv
+                   viennaps-vulkan-coverage-delta-metric-spv
+                   viennaps-vulkan-graph-diffusion-spv
+                   viennaps-vulkan-neutral-transport-surface-spv
+                   viennaps-vulkan-triangle-hit-device-spv
+                   viennaps-vulkan-triangle-bvh-hit-spv
+                   viennaps-vulkan-ray-record-compaction-spv
+                   viennaps-vulkan-ray-record-radix-sort-spv
+                   viennaps-vulkan-ray-surface-reduction-spv)
+  if(TARGET viennaps-vulkan-ray-record-radix-sort-spv-validated)
+    add_dependencies(viennaps-vulkan-levelset-surface-ray-deployment-smoke
+                     viennaps-vulkan-ray-record-radix-sort-spv-validated)
+  endif()
+  target_compile_features(viennaps-vulkan-levelset-surface-ray-deployment-smoke
+                          PRIVATE cxx_std_20)
+  if(MSVC)
+    target_compile_options(viennaps-vulkan-levelset-surface-ray-deployment-smoke
+                           PRIVATE /EHsc)
+  endif()
+  target_compile_definitions(
+    viennaps-vulkan-levelset-surface-ray-deployment-smoke
+    PRIVATE
+      "VIENNAPS_LEVELSET_UPDATE_SPV_PATH=\"$<TARGET_PROPERTY:viennaps_vulkan_levelset_update,VIENNAPS_LEVELSET_UPDATE_SPV>\""
+      "VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH=\"$<TARGET_PROPERTY:viennaps_vulkan_levelset_update,VIENNAPS_HRLE_CLASSIFICATION_SPV>\""
+      "VIENNAPS_REDUCTION_SCAN_SPV_PATH=\"$<TARGET_PROPERTY:viennaps_vulkan_reduction_scan_primitives,VIENNAPS_REDUCTION_SCAN_SPV>\""
+      "VIENNAPS_HRLE_ACTION_FLAGS_SPV_PATH=\"$<TARGET_PROPERTY:viennaps_vulkan_hrle_compaction,VIENNAPS_HRLE_ACTION_FLAGS_SPV>\""
+      "VIENNAPS_HRLE_COMPACT_SPV_PATH=\"$<TARGET_PROPERTY:viennaps_vulkan_hrle_compaction,VIENNAPS_HRLE_COMPACT_SPV>\""
+      "VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV_PATH=\"$<TARGET_PROPERTY:viennaps_vulkan_coverage_delta_metric,VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV>\""
+      "VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH=\"$<TARGET_PROPERTY:viennaps_vulkan_graph_diffusion,VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV>\""
+      "VIENNAPS_VULKAN_NEUTRAL_TRANSPORT_SPV_PATH=\"$<TARGET_PROPERTY:viennaps_vulkan_surface,VIENNAPS_VULKAN_NEUTRAL_TRANSPORT_SPV>\""
+      "VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH}\""
+      "VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV_PATH}\""
+      "VIENNAPS_VULKAN_REDUCTION_SCAN_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_REDUCTION_SCAN_SPV_PATH}\""
+      "VIENNAPS_VULKAN_RAY_RECORD_RADIX_HISTOGRAM_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_RADIX_HISTOGRAM_SPV_PATH}\""
+      "VIENNAPS_VULKAN_RAY_RECORD_RADIX_PREFIX_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_RADIX_PREFIX_SPV_PATH}\""
+      "VIENNAPS_VULKAN_RAY_RECORD_RADIX_SCATTER_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_RADIX_SCATTER_SPV_PATH}\""
+      "VIENNAPS_VULKAN_RAY_SURFACE_SEGMENTS_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_SURFACE_SEGMENTS_SPV_PATH}\""
+      "VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV_PATH}\""
+      "VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH}\"")
+  target_link_libraries(
+    viennaps-vulkan-levelset-surface-ray-deployment-smoke
+    PRIVATE ViennaPS
+            viennaps_vulkan_ray_flux_engine
+            viennaps_vulkan_levelset_update
+            viennaps_vulkan_hrle_compaction
+            viennaps_vulkan_surface_diffusion
+            viennaps_vulkan_coverage_delta_metric
+            viennaps_vulkan_surface
+            Vulkan::Vulkan)
+  if(WIN32)
+    find_package(TBB CONFIG REQUIRED COMPONENTS tbb)
+    add_custom_command(
+      TARGET viennaps-vulkan-levelset-surface-ray-deployment-smoke
+      POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              $<TARGET_RUNTIME_DLLS:viennaps-vulkan-levelset-surface-ray-deployment-smoke>
+              $<TARGET_FILE:TBB::tbb>
+              $<TARGET_FILE_DIR:viennaps-vulkan-levelset-surface-ray-deployment-smoke>
+      COMMAND_EXPAND_LISTS)
+  endif()
+  if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
+    add_test(NAME viennaps-vulkan-levelset-surface-ray-deployment-smoke
+             COMMAND viennaps-vulkan-levelset-surface-ray-deployment-smoke)
+    set_tests_properties(viennaps-vulkan-levelset-surface-ray-deployment-smoke
+                         PROPERTIES
+                           PASS_REGULAR_EXPRESSION "deployment session/fallback checks PASS"
+                           FAIL_REGULAR_EXPRESSION "SKIP;FAIL")
+  endif()
+
+  # The surface binding is configured before this ray subdirectory. Once the
+  # engine exists, provide its constructor definition to the explicitly
+  # instantiated binding without making CPU-only surface builds depend on ray.
+  if(TARGET viennaps_vulkan_surface AND
+     TARGET viennaps_vulkan_ray_flux_engine)
+    target_link_libraries(viennaps_vulkan_surface
+                          PUBLIC viennaps_vulkan_ray_flux_engine)
+    target_compile_definitions(viennaps_vulkan_surface PRIVATE
+                               VIENNAPS_VULKAN_RAY_FLUX_ENGINE_AVAILABLE)
+  endif()
+
 endif()

@@ -1,6 +1,22 @@
 // Copyright 2026 ViennaPS
 // SPDX-License-Identifier: MIT
 
+//
+// Frozen semantic mirror of viennals::Advect<T,D>::rebuildLS() as implemented
+// in ViennaLS 5.8.5 with the levelset-update-v2 patch.
+//
+// This header is NOT a direct call into the upstream private rebuild body.
+// It reimplements the active/inactive point classification, sign-crossing
+// test, defined-value clamping, and Manhattan-distance fallback that
+// rebuildLS performs, in FP32, so that the same logic can run on CPU (as an
+// oracle) and be dispatched to Vulkan compute.
+//
+// Any upstream change to rebuildLS must be reviewed against this mirror and
+// the hrleRebuildCpuFixture differential test must be re-baselined.
+//
+// Card: R1-F1 / P4-HRLE-REBUILD-MIRROR
+//
+
 #pragma once
 
 #include <array>

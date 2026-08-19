@@ -12,6 +12,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace viennaps::vulkan::runtime {
 class DeploymentComputeContext;
@@ -29,6 +30,10 @@ struct VulkanRayFluxSpirvPaths {
   std::string surfaceSegments;
   std::string surfaceReduce;
   std::string triangleBvh; // may be empty -> brute-force triangle hit
+  // Optional bounded multi-bounce frontier shader.  An empty path keeps the
+  // existing single-bounce route unchanged and forces CPU fallback for any
+  // reflection-enabled request.
+  std::string multibounceFrontierQueue;
 };
 
 /// Vulkan ray-flux engine for the Process/FluxProcessStrategy route.
@@ -37,9 +42,9 @@ struct VulkanRayFluxSpirvPaths {
 /// DeviceRayFluxPipeline.  Otherwise it degrades to the CPU triangle engine
 /// (AUTO mode) or fails closed (manual Vulkan without a valid profile).
 ///
-/// This slice supports single-bounce, no-reflection transport only.  Models
-/// that require reflection, roulette, or multi-bounce physics must not select
-/// this engine yet; those contracts belong to the later P5-RAY-PHYSICS card.
+/// The default route remains the strict single-bounce slice.  An explicitly
+/// supplied frontier shader admits only the bounded one-reflection
+/// CPU-decision route; generic model/multi-bounce semantics remain CPU-owned.
 template <typename NumericType, int D>
 class VulkanRayFluxEngine final : public FluxEngine<NumericType, D> {
 public:
@@ -55,6 +60,13 @@ public:
 
   VulkanRayFluxEngine(const VulkanRayFluxEngine &) = delete;
   VulkanRayFluxEngine &operator=(const VulkanRayFluxEngine &) = delete;
+
+  /// Generic device-resident multi-bounce remains unavailable.  The only
+  /// admitted extension is the bounded CPU-decision frontier route selected by
+  /// an explicit shader path and a separately tested predicate.
+  [[nodiscard]] static constexpr std::string_view devicePhysicsGap() {
+    return "generic device multi-bounce physics is unavailable; only the bounded CPU-decision frontier route is admitted";
+  }
 
   ProcessResult checkInput(ProcessContext<NumericType, D> &context) override;
   ProcessResult initialize(ProcessContext<NumericType, D> &context) override;

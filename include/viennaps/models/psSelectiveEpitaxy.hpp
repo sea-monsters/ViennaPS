@@ -3,6 +3,14 @@
 #include "../materials/psMaterialMap.hpp"
 #include "../materials/psMaterialValueMap.hpp"
 #include "../process/psProcessModel.hpp"
+#include "psSelectiveEpitaxyVelocityExecutor.hpp"
+
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace viennaps {
 
@@ -21,15 +29,23 @@ class EpitaxyVelocityField : public VelocityField<NumericType, D> {
   const Vec3D<NumericType> nvFactors;
 
   const MaterialValueMap<NumericType> &materialRates;
+  std::array<NumericType, 3> normalFactorsInput{};
+  SelectiveEpitaxyVelocityExecutor<NumericType> executor_{};
 
 public:
   EpitaxyVelocityField(const MaterialValueMap<NumericType> &materials,
                        NumericType r111, NumericType r100,
                        const Vec3D<NumericType> &rates)
       : R111(r111), R100(r100), factor((R100 - R111) / (high - low)),
-        materialRates(materials), nvFactors(rates) {}
+        materialRates(materials), nvFactors(rates),
+        normalFactorsInput{rates[0], rates[1], rates[2]} {}
 
-  NumericType getScalarVelocity(const Vec3D<NumericType> &, int material,
+  void setExecutor(SelectiveEpitaxyVelocityExecutor<NumericType> executor) {
+    executor_ = std::move(executor);
+  }
+
+  NumericType getScalarVelocity(const Vec3D<NumericType> &coordinate,
+                                int material,
                                 const Vec3D<NumericType> &nv,
                                 unsigned long) override {
 
@@ -37,7 +53,42 @@ public:
     if (rate > 0) {
       double vel = MaxElement(Abs(nvFactors * nv));
       vel = (vel - low) * factor + R111;
-      return std::min(-vel * rate, 0.0);
+      const NumericType cpuVelocity = static_cast<NumericType>(
+          std::min(-vel * rate, 0.0));
+      if (!executor_ || !std::isfinite(static_cast<double>(cpuVelocity)))
+        return cpuVelocity;
+
+      const std::array<NumericType, 3> coordinateValue{coordinate[0],
+                                                        coordinate[1],
+                                                        coordinate[2]};
+      const std::array<NumericType, 3> normalValue{nv[0], nv[1], nv[2]};
+      const std::int32_t materialId = static_cast<std::int32_t>(
+          Material::fromLegacyId(material).legacyId());
+      std::vector<SelectiveEpitaxyMaterialRate<NumericType>> rateTable;
+      for (const auto entry : materialRates)
+        rateTable.push_back({
+            static_cast<std::int32_t>(entry.material.legacyId()), entry.value});
+      const std::array<NumericType, 1> cpuOracle{cpuVelocity};
+      std::array<NumericType, 1> output{cpuVelocity};
+      SelectiveEpitaxyVelocityParameters<NumericType> parameters;
+      parameters.normalFactors = normalFactorsInput;
+      parameters.rate111 = static_cast<NumericType>(R111);
+      parameters.rate100 = static_cast<NumericType>(R100);
+      parameters.materialRates = rateTable;
+      SelectiveEpitaxyVelocityWork<NumericType> work;
+      work.coordinates = std::span<const std::array<NumericType, 3>>(
+          &coordinateValue, 1U);
+      work.normals =
+          std::span<const std::array<NumericType, 3>>(&normalValue, 1U);
+      work.materialIds = std::span<const std::int32_t>(&materialId, 1U);
+      work.cpuOracle = std::span<const NumericType>(cpuOracle.data(), 1U);
+      work.output = std::span<NumericType>(output.data(), 1U);
+      work.parameters = parameters;
+      std::string error;
+      if (executor_(work, error) && work.complete && work.writtenCount == 1U &&
+          std::isfinite(static_cast<double>(output[0])))
+        return output[0];
+      return cpuVelocity;
     }
 
     // not an epitaxy material
@@ -50,6 +101,8 @@ public:
 template <typename NumericType, int D>
 class SelectiveEpitaxy : public ProcessModelCPU<NumericType, D> {
 public:
+  using VelocityExecutor = SelectiveEpitaxyVelocityExecutor<NumericType>;
+
   SelectiveEpitaxy(NumericType rate111 = 0.5, NumericType rate100 = 1.)
       : SelectiveEpitaxy(std::vector<std::pair<Material, NumericType>>{},
                          rate111, rate100) {}
@@ -79,6 +132,22 @@ public:
 
   void setMaterialRate(Material material, NumericType rate) {
     materialRates_.set(material, rate);
+  }
+
+  /// Installs an optional numeric executor. CPU velocity, domain transforms,
+  /// stencil ownership and Process ordering remain authoritative.
+  void setVelocityExecutor(VelocityExecutor executor) {
+    velocityExecutor_ = std::move(executor);
+    auto field = std::dynamic_pointer_cast<
+        impl::EpitaxyVelocityField<NumericType, D>>(this->getVelocityField());
+    if (field)
+      field->setExecutor(velocityExecutor_);
+  }
+
+  void clearVelocityExecutor() { setVelocityExecutor({}); }
+
+  [[nodiscard]] bool hasVelocityExecutor() const {
+    return static_cast<bool>(velocityExecutor_);
   }
 
   void initialize(SmartPointer<Domain<NumericType, D>> domain,
@@ -143,6 +212,7 @@ public:
 private:
   MaterialValueMap<NumericType> materialRates_;
   Vec3D<NumericType> nvFactors_;
+  VelocityExecutor velocityExecutor_{};
   SmartPointer<Domain<NumericType, D>> domainCopy;
   bool firstInit = true;
 
@@ -154,6 +224,7 @@ private:
     auto velField =
         SmartPointer<impl::EpitaxyVelocityField<NumericType, D>>::New(
             materialRates_, rate111, rate100, nvFactors_);
+    velField->setExecutor(velocityExecutor_);
 
     this->setSurfaceModel(surfModel);
     this->setVelocityField(velField);

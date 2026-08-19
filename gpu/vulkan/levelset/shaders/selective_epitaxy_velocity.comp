@@ -1,0 +1,65 @@
+#version 450
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer CoordinateBuffer {
+  vec4 values[];
+} coordinates;
+
+layout(set = 0, binding = 1, std430) readonly buffer NormalBuffer {
+  vec4 values[];
+} normals;
+
+layout(set = 0, binding = 2, std430) readonly buffer MaterialBuffer {
+  int values[];
+} materialIds;
+
+layout(set = 0, binding = 3, std430) buffer VelocityBuffer {
+  float values[];
+} velocities;
+
+layout(set = 0, binding = 4, std430) readonly buffer RateIdBuffer {
+  int values[];
+} rateIds;
+
+layout(set = 0, binding = 5, std430) readonly buffer RateValueBuffer {
+  float values[];
+} rateValues;
+
+layout(push_constant) uniform Params {
+  vec4 normalFactors;
+  float rate111;
+  float rate100;
+  uint elementCount;
+  uint materialRateCount;
+} params;
+
+float materialRate(const int material) {
+  for (uint index = 0u; index < params.materialRateCount; ++index) {
+    if (rateIds.values[index] == material) {
+      return rateValues.values[index];
+    }
+  }
+  return 0.0;
+}
+
+void main() {
+  const uint index = gl_GlobalInvocationID.x;
+  if (index >= params.elementCount) {
+    return;
+  }
+
+  const vec4 coordinate = coordinates.values[index];
+  precise float result = coordinate.w * 0.0;
+  const float rate = materialRate(materialIds.values[index]);
+  if (rate > 0.0) {
+    const vec3 normal = normals.values[index].xyz;
+    const vec3 weighted = abs(params.normalFactors.xyz * normal);
+    const float maximum = max(weighted.x, max(weighted.y, weighted.z));
+    const float low = 0.7071067811865476;
+    const float factor = (params.rate100 - params.rate111) / (1.0 - low);
+    const float velocity = (maximum - low) * factor + params.rate111;
+    result = min(-velocity * rate, 0.0);
+  }
+  velocities.values[index] = result;
+}

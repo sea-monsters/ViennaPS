@@ -166,7 +166,8 @@ if(VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE OR VIENNAPS_BUILD_VULKAN_PROBE)
   endif()
 endif()
 
-if(VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE)
+if(VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE OR
+   VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE)
   if(VIENNAPS_VULKAN_SDK_AVAILABLE)
     add_subdirectory(surface)
   else()
@@ -412,4 +413,134 @@ if(VIENNAPS_BUILD_VULKAN_PROBE AND TARGET viennaps-device-probe)
   else()
     message(STATUS "[ViennaPS strict FP32] No glslc/glslangValidator; strict smoke disabled.")
   endif()
+endif()
+
+# The normal build remains source-tree oriented.  A release-facing Vulkan
+# payload is opt-in so CPU/no-SDK consumers keep the existing install/export
+# contract.  The payload target materializes every shader target available in
+# the configured SDK, then installs both the original GLSL and generated SPIR-V
+# alongside the reusable runtime library exported by runtime/CMakeLists.txt.
+if(VIENNAPS_INSTALL_VULKAN_PAYLOAD)
+  if(NOT VIENNAPS_VULKAN_SDK_AVAILABLE)
+    message(FATAL_ERROR
+            "VIENNAPS_INSTALL_VULKAN_PAYLOAD requires a Vulkan SDK")
+  endif()
+
+  include(GNUInstallDirs)
+  set(_VIENNAPS_VULKAN_PAYLOAD_SPV_TARGETS
+      viennaps-compute-smoke-spv
+      viennaps-strict-fp32-spv
+      viennaps-runtime-compute-smoke-spv
+      viennaps-vulkan-primitives-smoke-spv
+      viennaps-vulkan-elementwise-smoke-spv
+      viennaps-vulkan-rng-smoke-spv
+      viennaps-vulkan-gather-histogram-spv
+      viennaps-vulkan-reduction-scan-spv
+      viennaps-vulkan-radix-sort-spv
+      viennaps-vulkan-levelset-update-spv
+      viennaps-vulkan-wetetch-velocity-spv
+      viennaps-vulkan-selective-epitaxy-velocity-spv
+      viennaps-vulkan-teos-velocity-spv
+      viennaps-vulkan-hrle-classification-spv
+      viennaps-vulkan-hrle-compaction-spv
+      viennaps-vulkan-coverage-delta-metric-spv
+      viennaps-vulkan-graph-diffusion-spv
+      viennaps-vulkan-neutral-transport-surface-spv
+      viennaps-vulkan-triangle-hit-spv
+      viennaps-vulkan-ray-reducer-spv
+      viennaps-vulkan-ray-hit-batch-spv
+      viennaps-vulkan-ray-flux-fused-spv
+      viennaps-vulkan-triangle-hit-device-spv
+      viennaps-vulkan-ray-record-compaction-spv
+      viennaps-vulkan-ray-record-sort-spv
+      viennaps-vulkan-ray-record-radix-sort-spv
+      viennaps-vulkan-ray-record-radix-sort-spv-validated
+      viennaps-vulkan-ray-surface-reduction-spv
+      viennaps-vulkan-triangle-bvh-hit-spv
+      viennaps-vulkan-triangle-bvh-refit-spv
+      viennaps-vulkan-multibounce-event-spv
+      viennaps-vulkan-multibounce-frontier-queue-spv)
+
+  set(_VIENNAPS_VULKAN_PAYLOAD_ACTIVE_TARGETS)
+  foreach(_VIENNAPS_PAYLOAD_TARGET IN LISTS
+          _VIENNAPS_VULKAN_PAYLOAD_SPV_TARGETS)
+    if(TARGET ${_VIENNAPS_PAYLOAD_TARGET})
+      list(APPEND _VIENNAPS_VULKAN_PAYLOAD_ACTIVE_TARGETS
+           ${_VIENNAPS_PAYLOAD_TARGET})
+    endif()
+  endforeach()
+
+  if(NOT _VIENNAPS_VULKAN_PAYLOAD_ACTIVE_TARGETS)
+    message(FATAL_ERROR
+            "Vulkan payload requested but no SPIR-V target was configured")
+  endif()
+
+  add_custom_target(viennaps-vulkan-package-payload)
+  if(TARGET viennaps_vulkan_compute_runtime)
+    add_dependencies(viennaps-vulkan-package-payload
+                     viennaps_vulkan_compute_runtime)
+  endif()
+  add_dependencies(viennaps-vulkan-package-payload
+                   ${_VIENNAPS_VULKAN_PAYLOAD_ACTIVE_TARGETS})
+
+  set(_VIENNAPS_VULKAN_PAYLOAD_ROOT
+      "${CMAKE_INSTALL_DATADIR}/ViennaPS-${PROJECT_VERSION}/vulkan")
+  install(
+    DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/"
+    DESTINATION "${_VIENNAPS_VULKAN_PAYLOAD_ROOT}/spv"
+    FILES_MATCHING
+    PATTERN "*.spv"
+  )
+  install(
+    DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/shaders/"
+    DESTINATION "${_VIENNAPS_VULKAN_PAYLOAD_ROOT}/shaders"
+    FILES_MATCHING
+    PATTERN "*.comp"
+  )
+  install(
+    DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/strict_fp32/"
+    DESTINATION "${_VIENNAPS_VULKAN_PAYLOAD_ROOT}/shaders/strict_fp32"
+    FILES_MATCHING
+    PATTERN "*.comp"
+  )
+  install(
+    DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/runtime/shaders/"
+    DESTINATION "${_VIENNAPS_VULKAN_PAYLOAD_ROOT}/shaders/runtime"
+    FILES_MATCHING
+    PATTERN "*.comp"
+  )
+  install(
+    DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/primitives/shaders/"
+    DESTINATION "${_VIENNAPS_VULKAN_PAYLOAD_ROOT}/shaders/primitives"
+    FILES_MATCHING
+    PATTERN "*.comp"
+  )
+  install(
+    DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/levelset/shaders/"
+    DESTINATION "${_VIENNAPS_VULKAN_PAYLOAD_ROOT}/shaders/levelset"
+    FILES_MATCHING
+    PATTERN "*.comp"
+  )
+  install(
+    DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/surface/shaders/"
+    DESTINATION "${_VIENNAPS_VULKAN_PAYLOAD_ROOT}/shaders/surface"
+    FILES_MATCHING
+    PATTERN "*.comp"
+  )
+  install(
+    DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/ray/shaders/"
+    DESTINATION "${_VIENNAPS_VULKAN_PAYLOAD_ROOT}/shaders/ray"
+    FILES_MATCHING
+    PATTERN "*.comp"
+  )
+
+  set(_VIENNAPS_VULKAN_PAYLOAD_MANIFEST
+      "${CMAKE_CURRENT_BINARY_DIR}/vulkan-payload-manifest.json")
+  file(GENERATE
+       OUTPUT "${_VIENNAPS_VULKAN_PAYLOAD_MANIFEST}"
+       CONTENT "{\n  \"schema\": 1,\n  \"version\": \"${PROJECT_VERSION}\",\n  \"shaderRoot\": \"${_VIENNAPS_VULKAN_PAYLOAD_ROOT}/shaders\",\n  \"spirvRoot\": \"${_VIENNAPS_VULKAN_PAYLOAD_ROOT}/spv\",\n  \"runtimeTarget\": \"ViennaTools::viennaps_vulkan_compute_runtime\"\n}\n")
+  install(
+    FILES "${_VIENNAPS_VULKAN_PAYLOAD_MANIFEST}"
+    DESTINATION "${_VIENNAPS_VULKAN_PAYLOAD_ROOT}"
+  )
 endif()

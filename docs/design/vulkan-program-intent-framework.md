@@ -621,14 +621,14 @@ probeDevices / viennaps-device-probe
 | 表面 coverage/diffusion/neutral 缝 | **合规** | 编排仍在 `CoverageManager` / `FluxProcessStrategy` / SurfaceModel；空 executor = 原 CPU；`psSurfaceDiffusion.hpp` 与原版一致 |
 | `psCPU*Engine` | **合规** | 与原版一致，仍为生产通量默认 |
 | Level Set 更新注入 | **基本合规** | 经 `viennals::Advect` executor 缝；空 executor = 原 Advect |
-| HRLE rebuild 分类/压缩/重建端口 | **部分偏离** | `include/viennaps/levelset/psHrleRebuild*.hpp` 为语义移植的 CPU+GPU 契约，非直接调用 Advect 私有 rebuild 体；有 bit-exact 球体 oracle，但存在与上游 ViennaLS 漂移风险 |
+| HRLE rebuild 分类/压缩/重建端口 | **已纠偏** | `include/viennaps/levelset/psHrleRebuild*.hpp` 为冻结语义镜像，非直接调用 Advect 私有 rebuild 体；`hrleRebuildCpuFixture` 经实际 rebuild callback 执行本地镜像，断言 callback dispatch，并以 canonical HRLE / PointData 位模式与上游 CPU 差分，仍需随上游 ViennaLS 漂移复核 |
 | P4 ray 设备链 | **部分（可接受）** | 独立 `runCpu`/`intersectCpu` 仅作 kernel 差分；生产通量仍走 `psCPU*Engine`（Process 路由属 P5） |
-| **P3K 平流进度守卫** | **偏离（共享 CPU 路径）** | `psAdvectionHandler::performAdvection` 相对原版增加了非有限/负步长失败、零进度 `EARLY_TERMINATION`、`NumericType::max` 处理及 executor 错误传播；**即使无 Vulkan executor 也改变原版早退/成功语义** |
+| **P3K 平流进度守卫** | **已纠偏** | `psAdvectionHandler::performAdvection` 按 executor 活性分路：空 executor 恢复原版 4.6.2 语义及 ViennaLS update/rebuild 序列；有 executor 时保留 fail-closed，时间错误同 update/rebuild 错误回滚完整多步 snapshot；回归测试拆分 legacy / executor-active 路径 |
 
-**最小纠偏建议（账本 R1-F1…F3；不阻塞当前 P5，但应入账）：**
+**最小纠偏建议（账本 R1-F1…F3；R1-F1/R1-F2 已关闭，R1-F3 保留建议）：**
 
-1. 将 `psHrleRebuild*` 标为 ViennaLS rebuild 的冻结镜像；增加 Advect-CPU vs 该 oracle 的固定夹具 CI。
-2. 明确 P3K：若确认为产品级 fail-closed 改进，在开发报告/状态看板单列“有意偏离原版”并保留回归；否则改为仅设备路径/可选开关，恢复共享 CPU 路径与原版一致。
+1. ~~将 `psHrleRebuild*` 标为 ViennaLS rebuild 的冻结镜像；增加 Advect-CPU vs oracle 固定夹具差分 CI。~~（已完成：冻结镜像标签 + `hrleRebuildCpuFixture`；fixture 实际经过 callback 执行本地镜像并断言 dispatch，CI 接入仍属后续工程化动作）
+2. ~~明确 P3K：若确认为产品级 fail-closed 改进，在开发报告/状态看板单列“有意偏离原版”并保留回归；否则改为仅设备路径/可选开关，恢复共享 CPU 路径与原版一致。~~（已完成：executor 活性分路）
 3. P5+ 光线 Process 路由优先调用 ViennaRay / `CPUTriangleEngine` 主机辅助函数，避免长期维护归一化副本。
 
 详细条目、P3K 对照表与不做宣称见第一轮审计账本。

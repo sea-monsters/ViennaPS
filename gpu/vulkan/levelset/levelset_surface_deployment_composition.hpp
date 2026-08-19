@@ -94,6 +94,19 @@ public:
       return finishFailure(process, selection, std::move(result), message);
     }
 
+    if (result.surface.rayTracingVulkan) {
+      const bool allowCpuFallback =
+          selection.selectionMode != compute::SelectionMode::MANUAL;
+      auto engine = surface_.makeRayFluxEngine(allowCpuFallback);
+      if (engine == nullptr) {
+        const std::string message =
+            "ray-tracing stage resolved to Vulkan but the ray-flux engine "
+            "could not be created from the shared deployment context";
+        return finishFailure(process, selection, std::move(result), message);
+      }
+      process.setFluxEngineOverride(std::move(engine));
+    }
+
     result.ok = true;
     result.prepared = true;
     result.usingVulkan = true;
@@ -101,6 +114,7 @@ public:
   }
 
   void clear(ProcessType &process) {
+    process.clearFluxEngineOverride();
     levelSet_.clear(process);
     surface_.clear(process);
   }
@@ -113,6 +127,18 @@ public:
   [[nodiscard]] typename SurfaceBinding::NeutralSurfaceModel::VelocityExecutor
   neutralVelocityExecutor() const {
     return surface_.neutralVelocityExecutor();
+  }
+
+  /// Reinstalls a fresh ray engine from the existing deployment session.
+  /// Process consumes a flux-engine override after each calculateFlux/apply;
+  /// rebuilding it here preserves the shared callback/session lifetime.
+  [[nodiscard]] bool installRayFluxEngine(ProcessType &process,
+                                           const bool allowCpuFallback) {
+    auto engine = surface_.makeRayFluxEngine(allowCpuFallback);
+    if (engine == nullptr)
+      return false;
+    process.setFluxEngineOverride(std::move(engine));
+    return true;
   }
 
 private:

@@ -70,9 +70,31 @@ add_library(viennaps_vulkan_compute_runtime
 )
 target_include_directories(viennaps_vulkan_compute_runtime
   PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../../include/viennaps
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../../../include/viennaps>
 )
+if(VIENNAPS_INSTALL_VULKAN_PAYLOAD)
+  set(_VIENNAPS_VULKAN_RUNTIME_INSTALL_INCLUDE
+      "include/viennaps-${PROJECT_VERSION}/vulkan/runtime")
+  target_include_directories(viennaps_vulkan_compute_runtime
+    PUBLIC
+      $<INSTALL_INTERFACE:${_VIENNAPS_VULKAN_RUNTIME_INSTALL_INCLUDE}>
+      $<INSTALL_INTERFACE:include/viennaps-${PROJECT_VERSION}>
+  )
+  install(
+    TARGETS viennaps_vulkan_compute_runtime
+    EXPORT ViennaPSTargets
+    LIBRARY DESTINATION lib
+    ARCHIVE DESTINATION lib
+    RUNTIME DESTINATION bin
+  )
+  install(
+    DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/"
+    DESTINATION "${_VIENNAPS_VULKAN_RUNTIME_INSTALL_INCLUDE}"
+    FILES_MATCHING
+    PATTERN "*.hpp"
+  )
+endif()
 target_link_libraries(viennaps_vulkan_compute_runtime PUBLIC Vulkan::Vulkan)
 target_compile_features(viennaps_vulkan_compute_runtime PRIVATE cxx_std_20)
 if(MSVC)

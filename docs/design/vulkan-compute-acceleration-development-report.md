@@ -917,6 +917,15 @@ OMP=1 运行都在 coverage 初始化阶段停止进展，Hostx64 两次均由 1
 因此被拒绝。reference 前置未满足，未运行配对与 OMP 2/4/8；`P5-N2`、Surface
 RED/GREEN 与模型聚合继续锁定。验证通道释放后只允许依次推进 `P5-K0`、`P5-D0`。
 
+Wave 1 的 K0/D0 检查点也已由主线验收。K0 的 `--parallel 2` 构建属于验证互斥
+规则生效前已启动的历史准备证据，不作为新规则下的构建门；规则生效后仅逐项
+运行 CTest：发现 94 项，`backendPolicy` 在补充 `-C Release` 后 1/1 通过，下一项
+`CSVFileProcess` 因可执行文件尚未构建而 `Not Run`，因此剩余 92 项、Vulkan 测试
+与 K1 均未验收。D0 只完成静态部署准备：保留 CPU/no-SDK 与本地 opt-in Vulkan
+安装导出证据，VTK export-set 仍归属 ViennaLS 外部边界，hosted CI 仍无 run ID、
+URL 或 Vulkan runner 证据。本检查点后 Wave 1 只以“阻塞与准备状态已冻结”收口，
+不表示 Neutral、Surface、模型矩阵或 P5 已完成。
+
 ## 9. 风险登记
 
 | 风险 | 影响 | 缓解和触发条件 |

@@ -461,3 +461,28 @@ approved repair boundary exists. All task-owned build/test processes were
 reaped before the mutex was released. Wave 1 continues with `P5-K0` and
 `P5-D0` strictly one validation workload at a time; this checkpoint is not a
 Wave 1 completion or push boundary.
+
+## 12. Wave 1 K0/D0 checkpoint (2026-08-19)
+
+`P5-K0` reused its dedicated CPU-only Release tree for a diagnostic preflight.
+The `--parallel 2` focused build was already in progress before the validation
+mutex amendment and is retained only as historical preparation evidence. No
+post-amendment build was started. Under the mutex, CTest discovery reported 94
+tests and the individually selected `backendPolicy` test passed 1/1 in 0.14 s
+after adding the required `-C Release` configuration. The next individual test,
+`CSVFileProcess`, was not runnable because its executable had not been built.
+The card stopped there: the remaining 92 tests, all Vulkan tests, and `P5-K1`
+remain unaccepted. No build/test process remained after the audit.
+
+`P5-D0` completed static deployment preparation without consuming the
+validation lane. It preserves the accepted CPU/no-SDK and local opt-in Vulkan
+install/export evidence, classifies the VTK-enabled ViennaLS export-set failure
+as external, and records that hosted CI has no accepted run ID/URL or registered
+Vulkan runner. The deployment validation sequence is now explicitly one named
+command at a time; none of those commands ran in this checkpoint.
+
+Wave 1 therefore closes only as a documented blocker/preparation snapshot:
+`P5-N1` is `RECLAIMED-MAIN / BLOCKED-EXTERNAL`, `P5-K0` is diagnostic-only,
+and `P5-D0` is static-preparation-only. `P5-N2`, surface integration, aggregate
+model promotion, `P5-K1`, and deployment exit remain locked. This is the Wave 1
+remote snapshot boundary, not P5 completion.

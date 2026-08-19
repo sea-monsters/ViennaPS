@@ -170,6 +170,50 @@ useful only as a record of the old harness, not a CPU or Vulkan conclusion.
 Vulkan ray eligibility gate. A current paired oracle is blocked on the composed
 target isolation; no fallback or model-route expansion is justified.
 
+## P5-N1 serialized-validation checkpoint (2026-08-19)
+
+This checkpoint preserves the historical evidence above and does not unlock
+`P5-N2`. All commands below held the repository-wide local-validation mutex;
+`P5-K0` and `P5-D0` remained stopped.
+
+The existing `.tmp_p5_n1_hostx86_20260819` tree was resumed under the Visual
+Studio developer environment and built the fixture and checker successfully
+with the Hostx86/x64 MSVC 19.44.35207 compiler, Release
+`/O2 /Ob2 /DNDEBUG /openmp:llvm /MD /Zi`, ViennaCore 2.2.1, and the existing
+ViennaRay/Embree/TBB closure. The initial cache had
+`VIENNAPS_NEUTRAL_ORACLE_MOD=OFF`; its runs are retained only as invalid-mode
+diagnostics and are not Mod evidence. After the main line corrected the cache
+to `ON`, the real Mod executable entered coverage initialization at OMP=1 but
+made no CPU progress and published a zero-byte output before the bounded run
+was terminated.
+
+The main line then added the phased test-only `run_paired_oracle.ps1`. Each
+invocation performs exactly one build, one fixture run, or one comparison and
+enforces an exact-process timeout. A fresh Hostx64/x64 Mod build completed, but
+its OMP=1 run timed out after 180 seconds with no oracle output. Therefore the
+unmodified reference side was not built or run: the ordered Mod-success gate
+had already failed.
+
+One ViennaCore code-generation candidate was tested and exhausted. The test
+build declared one external specialization and emitted exactly one object for
+`KDTree<float, std::array<float, 3>>`; it changed no KDTree statement, CPU
+formula, fixture input, OpenMP/optimization flag, or reference source. The
+candidate built successfully but its Mod OMP=1 run also timed out after 180
+seconds with no output. It is rejected and must not be adopted or described as
+a repair.
+
+- Root-cause category: **not resolved**. Host compiler frontend selection and
+  duplicate KDTree template code generation are both excluded as sufficient
+  repairs for the current fixture.
+- `P5-N1`: **RECLAIMED-MAIN / BLOCKED-EXTERNAL** after its one toolchain lane
+  and one ViennaCore candidate.
+- `P5-N2` unlock: **NO**; no reference/Mod OMP=1 pair or raw comparison exists.
+- Retry state: exhausted. Do not add another local candidate without a new
+  upstream reproducer, supported compiler/runtime closure, or separately
+  approved repair boundary.
+- Cleanup: every fixture/compiler descendant, including the MSVC program
+  database service, was reaped before releasing the validation mutex.
+
 ## Commands
 
 ```powershell

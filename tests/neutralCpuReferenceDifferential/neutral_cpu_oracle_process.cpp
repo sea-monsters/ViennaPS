@@ -1,5 +1,9 @@
 #include "neutral_cpu_oracle_process.hpp"
 
+#ifdef VIENNAPS_NEUTRAL_ORACLE_EXPLICIT_KDTREE
+#include "neutral_cpu_oracle_kdtree_specialization.hpp"
+#endif
+
 #include <string>
 #include <vector>
 

@@ -518,3 +518,43 @@ file list. It may push without another user prompt only when the destination is
 `https://github.com/sea-monsters/ViennaPS.git`, the branch is
 `codex/p5-closeout-base`, and the payload is the reviewed Wave snapshot. A
 different remote, branch, or payload boundary requires a new explicit decision.
+
+### Trusted-execution review minimization
+
+P5 closeout uses a local-only development interval inside each Wave. Analysis,
+editing, compilation, and focused execution must not invoke `git fetch`,
+`git pull`, `git push`, `gh`, Web requests, dependency downloads, or remote
+APIs. A real network operation is reserved for the single reviewed push at the
+Wave boundary. This protocol reduces repeated trusted-execution or network
+security reviews; it does not disable, bypass, or reinterpret any security
+control.
+
+The following rules apply for the remainder of P5:
+
+1. Reuse one verified worktree, build directory, and focused test executable
+   per card where technically possible. Prefer a test-only runtime selector for
+   multiple diagnostic modes over repeatedly linking new unsigned executables.
+2. Keep `Build`, `Run`, reference emission, checking, CTest, and Vulkan adapter
+   execution as separate commands under the global validation mutex. Confirm
+   that the previous compiler, linker, test, or launcher process has exited
+   before starting the next command.
+3. Sub-agents may analyze or edit in parallel, but they must not build, run,
+   download, authenticate, or access a remote service unless the main line has
+   assigned the validation or network lane explicitly. The main line owns all
+   validation and push acceptance.
+4. The unmodified ViennaPS tree at
+   `D:\Codex_lib\code_reference\ViennaPS` remains a read-only CPU source of
+   truth. Do not copy changes into it or launch a deployment workflow from it.
+5. Avoid compound shell commands for credential setup, remote inspection, and
+   push. Perform the read-only preflight first, record its output, and then run
+   exactly one simple push command for the accepted Wave snapshot.
+6. After a local executable run or Wave push, record the command, exit status,
+   produced evidence, remaining processes, and local/remote commit identities.
+   A security-review prompt is evidence of a control boundary, not evidence
+   that ViennaPS itself opened a network connection.
+
+The expected target is at most one possible trusted-execution review when a
+new focused executable is first produced and one possible network review at
+the final Wave push. The platform may still review either operation; avoiding
+review is never an acceptance criterion and must not motivate weaker tests,
+unsigned-script bypasses, altered credentials, or a relaxed CPU oracle.

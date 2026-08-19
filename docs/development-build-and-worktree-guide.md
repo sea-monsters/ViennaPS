@@ -70,6 +70,31 @@ compiler; that is an environment setup failure, not a ViennaPS source failure.
 
 ## Validation and records
 
+### Local-only validation and reviewed remote boundaries
+
+During a governed development Wave, keep the implementation interval local.
+Do not mix compilation or test execution with dependency downloads, remote Git
+queries, GitHub CLI calls, or pushes. Reuse the card's verified build tree and
+focused executable where possible; when several diagnostic modes share one
+fixture, prefer a test-only runtime selector so the executable is linked once.
+This reduces repeated inspection of PowerShell-to-compiler-to-new-executable
+chains without bypassing endpoint or platform security controls.
+
+Run one validation command at a time. Separate configure, build, executable,
+reference, checker, CTest, and Vulkan commands, and confirm no related process
+remains before advancing. Sub-agents may prepare code or perform read-only
+analysis, but the supervising main line owns the validation lane. External
+reference trees are read-only sources of truth and are not deployment roots.
+
+At the Wave boundary, commit the reviewed local snapshot and perform a
+read-only push preflight: record the push URL, branch, local HEAD,
+remote-tracking HEAD, outgoing commits, and changed files. Only after those
+values match the approved destination and payload should one simple push be
+issued. Do not combine credential manipulation, remote inspection, and push in
+one shell command. A security review can still be expected for a new unsigned
+test executable or an authenticated push; its appearance alone does not prove
+that the program made a network connection.
+
 Run the smallest focused CTest first. A fixture result proves control-plane
 behavior only; real Vulkan promotion additionally requires current strict-FP32
 hardware evidence, matching device/driver identity, queue evidence, and the

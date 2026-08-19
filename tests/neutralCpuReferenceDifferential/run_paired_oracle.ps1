@@ -4,7 +4,7 @@ param(
   [string]$Step,
   [string]$OutputDirectory = "$PSScriptRoot\.tmp_paired",
   [string]$ConfiguredBuildDirectory =
-      "$PSScriptRoot\..\..\.tmp_p5_n1_hostx86_20260819",
+      "$PSScriptRoot\..\..\build",
   [string]$ReferenceViennaPS = 'D:\Codex_lib\code_reference\ViennaPS',
   [ValidateSet('Baseline', 'ExplicitKDTree')]
   [string]$Candidate = 'Baseline',

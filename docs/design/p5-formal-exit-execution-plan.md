@@ -440,3 +440,24 @@ The VTK-enabled clean configuration reached generation but failed because
 ViennaLS exports `ViennaLS` with VTK targets absent from its export set. This
 is retained as the first `P5-D0` packaging boundary; it does not invalidate the
 accepted CPU/no-SDK baseline. Wave 0 is complete and Wave 1 is unlocked.
+
+## 11. Wave 1 N1 checkpoint (2026-08-19)
+
+The validation mutex was assigned exclusively to `P5-N1`. The Hostx86/x64
+Release build completed after the correct Visual Studio environment was
+restored. Its correctly configured Mod OMP=1 fixture then stopped making CPU
+progress during coverage initialization. A phased Hostx64 paired runner was
+added so each invocation performs only one build, one fixture run, or one raw
+comparison with an exact-process timeout. The Hostx64 Mod baseline and the one
+authorized explicit-KDTree-instantiation candidate both built, then timed out
+after 180 seconds with zero-byte output. The candidate changes only a test
+code-generation boundary and is rejected; it is not a dependency adoption.
+
+Because the ordered Mod OMP=1 gate failed, no reference run, raw comparison,
+OMP 2/4/8 expansion, `P5-N2`, surface RED, or support-row change is allowed.
+`P5-N1` is reclaimed to the main line and classified `BLOCKED-EXTERNAL` until
+an upstream reproducer/fix, a supported compiler/runtime closure, or a newly
+approved repair boundary exists. All task-owned build/test processes were
+reaped before the mutex was released. Wave 1 continues with `P5-K0` and
+`P5-D0` strictly one validation workload at a time; this checkpoint is not a
+Wave 1 completion or push boundary.

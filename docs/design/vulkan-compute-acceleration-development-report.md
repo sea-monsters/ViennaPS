@@ -907,8 +907,15 @@ Wave 0 已于 2026-08-19 完成：三路只读审计由主线验收，178 个明
 `origin/codex/p5-closeout-base`。生成态 `.claude/` 和 multibounce
 `.tmp_mod/` 未纳入提交、也未删除。独立干净 worktree 的 Vulkan ON、VTK OFF
 配置成功；VTK ON 在 ViennaLS/VTK export-set 生成阶段失败，已转入 Wave 1 的
-`P5-D0`，不伪装为通过。Wave 1 现按 `P5-N1`、`P5-K0`、`P5-D0` 三卡并发，
-其中只有 `P5-N1` 位于功能关键路径。
+`P5-D0`，不伪装为通过。Wave 1 的分析/编辑可由 `P5-N1`、`P5-K0`、`P5-D0`
+分卡推进，但所有本地验证严格串行，其中只有 `P5-N1` 位于功能关键路径。
+
+Wave 1 的 N1 检查点已由主线收口：Hostx86/x64 的正确 Mod 模式、Hostx64/x64
+两 TU Mod baseline，以及唯一的测试用显式 KDTree 实例化候选均完成构建；三者的
+OMP=1 运行都在 coverage 初始化阶段停止进展，Hostx64 两次均由 180 秒精确超时
+回收且没有发布 oracle 输出。显式实例化候选不改 CPU/KDTree 算法，仍然失败，
+因此被拒绝。reference 前置未满足，未运行配对与 OMP 2/4/8；`P5-N2`、Surface
+RED/GREEN 与模型聚合继续锁定。验证通道释放后只允许依次推进 `P5-K0`、`P5-D0`。
 
 ## 9. 风险登记
 

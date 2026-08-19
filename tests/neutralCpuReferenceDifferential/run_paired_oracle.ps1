@@ -6,7 +6,7 @@ param(
   [string]$ConfiguredBuildDirectory =
       "$PSScriptRoot\..\..\build",
   [string]$ReferenceViennaPS = 'D:\Codex_lib\code_reference\ViennaPS',
-  [ValidateSet('Baseline', 'ExplicitKDTree')]
+  [ValidateSet('Baseline', 'ExplicitKDTree', 'KDTreeAudit')]
   [string]$Candidate = 'Baseline',
   [ValidateSet(1, 2, 4, 8)]
   [int]$Threads = 1,
@@ -82,6 +82,89 @@ Require-Path $tbbDll 'TBB runtime'
 New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
 $OutputDirectory = (Resolve-Path $OutputDirectory).Path
 
+function Prepare-KDTreeAuditOverlay {
+  $source = Join-Path $viennaCore 'include\viennacore\vcKDTree.hpp'
+  Require-Path $source 'ViennaCore KDTree header'
+  $overlayRoot = Join-Path $OutputDirectory 'kdtree-audit-include'
+  $overlayDirectory = Join-Path $overlayRoot 'viennacore'
+  New-Item -ItemType Directory -Force -Path $overlayDirectory | Out-Null
+  $overlay = Join-Path $overlayDirectory 'vcKDTree.hpp'
+  Copy-Item -LiteralPath $source -Destination $overlay -Force
+  $text = Get-Content -LiteralPath $overlay -Raw
+  $needle = '    rootNode = myRootNode;'
+  $replacement = @'
+    rootNode = myRootNode;
+#ifdef VIENNAPS_NEUTRAL_ORACLE_KDTREE_AUDIT
+    {
+      const auto nodeCount = nodes.size();
+      const auto beginAddress = reinterpret_cast<std::size_t>(nodes.data());
+      const auto byteCount = nodeCount * sizeof(Node);
+      const auto endAddress = beginAddress + byteCount;
+      auto inNodeStorage = [&](Node *candidate) {
+        if (candidate == nullptr || nodeCount == 0 ||
+            endAddress < beginAddress)
+          return false;
+        const auto address = reinterpret_cast<std::size_t>(candidate);
+        return address >= beginAddress && address < endAddress &&
+               ((address - beginAddress) % sizeof(Node)) == 0;
+      };
+
+      std::vector<Node *> pending;
+      std::vector<Node *> visited;
+      if (rootNode != nullptr)
+        pending.push_back(rootNode);
+      bool valid = true;
+      while (valid && !pending.empty()) {
+        auto *current = pending.back();
+        pending.pop_back();
+        if (!inNodeStorage(current)) {
+          valid = false;
+          break;
+        }
+        if (std::find(visited.begin(), visited.end(), current) !=
+            visited.end()) {
+          valid = false;
+          break;
+        }
+        visited.push_back(current);
+        if (current->axis >= D || current->index >= nodeCount) {
+          valid = false;
+          break;
+        }
+        if (current->left != nullptr)
+          pending.push_back(current->left);
+        if (current->right != nullptr)
+          pending.push_back(current->right);
+      }
+      valid = valid && visited.size() == nodeCount;
+      if (!valid) {
+        viennacore::Logger::getInstance()
+            .addError("KDTree audit invalid")
+            .print();
+      }
+      viennacore::Logger::getInstance()
+          .addDebug("KDTree audit valid nodes=" +
+                    std::to_string(visited.size()))
+          .print();
+    }
+#endif
+'@
+  if (-not $text.Contains($needle)) {
+    throw 'KDTree audit needle missing: rootNode = myRootNode;'
+  }
+  if (($text.Split($needle).Count - 1) -ne 1) {
+    throw 'KDTree audit needle count is not exactly one'
+  }
+  $text = $text.Replace($needle, $replacement)
+  Set-Content -LiteralPath $overlay -Value $text -NoNewline
+  return $overlayRoot
+}
+
+$kdTreeAuditInclude = $null
+if ($Candidate -eq 'KDTreeAudit') {
+  $kdTreeAuditInclude = Prepare-KDTreeAuditOverlay
+}
+
 $commonDefinitions = @(
   '/DNOMINMAX',
   '/DVIENNARAY_EMBREE_VERSION=4',
@@ -112,7 +195,15 @@ function Build-Fixture([string]$Name, [string]$ViennaPS, [bool]$IsMod) {
   if ($Candidate -eq 'ExplicitKDTree') {
     $definitions += '/DVIENNAPS_NEUTRAL_ORACLE_EXPLICIT_KDTREE=1'
   }
-  $includes = @((Join-Path $ViennaPS 'include\viennaps')) +
+  if ($Candidate -eq 'KDTreeAudit') {
+    $definitions += '/DVIENNAPS_NEUTRAL_ORACLE_KDTREE_AUDIT=1'
+  }
+  $candidateIncludes = @()
+  if ($Candidate -eq 'KDTreeAudit') {
+    $candidateIncludes = @((Join-Path $kdTreeAuditInclude 'viennacore'))
+  }
+  $includes = $candidateIncludes +
+      @((Join-Path $ViennaPS 'include\viennaps')) +
       $dependencyIncludes
   $includeArgs = ($includes | ForEach-Object { '/I' + (Quote-Arg $_) }) -join ' '
   $definitionArgs = $definitions -join ' '

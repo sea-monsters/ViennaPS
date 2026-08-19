@@ -45,6 +45,11 @@ them through the explicit `codex/p5-closeout-base` checkpoint before new
 production work, exclude generated environments, and never convert local
 implementation evidence into a project-wide completion claim.
 
+During P5 closeout, local validation is globally serialized. Agents may
+analyze or edit independently, but only one worktree may run CMake, builds,
+CTest, reference emitters, or Vulkan executables at any moment. Other cards
+remain at `CHECKPOINT` until the main line releases the validation lane.
+
 ## Build, Test, and Development Commands
 
 Use an out-of-tree `build/` directory. Dependencies such as ViennaTools

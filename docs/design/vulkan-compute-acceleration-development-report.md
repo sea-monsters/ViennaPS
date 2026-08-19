@@ -894,6 +894,11 @@ Surface Process RED/GREEN -> 15 行模型矩阵聚合 -> P5 Final Audit。K3E �
 任务复用同一代理，每卡只允许一次有命名失败和新证据目标的修正，第二次失败
 立即回收主线。主线独占任务验收、问题修复、看板状态和最终发布声明。
 
+2026-08-19 的执行修正：三个代理只允许并发做只读分析或低负载编辑；本地
+validation 使用全局互斥锁，任一时刻只能有一个 CMake/MSBuild/CTest/reference/
+Vulkan 运行通道。即使位于不同 worktree 也禁止批量并发验证。其他卡停在
+`CHECKPOINT`，等待主线释放验证通道并完成进程回收审计。
+
 该记录表示“收口工作按计划执行”，不表示 P5 已完成。只有
 `P5-E0-FINAL-AUDIT` 可以把 `P5-DEPLOYMENT-EXIT` 更新为 `DONE`。
 

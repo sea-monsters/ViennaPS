@@ -64,6 +64,10 @@ than three concurrent workers. Reuse a worker for dependent cards; the main
 line accepts and fixes each handoff. One named correction is allowed per card,
 then reclaim further work to the main line.
 
+Concurrent workers may analyze or edit, but validation is serialized across
+the repository: only one CMake/build/CTest/reference/Vulkan workload may run
+locally at a time. Other workers stop at `CHECKPOINT` until main-line release.
+
 ## Validation and claims
 
 - Use a CPU result as the correctness oracle for non-CUDA hosts.

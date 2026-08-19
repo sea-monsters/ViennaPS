@@ -307,6 +307,18 @@ Every worker is told that it is not alone in the codebase, must not revert
 another owner's changes, and must adapt to accepted concurrent edits without
 crossing its ownership boundary.
 
+### Local validation mutex
+
+The user amended the execution policy on 2026-08-19 after concurrent builds
+exhausted the local runner. Up to three agents may still perform independent
+read-only analysis or bounded edits, but local validation is globally
+serialized. At most one card may run CMake configuration, compilation, CTest,
+reference emitters, Vulkan executables, or another CPU/GPU-intensive workload
+at a time. Other agents must stop at a documented `CHECKPOINT` until the main
+line releases the validation lane. Batch or parallel validation is prohibited,
+including validation in separate worktrees. The main line records lane owner,
+start/finish, descendants reaped, and the next queued card before handoff.
+
 ### Retry and reclaim
 
 Cards follow:
@@ -380,7 +392,9 @@ sub-agent reports success.
 ## 10. Wave 0 baseline audit snapshot (2026-08-19)
 
 `P5-X0` used three concurrent fast Luna/xhigh read-only cards for production,
-records/tests, and worktree hygiene. Main-line review accepted these findings:
+records/tests, and worktree hygiene. This predates the validation mutex and did
+not run concurrent build/test workloads. Main-line review accepted these
+findings:
 
 - the root contains accumulated accepted prerequisites and pending P5 work;
   the closeout baseline therefore snapshots the explicit source, test, build

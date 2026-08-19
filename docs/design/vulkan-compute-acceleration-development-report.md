@@ -926,6 +926,16 @@ Wave 1 的 K0/D0 检查点也已由主线验收。K0 的 `--parallel 2` 构建�
 URL 或 Vulkan runner 证据。本检查点后 Wave 1 只以“阻塞与准备状态已冻结”收口，
 不表示 Neutral、Surface、模型矩阵或 P5 已完成。
 
+Wave 2 继续遵循 N1/N2 前置，没有提前进入 Surface。两张 fast Luna/xhigh
+只读卡分别核查上游支持闭包和当前 timeout 边界；ViennaCore v2.2.1 已包含其
+`vcPointData` signed OpenMP-loop 修复，但没有找到覆盖 ViennaPS
+`ElementToPointData` 组合路径的上游修复。唯一获准的 test-only 相位诊断在主线
+修正重复 `Path`/`PATH` 子进程环境后，OMP=1 真实运行完成 `Particle 0` ray trace，
+随即以 `0xC0000005` 退出；phase log 1836 字节、oracle 0 字节。由此当前首坏
+边界收敛到 post-trace `ElementToPointData/KDTree`，N2 与 Surface 仍保持锁定。
+后续 Wave 推送前，主线必须逐项核对 push URL、分支/HEAD、远端跟踪 HEAD、待推
+提交与文件清单，只有同一 `origin` 和 `codex/p5-closeout-base` 才直接推送。
+
 ## 9. 风险登记
 
 | 风险 | 影响 | 缓解和触发条件 |

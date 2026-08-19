@@ -221,3 +221,33 @@ cmd /d /s /c 'call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildToo
 $env:Path = "D:\Codex_lib\ViennaPSMod\.tmp_p5_route_20260805\gpu\vulkan\ray;D:\Codex_lib\ViennaPSMod\.tmp_p5_route_20260805\_deps\embree-build;$env:Path"
 & D:\Codex_lib\ViennaPSMod\.tmp_p5_reference_cpu_20260806\manual-build\p5_reference_cpu_oracle.exe
 ```
+
+## P5-N1D phase-boundary checkpoint (2026-08-19)
+
+The main line accepted a test-only phase logger around the existing fixture.
+It writes to `<oracle-output>.phase.log`, checks that the log file opens, and
+uses the existing CPU-triangle `Particle 0` debug line as the completed
+ray-tracer marker. The fixture data, random seed, CPU formulas, Process order,
+reference tree, optimization/OpenMP flags, and production code are unchanged.
+
+The first instrumented launch failed before program startup with
+`0xC0000135`. Read-only dependency inspection confirmed that Embree, TBB, the
+MSVC CRT, and LLVM OpenMP DLLs all existed. The actual cause was the hosted
+process environment containing distinct `Path` and `PATH` keys. The phased
+runner now creates a case-insensitive child environment with exactly one
+canonical `Path`; this is the same boundary already used by the repository's
+clean-environment CMake wrapper.
+
+After that single named correction, the existing Mod executable was rerun at
+OMP=1 with the same 180-second bound. It reached `phase=fixture_start`,
+`phase=before_calculateFlux`, completed the real CPU ray trace and flushed
+`DEBUG: Particle 0` (`19` rays, `16` geometry hits), then exited immediately
+with `-1073741819` (`0xC0000005`). The phase log is 1836 bytes; the oracle file
+is zero bytes; neither `phase=after_calculateFlux` nor an output-byte marker
+exists. No build, test, or fixture process remained afterward.
+
+This rules out process startup and the ray tracer as the first bad boundary.
+It aligns the current Release failure with the historical
+`ElementToPointData::prepare -> KDTree::findNearestWithinRadius ->
+KDTree::traverseDown` stack. It does not identify or approve a repair. N2,
+Surface RED/GREEN, and support-row expansion remain locked.

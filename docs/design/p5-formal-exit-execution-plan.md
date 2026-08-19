@@ -486,3 +486,35 @@ Wave 1 therefore closes only as a documented blocker/preparation snapshot:
 and `P5-D0` is static-preparation-only. `P5-N2`, surface integration, aggregate
 model promotion, `P5-K1`, and deployment exit remain locked. This is the Wave 1
 remote snapshot boundary, not P5 completion.
+
+## 13. Wave 2 N1D phase checkpoint (2026-08-19)
+
+Wave 2 did not bypass the N1/N2 dependency. Two concurrent fast Luna/xhigh
+cards performed static upstream and current-boundary audits while the local
+validation lane remained idle. ViennaCore v2.2.1 is already the current
+dependency and contains its signed OpenMP-loop fix, but that upstream change is
+in `vcPointData` and does not repair the ViennaPS `ElementToPointData` caller.
+No upstream fix for the composed failure was found.
+
+The only accepted next diagnostic added test-only phase logging. Its first run
+exposed a duplicated `Path`/`PATH` child environment and failed before startup;
+the main line used the card's single correction to canonicalize the child
+environment without rebuilding. The corrected OMP=1 run completed the real
+CPU ray trace (`Particle 0`) and then exited `0xC0000005` before
+`calculateFlux()` returned. The 1836-byte phase log and zero-byte oracle narrow
+the first bad boundary to post-trace `ElementToPointData/KDTree`, consistent
+with the previous native stack. No reference, additional thread count, CTest,
+Vulkan, or Surface workload ran.
+
+N2 remains locked. The next card must be a newly approved, source-grounded
+repair candidate for this exact post-trace boundary; it may not repeat compiler
+frontend, explicit-template, dependency-version, or ray-tracer experiments.
+
+### Remote push preflight
+
+Before every later Wave push, the main line must separately verify the push URL,
+current branch and HEAD, remote-tracking HEAD, outgoing commit list, and changed
+file list. It may push without another user prompt only when the destination is
+`https://github.com/sea-monsters/ViennaPS.git`, the branch is
+`codex/p5-closeout-base`, and the payload is the reviewed Wave snapshot. A
+different remote, branch, or payload boundary requires a new explicit decision.

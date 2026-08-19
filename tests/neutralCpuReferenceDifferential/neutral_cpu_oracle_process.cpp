@@ -26,6 +26,7 @@ public:
 #include <models/psNeutralTransport.hpp>
 #include <process/psProcess.hpp>
 #include <psDomain.hpp>
+#include <vcLogger.hpp>
 
 #include <bit>
 #include <cstdint>
@@ -90,12 +91,21 @@ void installActiveAdapter(Model &model) {
 #endif
 }
 
+void writePhase(const std::string &message) {
+  viennacore::Logger::getInstance().addDebug(message).print();
+}
+
 } // namespace
 
 void writeNeutralCpuOracleFixture(const std::string &path) {
   std::ofstream out(path, std::ios::trunc);
   if (!out)
     throw std::runtime_error("cannot open oracle output");
+
+  viennacore::Logger::setLogLevel(viennacore::LogLevel::DEBUG);
+  if (!viennacore::Logger::setLogFile(path + ".phase.log"))
+    throw std::runtime_error("cannot open oracle phase log");
+  writePhase("phase=fixture_start");
 
   viennaps::units::Length::setUnit(viennaps::units::Length::METER);
   viennaps::units::Time::setUnit(viennaps::units::Time::SECOND);
@@ -145,9 +155,11 @@ void writeNeutralCpuOracleFixture(const std::string &path) {
   rayParams.raysPerPoint = 1;
   rayParams.maxReflections = 0;
   process.setParameters(rayParams);
+  writePhase("phase=before_calculateFlux");
   const auto fluxMesh = process.calculateFlux();
   if (!fluxMesh)
     throw std::runtime_error("calculateFlux returned null");
+  writePhase("phase=after_calculateFlux");
   const auto *flux = fluxMesh->getCellData().getScalarData(params.fluxLabel);
   if (!flux)
     throw std::runtime_error("neutralFlux output missing");
@@ -176,4 +188,9 @@ void writeNeutralCpuOracleFixture(const std::string &path) {
       << static_cast<int>(domain->getMetaDataLevel()) << '\n';
   out << "process.flux_cells="
       << fluxMesh->lines.size() + fluxMesh->triangles.size() << '\n';
+  out.flush();
+  writePhase("phase=oracle_output_bytes=" +
+             std::to_string(static_cast<long long>(out.tellp())));
+  writePhase("phase=fixture_complete");
+  viennacore::Logger::closeLogFile();
 }

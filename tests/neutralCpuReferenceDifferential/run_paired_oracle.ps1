@@ -160,25 +160,38 @@ function Run-Fixture([string]$Name) {
   $executable = Join-Path $OutputDirectory "$Name.exe"
   $output = Join-Path $OutputDirectory "$Name-omp$Threads.txt"
   Require-Path $executable "$Name executable"
-  $previousPath = $env:Path
-  try {
-    $env:Path = "$embreeBin;$tbbBin;$crtBin;$ompBin;$previousPath"
-    $env:OMP_NUM_THREADS = "$Threads"
-    $process = Start-Process -FilePath $executable -ArgumentList @(
-      (Quote-Arg $output)) -NoNewWindow -PassThru
-    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
-      $process.Kill()
-      $process.WaitForExit()
-      throw "$Name OMP=$Threads timed out after $TimeoutSeconds seconds"
-    }
-    if ($process.ExitCode -ne 0) {
-      throw "$Name OMP=$Threads failed with exit code $($process.ExitCode)"
-    }
-    $bytes = (Get-Item -LiteralPath $output).Length
-    Write-Output "$Name OMP=$Threads exit=0 output_bytes=$bytes"
-  } finally {
-    $env:Path = $previousPath
+  $childEnvironment =
+      [System.Collections.Generic.Dictionary[string, string]]::new(
+          [System.StringComparer]::OrdinalIgnoreCase)
+  foreach ($entry in
+      [System.Environment]::GetEnvironmentVariables().GetEnumerator()) {
+    $childEnvironment[[string]$entry.Key] = [string]$entry.Value
   }
+  $childEnvironment['Path'] =
+      "$embreeBin;$tbbBin;$crtBin;$ompBin;$($env:Path)"
+  $childEnvironment['OMP_NUM_THREADS'] = "$Threads"
+
+  $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = $executable
+  $startInfo.UseShellExecute = $false
+  $startInfo.WorkingDirectory = (Get-Location).Path
+  [void]$startInfo.ArgumentList.Add($output)
+  $startInfo.Environment.Clear()
+  foreach ($entry in $childEnvironment.GetEnumerator()) {
+    [void]$startInfo.Environment.Add($entry.Key, $entry.Value)
+  }
+
+  $process = [System.Diagnostics.Process]::Start($startInfo)
+  if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+    $process.Kill()
+    $process.WaitForExit()
+    throw "$Name OMP=$Threads timed out after $TimeoutSeconds seconds"
+  }
+  if ($process.ExitCode -ne 0) {
+    throw "$Name OMP=$Threads failed with exit code $($process.ExitCode)"
+  }
+  $bytes = (Get-Item -LiteralPath $output).Length
+  Write-Output "$Name OMP=$Threads exit=0 output_bytes=$bytes"
 }
 
 switch ($Step) {

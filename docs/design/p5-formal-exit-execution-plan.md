@@ -400,7 +400,29 @@ records/tests, and worktree hygiene. Main-line review accepted these findings:
   now links its paired CPU fixture, and the project handoff guides use this
   governing execution order.
 
-The baseline checkpoint must be created on `codex/p5-closeout-base` using an
-explicit path list. It must not stage `.claude/`, the multibounce `.tmp_mod/`
-tree, or any other generated validation tree. The resulting commit SHA and
-remote branch are recorded only after staged-diff review and successful push.
+The baseline checkpoint is commit
+`39e644082f5b007d05856dce1c6f96cb850e6209` on
+`origin/codex/p5-closeout-base`. It was staged from an explicit 178-file list;
+`.claude/`, the multibounce `.tmp_mod/` tree, and all generated validation
+trees were absent from the commit. The author and committer use the GitHub
+noreply address required by repository privacy protection.
+
+Main-line validation used a detached clean worktree. GNU `patch --dry-run`
+accepted `viennals-v5.8.5-levelset-update-v2.patch`; its single-space context
+markers are unified-diff syntax and remain an intentional `diff --check`
+exception. The following configuration completed successfully in 21.8 s plus
+1.2 s generation time:
+
+```powershell
+$env:CPM_SOURCE_CACHE = 'D:\Codex_lib\ViennaPSMod\.cpm-cache'
+pwsh -File cmake/invoke-cmake-clean-env.ps1 -S . \
+  -B .tmp_p5_x0_config_novtk_20260819 \
+  -DVIENNAPS_ENABLE_VULKAN=ON -DVIENNAPS_USE_VTK=OFF \
+  -DVIENNAPS_VTK_RENDERING=OFF -DVIENNAPS_BUILD_TESTS=OFF \
+  -DVIENNAPS_BUILD_EXAMPLES=OFF
+```
+
+The VTK-enabled clean configuration reached generation but failed because
+ViennaLS exports `ViennaLS` with VTK targets absent from its export set. This
+is retained as the first `P5-D0` packaging boundary; it does not invalidate the
+accepted CPU/no-SDK baseline. Wave 0 is complete and Wave 1 is unlocked.

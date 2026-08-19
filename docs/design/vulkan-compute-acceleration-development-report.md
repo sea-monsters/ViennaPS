@@ -897,6 +897,14 @@ Surface Process RED/GREEN -> 15 行模型矩阵聚合 -> P5 Final Audit。K3E �
 该记录表示“收口工作按计划执行”，不表示 P5 已完成。只有
 `P5-E0-FINAL-AUDIT` 可以把 `P5-DEPLOYMENT-EXIT` 更新为 `DONE`。
 
+Wave 0 已于 2026-08-19 完成：三路只读审计由主线验收，178 个明确文件冻结为
+提交 `39e644082f5b007d05856dce1c6f96cb850e6209`，并已推送到
+`origin/codex/p5-closeout-base`。生成态 `.claude/` 和 multibounce
+`.tmp_mod/` 未纳入提交、也未删除。独立干净 worktree 的 Vulkan ON、VTK OFF
+配置成功；VTK ON 在 ViennaLS/VTK export-set 生成阶段失败，已转入 Wave 1 的
+`P5-D0`，不伪装为通过。Wave 1 现按 `P5-N1`、`P5-K0`、`P5-D0` 三卡并发，
+其中只有 `P5-N1` 位于功能关键路径。
+
 ## 9. 风险登记
 
 | 风险 | 影响 | 缓解和触发条件 |

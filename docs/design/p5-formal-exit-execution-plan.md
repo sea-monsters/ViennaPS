@@ -660,3 +660,21 @@ deferred the upstream reports (2). Execution under the serialized mutex:
 `P5-N1` moves to `PATCH-ADOPTED-LOCAL / N2-GATE-READY`. `P5-N2` gate review
 against its acceptance matrix is the next main-line step. No push was
 performed in this checkpoint.
+## 18. Wave 2 N2 oracle-green acceptance checkpoint (2026-08-20)
+
+The `P5-N2` main-line gate ran exactly as specified: both fixture sides
+and the checker were rebuilt independently into a fresh evidence
+directory (`.tmp_p5_n2_gate_20260820`) against the CPM-patched ViennaCore
+cache headers (no overlay), and the full matrix was rerun. Every
+acceptance cell passed: Mod and unmodified reference, OMP 1/2/4/8, exact
+Release flags `/O2 /Ob2 /DNDEBUG /openmp:llvm /MD /Zi`, identical
+dependency/runtime closure, all exit 0 with no SEH exception, raw
+serialized equality (`max_ulp=0`) at every OMP count, and reproducible
+runner commands recorded in the Neutral oracle record. The default-flags
+differential was re-confirmed unchanged in the same wave (N1H).
+
+`P5-N2-NEUTRAL-ORACLE-GREEN` is `DONE-LOCAL`; the `P5-NEUTRAL-CPU-ORACLE`
+milestone is closed. `P5-SURFACE-INTEGRATION` moves from `BLOCKED-ORACLE`
+to `ORACLE-UNBLOCKED / READY-S` after `P5-S0`. Next card on the critical
+path: `P5-S0-SURFACE-ACCEPTANCE-RED`. No push was performed in this
+checkpoint.

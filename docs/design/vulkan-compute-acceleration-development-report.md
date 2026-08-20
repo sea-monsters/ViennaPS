@@ -935,6 +935,19 @@ Wave 2 继续遵循 N1/N2 前置，没有提前进入 Surface。两张 fast Luna
 边界收敛到 post-trace `ElementToPointData/KDTree`，N2 与 Surface 仍保持锁定。
 后续 Wave 推送前，主线必须逐项核对 push URL、分支/HEAD、远端跟踪 HEAD、待推
 提交与文件清单，只有同一 `origin` 和 `codex/p5-closeout-base` 才直接推送。
+Wave 2 续（2026-08-20）：N1F 以探针内审计加 dumpbin 反汇编定位根因——
+MSVC 14.44.35207 在 `/O2 /Ob2` 下把 `KDTree::traverseDown` 的尾递归（含手写
+等价循环及内部显式判空）统一误编译为跳过入口空检查的回边，空叶子子节点被
+解引用。修复以 `Node *volatile` 延续加载强制判空落成指令，先经 runner 覆盖层
+通过 Lane C（探针 Mod notrace/trace x OMP 1/2/4/8、参考 OMP 1/8，输出逐字节
+一致）与 Lane E（配对夹具 OMP 1/2/4/8 原始相等 `max_ulp=0`），随后按用户批准
+落地为 CPM 补丁 `cmake/patches/viennacore-v2.2.1-kdtree-traversedown-nullcheck.patch`
+（`PATCHES` + `CUSTOM_CACHE_KEY`，本地源码覆盖豁免）。N2 主线门按规约独立重建
+两侧并重跑完整矩阵：Release 标志 OMP 1/2/4/8 全部 exit 0、无 SEH、原始序列化
+相等；默认标志差分复核与 2026-08-09 基线一致。`P5-N2-NEUTRAL-ORACLE-GREEN`
+为 `DONE-LOCAL`，`P5-NEUTRAL-CPU-ORACLE` 里程碑关闭，Surface 由
+`ORACLE-UNBLOCKED / READY-S` 等待 `P5-S0`。上游 MSVC/ViennaCore 报告按用户
+决定暂缓。本波不 push。
 
 ## 9. 风险登记
 

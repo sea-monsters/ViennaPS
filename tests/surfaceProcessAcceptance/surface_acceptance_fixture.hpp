@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdint>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -239,10 +240,10 @@ bool readPoints(std::istream &in, const char *expectedName,
   std::istringstream tokens(rest);
   std::string token;
   for (std::size_t i = 0; i < count; ++i) {
+    if (!(tokens >> token))
+      return false;
     Vec3D<T> point{};
     for (int j = 0; j < 3; ++j) {
-      if (!(tokens >> token))
-        return false;
       const auto bits = static_cast<std::uint32_t>(std::stoul(token, nullptr, 16));
       point[j] = std::bit_cast<T>(bits);
       if (j < 2) {
@@ -298,7 +299,13 @@ template <typename T, int D>
 bool deserializeRecord(AcceptanceRecord<T, D> &record, std::istream &in) {
   std::string line;
   auto readLine = [&](std::istream &stream, std::string &dest) -> bool {
-    return static_cast<bool>(std::getline(stream, dest));
+    if (!std::getline(stream, dest))
+      return false;
+    // Records are written in text mode; strip a trailing CR so CRLF files
+    // parse identically to LF files.
+    if (!dest.empty() && dest.back() == '\r')
+      dest.pop_back();
+    return true;
   };
   auto expectPrefix = [&](const std::string &dest,
                           const std::string &prefix) -> bool {
@@ -442,7 +449,9 @@ runAcceptance(const std::string &routeTag,
               SmartPointer<viennaps::Domain<T, D>> domain,
               viennaps::Process<T, D> &process,
               SmartPointer<viennaps::ProcessModelBase<T, D>> model,
-              const AcceptanceConfig<T> &config) {
+              const AcceptanceConfig<T> &config,
+              std::function<void(viennaps::Process<T, D> &)> preApplyHook =
+                  {}) {
   AcceptanceRecord<T, D> record;
   record.routeTag = routeTag;
   record.gridDelta = config.gridDelta;
@@ -511,6 +520,9 @@ runAcceptance(const std::string &routeTag,
         record.initialCoverages = *coverage;
     }
   }
+
+  if (preApplyHook)
+    preApplyHook(process);
 
   process.apply();
   record.processResult = process.getLastProcessResult();

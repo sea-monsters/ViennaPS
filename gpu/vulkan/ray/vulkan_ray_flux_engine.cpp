@@ -10,12 +10,15 @@
 #include "triangle_hit_device.hpp"
 
 #include <process/psCPUTriangleEngine.hpp>
+#include <models/psNeutralTransport.hpp>
 #include <models/psSingleParticleProcess.hpp>
+#include <psPointToElementData.hpp>
 
 #include <rayParticle.hpp>
 #include <raySource.hpp>
 #include <raySourceRandom.hpp>
 #include <rayUtil.hpp>
+#include <vcLogger.hpp>
 
 #include <algorithm>
 #include <array>
@@ -117,6 +120,9 @@ template <typename NumericType, int D> struct VulkanRayFluxEngine<NumericType, D
   PostProcessingType postProcessing_;
   std::vector<vulkan::ray::Triangle> deviceTriangles_;
   std::vector<Vec3D<NumericType>> triangleCenters_;
+  // Per-element material ids mirrored from the disk-mesh point material ids,
+  // required by the CPU-decision frontier route (e.g. NeutralTransport callbacks).
+  std::vector<int> elementMaterialIds_;
   // Reuses the CPU tracer's default-source construction so the sampled ray
   // population matches the CPU oracle.  Populated in updateSurfaceMesh after
   // the device triangles are built.
@@ -133,6 +139,11 @@ template <typename NumericType, int D> struct VulkanRayFluxEngine<NumericType, D
   // host to match the CPU_TRIANGLE oracle.
   std::array<viennaray::BoundaryCondition, D> boundaryConds_{};
   unsigned int maxBoundaryHits_ = 1000;
+
+  // Caller-owned coverage data mapped to elements for the current surface.  The
+  // CPU-decision frontier callbacks read this through a raw pointer, so the
+  // smart pointer must stay alive for the whole multibounce pass.
+  SmartPointer<PointData<NumericType>> globalTracingData_ = nullptr;
 
   struct MultibounceRayState {
     vulkan::ray::Ray ray{};
@@ -265,14 +276,24 @@ template <typename NumericType, int D> struct VulkanRayFluxEngine<NumericType, D
       surfaceMesh_->maximumExtent = triangleMesh.maximumExtent;
     }
 
+    // The single-bounce source-flux route does not consume per-element material
+    // ids.  The bounded CPU-decision frontier route (NeutralTransport) mirrors
+    // the CPU oracle and needs element material ids for surfaceReflection.
+    elementMaterialIds_.clear();
+    if (context.diskMesh != nullptr &&
+        context.diskMesh->getMaterialIds() != nullptr &&
+        surfaceMesh_ != nullptr) {
+      auto pointKdTree = context.getPointKdTree();
+      if (pointKdTree != nullptr) {
+        const auto &pointMaterialIds = *context.diskMesh->getMaterialIds();
+        PointToElementDataSingle<NumericType, NumericType, int, float>(
+            pointMaterialIds, elementMaterialIds_, *pointKdTree, surfaceMesh_)
+            .apply();
+      }
+    }
+
     return ProcessResult::SUCCESS;
   }
-
-  // The device-resident pipeline does not consume per-element material ids for
-  // the single-bounce source flux, so no separate material-id extraction is
-  // performed here.  The CPU engine keeps its own surface state current so the
-  // desorption path (calculateSurfaceFluxes) and any CPU fallback remain
-  // correct.
 
   // Host-side nearest-hit Möller-Trumbore intersection against the device
   // triangle list.  Returns the parametric t of the closest forward hit, or
@@ -775,7 +796,10 @@ template <typename NumericType, int D> struct VulkanRayFluxEngine<NumericType, D
         input.sequence = state.sequence;
         input.surfaceId = hit.triangleIndex;
         input.primitiveId = hit.triangleIndex;
-        input.materialId = 0;
+        input.globalData = globalTracingData_.get();
+        input.materialId = hit.triangleIndex < elementMaterialIds_.size()
+                               ? elementMaterialIds_[hit.triangleIndex]
+                               : 0;
         input.initialWeight = state.initialWeight;
         input.weight = state.weight;
         input.contribution = state.weight;
@@ -967,8 +991,9 @@ VulkanRayFluxEngine<NumericType, D>::checkInput(ProcessContext<NumericType, D> &
   // P5-RAY-ROUTE has evidence only for the concrete single-particle FP32 2D
   // model.  Keep the predicate explicit so a ProcessModelCPU with different
   // particle/source semantics cannot reach device dispatch.  The bounded
-  // frontier extension is a separately admitted one-reflection row; it also
-  // excludes coverage/global-data callbacks until their own oracle exists.
+  // frontier extension admits the one-reflection SingleParticleProcess row and,
+  // with coverage/global-data support, the NeutralTransport<float,2> row up to
+  // maxReflections == 2.
   bool supported = false;
   bool boundedMultibounce = false;
   if constexpr (std::is_same_v<NumericType, float> && D == 2) {
@@ -984,6 +1009,22 @@ VulkanRayFluxEngine<NumericType, D>::checkInput(ProcessContext<NumericType, D> &
         baseModel && context.rayTracingParams.maxReflections == 1U &&
         !context.flags.useCoverages && !context.flags.hasSurfaceDesorption &&
         !impl_->paths.multibounceFrontierQueue.empty();
+
+    // NeutralTransport<float,2> needs coverage-aware surfaceReflection callbacks
+    // even for maxReflections == 0, so it always uses the CPU-decision frontier
+    // route.  Evidence boundary is maxReflections <= 2.
+    auto neutralTransport =
+        std::dynamic_pointer_cast<NeutralTransport<float, 2>>(context.model);
+    const bool neutralTransportModel =
+        neutralTransport != nullptr &&
+        neutralTransport->getParticleTypes().size() == 1U &&
+        neutralTransport->getSource() == nullptr &&
+        !impl_->paths.multibounceFrontierQueue.empty() &&
+        context.rayTracingParams.maxReflections <= 2U;
+    if (neutralTransportModel) {
+      boundedMultibounce = true;
+    }
+
     supported = singleBounce || boundedMultibounce;
   }
 
@@ -1054,6 +1095,8 @@ VulkanRayFluxEngine<NumericType, D>::initialize(ProcessContext<NumericType, D> &
 
   impl_->surfaceMesh_ = Impl::MeshType::New();
   impl_->elementKdTree_ = Impl::KDTreeType::New();
+  impl_->elementMaterialIds_.clear();
+  impl_->globalTracingData_ = nullptr;
 
   // Mirror the CPU oracle's primary-direction source setting so the default
   // source distribution matches when a model provides one.
@@ -1150,7 +1193,20 @@ ProcessResult VulkanRayFluxEngine<NumericType, D>::calculateSourceFluxes(
     return ProcessResult::SUCCESS;
   }
 
+  impl_->globalTracingData_ = nullptr;
   if (impl_->useMultibounce) {
+    if (context.flags.useCoverages) {
+      auto surfaceModel = impl_->model_->getSurfaceModel();
+      if (surfaceModel != nullptr && surfaceModel->getCoverages() != nullptr &&
+          impl_->surfaceMesh_ != nullptr) {
+        impl_->globalTracingData_ = PointData<NumericType>::New();
+        auto pointKdTree = context.getPointKdTree();
+        PointToElementData<NumericType, float>(
+            *impl_->globalTracingData_, surfaceModel->getCoverages(),
+            *pointKdTree, impl_->surfaceMesh_, Logger::hasIntermediate())
+            .apply();
+      }
+    }
     const auto result = impl_->calculateMultibounceSourceFluxes(
         context, fluxes, source);
     if (result == ProcessResult::SUCCESS) {

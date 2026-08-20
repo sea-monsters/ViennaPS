@@ -223,6 +223,60 @@ void testThreeDimensionalReconstruction() {
                std::numeric_limits<float>::max());
 }
 
+void testBoundarySemanticsAreHrleAuthoritative() {
+  // Reflective x-axis: the maxIndex plane (x == 4) is a legal hrle
+  // definition plane and must pass validation.
+  {
+    std::array<int, 2> min{0, 0};
+    std::array<int, 2> max{4, 2};
+    std::array<viennahrle::BoundaryType, 2> bcs{
+        viennahrle::BoundaryType::REFLECTIVE_BOUNDARY,
+        viennahrle::BoundaryType::REFLECTIVE_BOUNDARY};
+    Grid<2> grid(min.data(), max.data(), 1.0, bcs.data());
+    const std::vector<Index<2>> candidateIndices = {Index<2>{4, 0}};
+
+    CompactResult compact;
+    compact.candidateActions = {Action::DEFINED};
+    compact.definedPoints = {CompactPoint{0U, 0.5F, 0U, Action::DEFINED}};
+    compact.definedMask = {1U};
+    compact.definedExclusiveOffsets = {0U, 1U};
+
+    Domain<2> domain;
+    std::vector<std::uint32_t> sourcePointIds;
+    std::string error;
+    VC_TEST_ASSERT(reconstruction::reconstructHrleRebuildCpu(
+        compact, std::span<const Index<2>>(candidateIndices), 1U, grid, domain,
+        sourcePointIds, error));
+    VC_TEST_ASSERT(error.empty());
+  }
+
+  // Periodic x-axis: the maxIndex plane (x == 4) is identified by hrle as
+  // outside the domain and must still be rejected.
+  {
+    std::array<int, 2> min{0, 0};
+    std::array<int, 2> max{4, 2};
+    std::array<viennahrle::BoundaryType, 2> bcs{
+        viennahrle::BoundaryType::PERIODIC_BOUNDARY,
+        viennahrle::BoundaryType::REFLECTIVE_BOUNDARY};
+    Grid<2> grid(min.data(), max.data(), 1.0, bcs.data());
+    const std::vector<Index<2>> candidateIndices = {Index<2>{4, 0}};
+
+    CompactResult compact;
+    compact.candidateActions = {Action::DEFINED};
+    compact.definedPoints = {CompactPoint{0U, 0.5F, 0U, Action::DEFINED}};
+    compact.definedMask = {1U};
+    compact.definedExclusiveOffsets = {0U, 1U};
+
+    Domain<2> domain;
+    std::vector<std::uint32_t> sourcePointIds;
+    std::string error;
+    VC_TEST_ASSERT(!reconstruction::reconstructHrleRebuildCpu(
+        compact, std::span<const Index<2>>(candidateIndices), 1U, grid, domain,
+        sourcePointIds, error));
+    VC_TEST_ASSERT(!error.empty());
+  }
+}
+
 void testValidationIsTransactional() {
   Grid<2> grid(std::array<int, 2>{0, 0}.data(),
                std::array<int, 2>{6, 2}.data());
@@ -326,7 +380,7 @@ void testValidationIsTransactional() {
   VC_TEST_ASSERT(sourcePointIds == expectedSourcePointIds);
 
   std::vector<Index<2>> outsideGrid = candidateIndices;
-  outsideGrid.back() = Index<2>{6, 0};
+  outsideGrid.back() = Index<2>{7, 0};
   error.clear();
   VC_TEST_ASSERT(!reconstruction::reconstructHrleRebuildCpu(
       validCompact, std::span<const Index<2>>(outsideGrid), 4U, grid, domain,
@@ -354,6 +408,7 @@ int main() {
   testReconstructionWithSourceMapping();
   testAllDefinedAndAllUndefinedBranches();
   testThreeDimensionalReconstruction();
+  testBoundarySemanticsAreHrleAuthoritative();
   testValidationIsTransactional();
   return 0;
 }

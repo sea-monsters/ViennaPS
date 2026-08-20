@@ -720,3 +720,46 @@ and they are scheduled for cleanup after the P5 closeout completes
 moves to `S0-RED-DONE / READY-S1`. Next card on the critical path:
 `P5-S1-SURFACE-INTEGRATION-GREEN`, which may only add the adapters the S0
 RED boundary requires. No push was performed in this checkpoint.
+
+## 20. Wave 2 S1 surface-integration GREEN checkpoint (2026-08-20)
+
+`P5-S1` ran under the validation mutex with exactly the three adapters the
+S0 RED boundary required:
+
+1. Ray frontier admission: the Vulkan ray-flux engine
+   (`gpu/vulkan/ray/vulkan_ray_flux_engine.cpp`) admits
+   `NeutralTransport<float,2>` (single particle, no custom source,
+   `maxReflections <= 2`) onto the bounded CPU-decision frontier route,
+   mirroring the CPU oracle's element material-id and coverage global-data
+   mapping (`PointToElementDataSingle` / `PointToElementData`).
+2. Rebuild boundary predicate: a main-line CPU probe evidenced that the S0
+   geometry legally stores defined points on the reflective maxIndex plane,
+   so `psHrleSparseReconstruction.hpp` now validates candidates with hrle's
+   authoritative `isOutsideOfDomain` instead of the maxIndex-exclusive
+   `isInDomain`; `tests/hrleSparseReconstruction` gained a
+   boundary-semantics regression case (reflective maxIndex accepted,
+   periodic maxIndex rejected).
+3. Override lifecycle: the shared fixture gained an optional `preApplyHook`
+   that reinstalls the Vulkan ray-flux override after `calculateFlux()`
+   consumes it and before `apply()`; the CPU leg passes no hook and its
+   behavior is unchanged (rerun record bit-identical to the S0 record).
+
+Two latent fixture deserializer bugs surfaced by the first GREEN read of the
+CPU record were fixed in the same wave: `readPoints` re-tokenized per
+component instead of splitting one colon-joined token, and CRLF records
+failed the strict `topLevelSetValid` comparison.
+
+Acceptance evidence: Vulkan leg GREEN on Release/Intel Arc --
+`viennaps-vulkan-surface-process-acceptance-smoke` exits 0 on two
+deterministic runs with the complete record (flux, coverages, surface
+points, material ids, process time, callback sequence) bit-exact equal to
+the paired CPU record, all five stages on one shared session, negative
+battery 4/4 fail-closed. Focused regressions: 46/46 Vulkan smokes,
+`hrleSparseReconstruction`, `hrleRebuildCpuFixture`,
+`levelSetRebuildHandledMatrix` (3 variants). The N2 neutral-oracle inputs
+are untouched by diff scope (Vulkan engine translation unit, Vulkan-only
+mirror header, acceptance fixture only).
+
+`P5-S1-SURFACE-INTEGRATION-GREEN` is `DONE-LOCAL`; `P5-SURFACE-INTEGRATION`
+is locally green. Next card on the critical path:
+`P5-M0-MODEL-MATRIX-AGGREGATE`. No push was performed in this checkpoint.

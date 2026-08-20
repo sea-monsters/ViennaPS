@@ -101,9 +101,12 @@ template <int D>
       return false;
     }
 
-    if (!grid.isInDomain(index)) {
+    // hrle's isOutsideOfDomain is the authoritative boundary check: infinite
+    // axes are unrestricted, reflective/symmetric axes allow the maxIndex
+    // plane, and periodic axes treat maxIndex as out of bounds.
+    if (grid.isOutsideOfDomain(index)) {
       error = "HRLE rebuild reconstruction contains candidate indices outside "
-              "the grid.";
+              "the hrle domain boundary.";
       return false;
     }
 

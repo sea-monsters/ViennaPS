@@ -1,13 +1,14 @@
 // Copyright 2026 ViennaPS
 // SPDX-License-Identifier: MIT
 //
-// P5-S0 Vulkan surface-process acceptance smoke test.  The positive route
-// requests COVERAGE, SURFACE_DIFFUSION, NEUTRAL_TRANSPORT_VELOCITY, and
-// RAY_TRACING on one shared Vulkan session and is expected to be RED on
-// current code: complete NeutralTransport surface physics (multi-bounce
-// re-emission, coverage, desorption, surface diffusion) is not yet resident
-// on the device route, so the device ray pipeline rejects the reflection
-// request fail-closed.
+// P5-S1 Vulkan surface-process acceptance smoke test.  The positive route
+// requests COVERAGE, SURFACE_DIFFUSION, NEUTRAL_TRANSPORT_VELOCITY,
+// RAY_TRACING, and LEVEL_SET on one shared Vulkan session and is expected
+// to be GREEN.  S1 adaptations:
+//   - NeutralTransport frontier admission on the device ray engine;
+//   - LEVEL_SET rebuild boundary predicate fix (isOutsideOfDomain);
+//   - pre-apply hook reinstalls the ray-flux engine override after
+//     calculateFlux() consumes it and before apply() begins.
 
 // Include capabilityProfileIO.hpp first: on Windows it pulls in <Windows.h>,
 // whose wingdi.h ERROR/WARNING/INFO/DEBUG macros break the Status::ERROR-style
@@ -49,6 +50,7 @@
 #include <iostream>
 #include <memory>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -349,7 +351,7 @@ bool recordsBitwiseEqual(
   bool equal = true;
   auto check = [&](const char *name, bool condition) {
     if (!condition) {
-      std::cerr << "RED_BOUNDARY=" << name << '\n';
+      std::cerr << "RECORD_MISMATCH=" << name << '\n';
       equal = false;
     }
   };
@@ -437,6 +439,15 @@ bool recordsBitwiseEqual(
   check("advectionIterationCount",
         cpu.advectionIterationCount == vulkan.advectionIterationCount);
 
+  check("callbackSequence.count",
+        cpu.callbackSequence.size() == vulkan.callbackSequence.size());
+  if (cpu.callbackSequence.size() == vulkan.callbackSequence.size()) {
+    for (std::size_t i = 0; i < cpu.callbackSequence.size(); ++i) {
+      check("callbackSequence.value",
+            cpu.callbackSequence[i] == vulkan.callbackSequence[i]);
+    }
+  }
+
   return equal;
 }
 
@@ -474,37 +485,37 @@ bool runPositiveRoute(const SurfaceBinding::SpirvPaths &surfacePaths) {
       VIENNAPS_LEVELSET_UPDATE_SPV_PATH, makeRebuildPaths());
 
   bool ok = true;
-  auto assertSurface = [&](const char *name, bool condition) {
+  auto assertPositive = [&](const char *name, bool condition) {
     if (!condition) {
-      std::cerr << "RED_BOUNDARY=" << name << '\n';
+      std::cerr << "POSITIVE_ROUTE_FAIL=" << name << '\n';
       ok = false;
     }
   };
 
-  assertSurface("composition.ok",
+  assertPositive("composition.ok",
                 compositionResult.ok && compositionResult.usingVulkan);
-  assertSurface("composition.notDegraded", !compositionResult.degraded);
-  assertSurface("surface.coverageVulkan",
+  assertPositive("composition.notDegraded", !compositionResult.degraded);
+  assertPositive("surface.coverageVulkan",
                 compositionResult.surface.coverageVulkan);
-  assertSurface("surface.surfaceDiffusionVulkan",
+  assertPositive("surface.surfaceDiffusionVulkan",
                 compositionResult.surface.surfaceDiffusionVulkan);
-  assertSurface("surface.neutralTransportVelocityVulkan",
+  assertPositive("surface.neutralTransportVelocityVulkan",
                 compositionResult.surface.neutralTransportVelocityVulkan);
-  assertSurface("surface.rayTracingVulkan",
+  assertPositive("surface.rayTracingVulkan",
                 compositionResult.surface.rayTracingVulkan);
-  assertSurface("surface.sessionGeneration",
+  assertPositive("surface.sessionGeneration",
                 compositionResult.surface.sessionGeneration != 0U);
-  assertSurface("levelSet.sessionGeneration",
+  assertPositive("levelSet.sessionGeneration",
                 compositionResult.levelSet.updateSessionGeneration != 0U);
-  assertSurface("sessionGenerationMatch",
+  assertPositive("sessionGenerationMatch",
                 compositionResult.surface.sessionGeneration ==
                     compositionResult.levelSet.updateSessionGeneration);
 
   const auto context = composition.sharedContext();
-  assertSurface("sharedContext",
+  assertPositive("sharedContext",
                 context != nullptr && context->session() != nullptr);
   if (context != nullptr && context->session() != nullptr) {
-    assertSurface("sharedContext.generation",
+    assertPositive("sharedContext.generation",
                   compositionResult.surface.sessionGeneration ==
                       context->session()->generation());
   }
@@ -521,20 +532,29 @@ bool runPositiveRoute(const SurfaceBinding::SpirvPaths &surfacePaths) {
     return false;
   }
 
+  auto preApplyHook = [&](viennaps::Process<T, D> &process) {
+    if (!composition.installRayFluxEngine(process, false)) {
+      throw std::runtime_error(
+          "failed to reinstall Vulkan ray flux engine before apply");
+    }
+  };
+
   surface_process_acceptance::AcceptanceRecord<T, D> vulkanRecord;
   try {
     vulkanRecord = surface_process_acceptance::runAcceptance<T, D>(
-        "vulkan", domain, process, model, config);
+        "vulkan", domain, process, model, config, preApplyHook);
   } catch (const std::exception &exception) {
-    std::cerr << "RED_BOUNDARY=vulkanRoute.exception " << exception.what()
+    std::cerr << "POSITIVE_ROUTE_FAIL=vulkanRoute.exception " << exception.what()
               << '\n';
     return false;
   } catch (...) {
-    std::cerr << "RED_BOUNDARY=vulkanRoute.exception unknown\n";
+    std::cerr << "POSITIVE_ROUTE_FAIL=vulkanRoute.exception unknown\n";
     return false;
   }
-  std::cerr << "MARKER runAcceptance returned processResult="
-            << static_cast<int>(vulkanRecord.processResult) << '\n';
+
+  assertPositive(
+      "processResult.success",
+      vulkanRecord.processResult == viennaps::ProcessResult::SUCCESS);
 
   surface_process_acceptance::AcceptanceRecord<T, D> cpuRecord;
   if (!cpuRecordPath.empty()) {
@@ -555,7 +575,7 @@ bool runPositiveRoute(const SurfaceBinding::SpirvPaths &surfacePaths) {
         "cpu", cpuDomain, cpuProcess, cpuModel, config);
   }
 
-  return recordsBitwiseEqual(cpuRecord, vulkanRecord);
+  return ok && recordsBitwiseEqual(cpuRecord, vulkanRecord);
 }
 
 } // namespace

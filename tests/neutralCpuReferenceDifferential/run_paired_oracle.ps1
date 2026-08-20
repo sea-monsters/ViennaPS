@@ -1,16 +1,20 @@
 param(
   [ValidateSet('BuildMod', 'BuildReference', 'BuildChecker', 'RunMod',
                'RunReference', 'Check', 'BuildProbeMod', 'BuildProbeReference',
-               'RunProbeMod', 'RunProbeReference')]
+               'RunProbeMod', 'RunProbeReference', 'BuildProbeCaptureMod',
+               'BuildProbeCaptureReference', 'RunProbeCaptureMod',
+               'RunProbeCaptureReference')]
   [string]$Step,
   [string]$OutputDirectory = "$PSScriptRoot\.tmp_paired",
   [string]$ConfiguredBuildDirectory =
       "$PSScriptRoot\..\..\build",
   [string]$ReferenceViennaPS = 'D:\Codex_lib\code_reference\ViennaPS',
-  [ValidateSet('Baseline', 'ExplicitKDTree', 'KDTreeAudit')]
+  [ValidateSet('Baseline', 'ExplicitKDTree', 'KDTreeAudit', 'IterativeTraverse')]
   [string]$Candidate = 'Baseline',
   [ValidateSet(1, 2, 4, 8)]
   [int]$Threads = 1,
+  [ValidateSet('notrace', 'trace')]
+  [string]$ProbeMode = 'notrace',
   [int]$TimeoutSeconds = 180
 )
 
@@ -23,6 +27,8 @@ $kdTreeSpecialization =
     Join-Path $PSScriptRoot 'neutral_cpu_oracle_kdtree_specialization.cpp'
 $checkerSource = Join-Path $PSScriptRoot 'neutral_cpu_oracle_checker.cpp'
 $probeSource = Join-Path $PSScriptRoot 'neutral_cpu_oracle_kdtree_probe.cpp'
+$probeCaptureSource =
+    Join-Path $PSScriptRoot 'neutral_cpu_oracle_kdtree_probe_capture.cpp'
 $vsDevCmd =
     'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat'
 $ompBin =
@@ -162,9 +168,220 @@ function Prepare-KDTreeAuditOverlay {
   return $overlayRoot
 }
 
+function Prepare-IterativeTraverseOverlay {
+  $source = Join-Path $viennaCore 'include\viennacore\vcKDTree.hpp'
+  Require-Path $source 'ViennaCore KDTree header'
+  $overlayRoot = Join-Path $OutputDirectory 'iterative-traverse-include'
+  $overlayDirectory = Join-Path $overlayRoot 'viennacore'
+  New-Item -ItemType Directory -Force -Path $overlayDirectory | Out-Null
+  $overlay = Join-Path $overlayDirectory 'vcKDTree.hpp'
+  Copy-Item -LiteralPath $source -Destination $overlay -Force
+  $text = Get-Content -LiteralPath $overlay -Raw
+  # Normalize line endings so the multi-line needles match regardless of
+  # how this script was checked out.
+  $text = $text -replace "\r\n", "`n"
+
+  $needlePair = @'
+  void traverseDown(Node *currentNode, std::pair<NumericType, Node *> &best,
+                    const ValueType &x) const {
+    if (currentNode == nullptr)
+      return;
+
+    auto axis = currentNode->axis;
+
+    // For distance comparison operations we only use the "reduced" aka less
+    // compute intensive, but order preserving version of the distance
+    // function.
+    auto distance = SquaredDistance(x, currentNode->value);
+    if (distance < best.first)
+      best = std::pair{distance, currentNode};
+
+    bool isLeft;
+    if (x[axis] < currentNode->value[axis]) {
+      traverseDown(currentNode->left, best, x);
+      isLeft = true;
+    } else {
+      traverseDown(currentNode->right, best, x);
+      isLeft = false;
+    }
+
+    // If the hypersphere with origin at x and a radius of our current best
+    // distance intersects the hyperplane defined by the partitioning of the
+    // current node, we also have to search the other subtree, since there could
+    // be points closer to x than our current best.
+    auto distanceToHyperplane =
+        scalingFactors[axis] * std::abs(x[axis] - currentNode->value[axis]);
+    distanceToHyperplane *= distanceToHyperplane;
+    if (distanceToHyperplane < best.first) {
+      if (isLeft)
+        traverseDown(currentNode->right, best, x);
+      else
+        traverseDown(currentNode->left, best, x);
+    }
+  }
+'@
+  $replacementPair = @'
+  void traverseDown(Node *currentNode, std::pair<NumericType, Node *> &best,
+                    const ValueType &x) const {
+    // P5-N1F workaround: MSVC 14.44 (/O2 /Ob2) miscompiles both the tail
+    // recursion and a plain while (currentNode != nullptr) loop here into
+    // a loop whose backward jump skips the null check, dereferencing null
+    // leaf children; it even deletes an explicit "if (nullptr) break" on
+    // the freshly loaded child. The volatile store/load below forces the
+    // check to be emitted. Load-bearing: do not "simplify" away.
+    while (currentNode != nullptr) {
+      auto axis = currentNode->axis;
+
+      // For distance comparison operations we only use the "reduced" aka
+      // less compute intensive, but order preserving version of the
+      // distance function.
+      auto distance = SquaredDistance(x, currentNode->value);
+      if (distance < best.first)
+        best = std::pair{distance, currentNode};
+
+      bool isLeft;
+      if (x[axis] < currentNode->value[axis]) {
+        traverseDown(currentNode->left, best, x);
+        isLeft = true;
+      } else {
+        traverseDown(currentNode->right, best, x);
+        isLeft = false;
+      }
+
+      // If the hypersphere with origin at x and a radius of our current
+      // best distance intersects the hyperplane defined by the
+      // partitioning of the current node, we also have to search the other
+      // subtree, since there could be points closer to x than our current
+      // best.
+      auto distanceToHyperplane =
+          scalingFactors[axis] * std::abs(x[axis] - currentNode->value[axis]);
+      distanceToHyperplane *= distanceToHyperplane;
+      if (distanceToHyperplane < best.first) {
+        Node *volatile nextNode =
+            isLeft ? currentNode->right : currentNode->left;
+        if (nextNode == nullptr)
+          break;
+        currentNode = nextNode;
+      } else {
+        break;
+      }
+    }
+  }
+'@
+
+  $needleQueue = @'
+  void traverseDown(Node *currentNode, Q &queue, const ValueType &x) const {
+    if (currentNode == nullptr)
+      return;
+
+    int axis = currentNode->axis;
+
+    queue.enqueue(std::pair{Distance(x, currentNode->value), currentNode});
+
+    bool isLeft;
+    if (x[axis] < currentNode->value[axis]) {
+      traverseDown(currentNode->left, queue, x);
+      isLeft = true;
+    } else {
+      traverseDown(currentNode->right, queue, x);
+      isLeft = false;
+    }
+
+    // If the hypersphere with origin at x and a radius of our current best
+    // distance intersects the hyperplane defined by the partitioning of the
+    // current node, we also have to search the other subtree, since there could
+    // be points closer to x than our current best.
+    auto distanceToHyperplane =
+        scalingFactors[axis] * std::abs(x[axis] - currentNode->value[axis]);
+    distanceToHyperplane *= distanceToHyperplane;
+
+    bool intersects = false;
+    if constexpr (std::is_same_v<Q, BoundedPQueue<NumericType, Node *>>) {
+      intersects = queue.size() < queue.maxSize() ||
+                   distanceToHyperplane < queue.worst();
+    } else if constexpr (std::is_same_v<Q,
+                                        ClampedPQueue<NumericType, Node *>>) {
+      intersects = distanceToHyperplane < queue.worst();
+    }
+
+    if (intersects) {
+      if (isLeft)
+        traverseDown(currentNode->right, queue, x);
+      else
+        traverseDown(currentNode->left, queue, x);
+    }
+  }
+'@
+  $replacementQueue = @'
+  void traverseDown(Node *currentNode, Q &queue, const ValueType &x) const {
+    // P5-N1F workaround: see the pair overload above. Same MSVC 14.44
+    // miscompilation; the volatile child load below is load-bearing.
+    while (currentNode != nullptr) {
+      int axis = currentNode->axis;
+
+      queue.enqueue(std::pair{Distance(x, currentNode->value), currentNode});
+
+      bool isLeft;
+      if (x[axis] < currentNode->value[axis]) {
+        traverseDown(currentNode->left, queue, x);
+        isLeft = true;
+      } else {
+        traverseDown(currentNode->right, queue, x);
+        isLeft = false;
+      }
+
+      // If the hypersphere with origin at x and a radius of our current
+      // best distance intersects the hyperplane defined by the
+      // partitioning of the current node, we also have to search the other
+      // subtree, since there could be points closer to x than our current
+      // best.
+      auto distanceToHyperplane =
+          scalingFactors[axis] * std::abs(x[axis] - currentNode->value[axis]);
+      distanceToHyperplane *= distanceToHyperplane;
+
+      bool intersects = false;
+      if constexpr (std::is_same_v<Q, BoundedPQueue<NumericType, Node *>>) {
+        intersects = queue.size() < queue.maxSize() ||
+                     distanceToHyperplane < queue.worst();
+      } else if constexpr (std::is_same_v<
+                           Q, ClampedPQueue<NumericType, Node *>>) {
+        intersects = distanceToHyperplane < queue.worst();
+      }
+
+      if (intersects) {
+        Node *volatile nextNode =
+            isLeft ? currentNode->right : currentNode->left;
+        if (nextNode == nullptr)
+          break;
+        currentNode = nextNode;
+      } else {
+        break;
+      }
+    }
+  }
+'@
+
+  foreach ($pair in @(@($needlePair, $replacementPair, 'pair'),
+                      @($needleQueue, $replacementQueue, 'queue'))) {
+    $needle = $pair[0] -replace "\r\n", "`n"
+    $replacement = $pair[1] -replace "\r\n", "`n"
+    $label = $pair[2]
+    if (($text.Split($needle).Count - 1) -ne 1) {
+      throw "IterativeTraverse needle count for $label traverseDown is not exactly one"
+    }
+    $text = $text.Replace($needle, $replacement)
+  }
+  Set-Content -LiteralPath $overlay -Value $text -NoNewline
+  return $overlayRoot
+}
+
 $kdTreeAuditInclude = $null
 if ($Candidate -eq 'KDTreeAudit') {
   $kdTreeAuditInclude = Prepare-KDTreeAuditOverlay
+}
+$iterativeTraverseInclude = $null
+if ($Candidate -eq 'IterativeTraverse') {
+  $iterativeTraverseInclude = Prepare-IterativeTraverseOverlay
 }
 
 $commonDefinitions = @(
@@ -203,6 +420,9 @@ function Build-Fixture([string]$Name, [string]$ViennaPS, [bool]$IsMod) {
   $candidateIncludes = @()
   if ($Candidate -eq 'KDTreeAudit') {
     $candidateIncludes = @((Join-Path $kdTreeAuditInclude 'viennacore'))
+  } elseif ($Candidate -eq 'IterativeTraverse') {
+    $candidateIncludes =
+        @((Join-Path $iterativeTraverseInclude 'viennacore'))
   }
   $includes = $candidateIncludes +
       @((Join-Path $ViennaPS 'include\viennaps')) +
@@ -253,6 +473,13 @@ function Build-Probe([string]$Name, [string]$ViennaPS, [bool]$IsMod) {
   }
   $includes = @((Join-Path $ViennaPS 'include\viennaps')) +
       $dependencyIncludes
+  if ($Candidate -eq 'KDTreeAudit') {
+    $definitions += '/DVIENNAPS_NEUTRAL_ORACLE_KDTREE_AUDIT=1'
+    $includes = @((Join-Path $kdTreeAuditInclude 'viennacore')) + $includes
+  } elseif ($Candidate -eq 'IterativeTraverse') {
+    $includes =
+        @((Join-Path $iterativeTraverseInclude 'viennacore')) + $includes
+  }
   $includeArgs = ($includes | ForEach-Object { '/I' + (Quote-Arg $_) }) -join ' '
   $definitionArgs = $definitions -join ' '
   $probeObject = Join-Path $OutputDirectory "$Name.obj"
@@ -268,12 +495,46 @@ function Build-Probe([string]$Name, [string]$ViennaPS, [bool]$IsMod) {
       (Quote-Arg $embreeLibrary)) "$Name link"
 }
 
-function Run-Fixture([string]$Name) {
+function Build-ProbeCapture([string]$Name, [string]$ViennaPS, [bool]$IsMod) {
+  $definitions = @($commonDefinitions)
+  if ($IsMod) {
+    $definitions += '/DVIENNAPS_NEUTRAL_ORACLE_MOD=1'
+  }
+  $includes = @((Join-Path $ViennaPS 'include\viennaps')) +
+      $dependencyIncludes
+  if ($Candidate -eq 'KDTreeAudit') {
+    $definitions += '/DVIENNAPS_NEUTRAL_ORACLE_KDTREE_AUDIT=1'
+    $includes = @((Join-Path $kdTreeAuditInclude 'viennacore')) + $includes
+  } elseif ($Candidate -eq 'IterativeTraverse') {
+    $includes =
+        @((Join-Path $iterativeTraverseInclude 'viennacore')) + $includes
+  }
+  $includeArgs = ($includes | ForEach-Object { '/I' + (Quote-Arg $_) }) -join ' '
+  $definitionArgs = $definitions -join ' '
+  $captureObject = Join-Path $OutputDirectory "$Name.obj"
+  $pdb = Join-Path $OutputDirectory "$Name.pdb"
+  $executable = Join-Path $OutputDirectory "$Name.exe"
+  $prefix = 'call ' + (Quote-Arg $vsDevCmd) +
+      ' -host_arch=x64 -arch=x64 >nul && cl.exe '
+  Invoke-Checked ($prefix + $compileFlags + ' ' + $definitionArgs + ' ' +
+      $includeArgs + ' /c ' + (Quote-Arg $probeCaptureSource) + ' /Fo' +
+      (Quote-Arg $captureObject) + ' /Fd' + (Quote-Arg $pdb)) "$Name build"
+  Invoke-Checked ($prefix + $compileFlags + ' ' + (Quote-Arg $captureObject) +
+      ' /Fe' + (Quote-Arg $executable) + ' /link ' +
+      (Quote-Arg $embreeLibrary) + ' dbghelp.lib') "$Name link"
+}
+
+function Run-Fixture([string]$Name, [string]$ExtraArg = '',
+                     [string]$RunLabel = '') {
   if ($Candidate -eq 'ExplicitKDTree') {
     $Name += '-kdtree'
   }
   $executable = Join-Path $OutputDirectory "$Name.exe"
-  $output = Join-Path $OutputDirectory "$Name-omp$Threads.txt"
+  $suffix = "omp$Threads"
+  if ($RunLabel) {
+    $suffix = "$RunLabel-$suffix"
+  }
+  $output = Join-Path $OutputDirectory "$Name-$suffix.txt"
   Require-Path $executable "$Name executable"
   $childEnvironment =
       [System.Collections.Generic.Dictionary[string, string]]::new(
@@ -291,6 +552,9 @@ function Run-Fixture([string]$Name) {
   $startInfo.UseShellExecute = $false
   $startInfo.WorkingDirectory = (Get-Location).Path
   [void]$startInfo.ArgumentList.Add($output)
+  if ($ExtraArg) {
+    [void]$startInfo.ArgumentList.Add($ExtraArg)
+  }
   $startInfo.Environment.Clear()
   foreach ($entry in $childEnvironment.GetEnumerator()) {
     [void]$startInfo.Environment.Add($entry.Key, $entry.Value)
@@ -306,7 +570,7 @@ function Run-Fixture([string]$Name) {
     throw "$Name OMP=$Threads failed with exit code $($process.ExitCode)"
   }
   $bytes = (Get-Item -LiteralPath $output).Length
-  Write-Output "$Name OMP=$Threads exit=0 output_bytes=$bytes"
+  Write-Output "$Name $RunLabel OMP=$Threads exit=0 output_bytes=$bytes"
 }
 
 switch ($Step) {
@@ -322,9 +586,28 @@ switch ($Step) {
     Build-Probe 'neutral_cpu_oracle_kdtree_probe_reference' `
         $ReferenceViennaPS $false
   }
-  'RunProbeMod' { Run-Fixture 'neutral_cpu_oracle_kdtree_probe_mod' }
+  'RunProbeMod' {
+    Run-Fixture 'neutral_cpu_oracle_kdtree_probe_mod' $ProbeMode $ProbeMode
+  }
   'RunProbeReference' {
-    Run-Fixture 'neutral_cpu_oracle_kdtree_probe_reference'
+    Run-Fixture 'neutral_cpu_oracle_kdtree_probe_reference' $ProbeMode `
+        $ProbeMode
+  }
+  'BuildProbeCaptureMod' {
+    Build-ProbeCapture 'neutral_cpu_oracle_kdtree_probe_capture_mod' $root `
+        $true
+  }
+  'BuildProbeCaptureReference' {
+    Build-ProbeCapture 'neutral_cpu_oracle_kdtree_probe_capture_reference' `
+        $ReferenceViennaPS $false
+  }
+  'RunProbeCaptureMod' {
+    Run-Fixture 'neutral_cpu_oracle_kdtree_probe_capture_mod' $ProbeMode `
+        $ProbeMode
+  }
+  'RunProbeCaptureReference' {
+    Run-Fixture 'neutral_cpu_oracle_kdtree_probe_capture_reference' `
+        $ProbeMode $ProbeMode
   }
   'RunMod' { Run-Fixture 'neutral_cpu_oracle_mod' }
   'RunReference' { Run-Fixture 'neutral_cpu_oracle_reference' }

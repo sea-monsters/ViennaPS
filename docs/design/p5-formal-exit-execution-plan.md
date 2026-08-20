@@ -580,3 +580,58 @@ classification, not a repair: `P5-N2` stays locked, and any ray-trace-phase
 candidate requires separate user approval before dispatch. The probe evidence
 bundle is `.tmp_p5_n1e_probe_20260819/`; process audits after every step found
 no compiler, linker, fixture, or probe descendant.
+
+## 15. Wave 2 N1F root-cause checkpoint (2026-08-20)
+
+The user-approved post-trace probe extension (runtime `notrace`/`trace`
+selector plus an SEH/DbgHelp capture variant) reproduced the exact composed
+fault in the caller-owned probe WITHOUT executing the ray tracer:
+`traverseDown+0x52` at the `axis` load via `findNearestWithinRadius+0x8c`,
+serial code. Serialized bisection excluded the second-KDTree build and the
+`TraceTriangle` object as triggers. The `KDTreeAudit` overlay proved the
+16-node tree structurally valid inside the crashing binary itself.
+Disassembly identified the mechanism: MSVC 14.44.35207 `/O2 /Ob2` compiles
+the second `traverseDown` recursion into a tail-call loop whose back-edge
+skips the entry null check, so a null leaf child is dereferenced
+(`rdi=0` captured at the fault). Root-cause category: external toolchain
+codegen defect triggered by the ViennaCore recursion shape; the ViennaCore
+source is semantically correct, and no ray-tracer, dependency-version,
+explicit-template, or compiler-frontend-selection experiment was repeated.
+
+`P5-N1` moves to `ROOT-CAUSE-IDENTIFIED / REPAIR-CANDIDATE-PENDING`. The
+named repair boundary is a ViennaCore overlay candidate that rewrites the
+`traverseDown` tail recursion as an explicit loop (semantics identical) and
+must pass Lane C (probe, both header roots) and Lane E (unchanged paired
+fixture, OMP 1/2/4/8, raw equality, default-flags differential intact)
+before any adoption proposal. `P5-N2` and all downstream gates remain locked
+until then.
+
+## 16. Wave 2 N1G repair-candidate validation checkpoint (2026-08-20)
+
+The approved `IterativeTraverse` overlay candidate (runner-owned include
+overlay; `.cpm-cache`, the reference tree, and production defaults
+untouched) required two iterations. The plain loop form AND a loop form
+with an explicit interior `if (currentNode == nullptr) break;` were both
+miscompiled into the identical defective back-edge (verified by repeat
+disassembly of the rebuilt binaries): MSVC 14.44 rotates/eliminates every
+source-level spelling of the null re-check. The final candidate forces the
+check with a `Node *volatile` continuation load in both `traverseDown`
+overloads.
+
+Under the serialized mutex, the final candidate passed both ordered gates:
+
+- Lane C: probe Mod `notrace`/`trace` at OMP 1/2/4/8 (8/8 exit 0; the
+  `notrace` OMP=1 configuration was the deterministic crasher), reference
+  `notrace`/`trace` at OMP 1/8 (4/4 exit 0), all comparable Mod/reference
+  probe outputs byte-identical modulo the `source=` label.
+- Lane E: paired fixture rebuilt on both sides, OMP 1/2/4/8 all raw-equal
+  (`max_ulp=0`, every category `exact`).
+
+`P5-N1` moves to `REPAIR-VALIDATED-LOCAL / ADOPTION-PENDING`. Remaining
+main-line decisions before `P5-N2` can be unlocked: (1) adopt the overlay
+as a `cmake/patches/` CPM patch against ViennaCore (ViennaLS patch
+precedent exists), (2) file the upstream MSVC codegen and ViennaCore
+reports, (3) re-confirm the N2 acceptance-matrix requirement that the
+default-flags MSVC differential is unchanged (2026-08-09 PASS evidence to
+be re-reviewed at adoption). No push or production-tree edit was performed
+in this checkpoint.

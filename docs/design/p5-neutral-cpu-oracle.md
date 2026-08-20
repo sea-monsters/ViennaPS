@@ -289,9 +289,115 @@ Results under the serialized validation mutex, required flags
   remained after each step.
 
 Classification: the real-data built tree and the exact post-processing frame
-are exonerated. The composed paired-fixture `0xC0000005` therefore requires
-the executed ray-trace phase (`runRayTracer`/Embree/TBB or the full-strategy
-state around it) to invalidate the tree or query state before
-`postProcessing_.apply()`. This narrows the boundary but is not a repair and
-does not unlock `P5-N2`; a ray-trace-phase repair or corruption-source
-candidate requires a separately approved boundary.
+are exonerated. This narrows the boundary but is not a repair and
+does not unlock `P5-N2`.
+
+## P5-N1F root-cause identification (2026-08-20)
+
+The approved post-trace probe extension added a runtime mode selector
+(`notrace`/`trace`) and an SEH/DbgHelp capture variant
+(`neutral_cpu_oracle_kdtree_probe_capture.cpp`) to the same caller-owned
+probe. Unexpectedly, the rebuilt `notrace` mode reproduced the composed
+failure exactly: exit `-1073741819`, fault at
+`KDTree<float,std::array<float,3>>::traverseDown<ClampedPQueue<...>>+0x52`
+(`vcKDTree.hpp:331`, the `axis` load), reached through
+`findNearestWithinRadius+0x8c` from the probe's direct query loop — serial
+code, no OpenMP region, no ray tracer executed.
+
+Serialized bisection under the validation mutex then excluded the new
+elements one at a time: removing the second (`pointKdTree`) build still
+crashed (E1), and removing the `TraceTriangle` object construction still
+crashed (E2). The pass/fail flip between the N1E and N1F binaries is
+therefore caused by semantically irrelevant surrounding code, not by any
+runtime action.
+
+The existing `KDTreeAudit` overlay was then applied to the probe build. In
+the crashing binary itself the audit reported `KDTree audit valid nodes=16`
+immediately before the fatal query: every child pointer lies inside the node
+storage with vector-aligned addresses, every `axis < D`, every
+`index < nodeCount`, and the walk visits all 16 nodes. The in-memory tree is
+structurally perfect; the defect is in the query code path.
+
+Disassembly of the crashing capture binary (`dumpbin /SYMBOLS` +
+`/DISASM`, function at preferred VA `0x1400459F0`, fault at `+0x52` =
+`0x140045A42`) shows:
+
+- `0x...5A42: movsxd rbx, dword ptr [rdi+18h]` — the `axis` load with
+  `rdi = currentNode`; the captured registers show `rdi=0`.
+- Function entry `0x...59F0: test rdx,rdx; je ...` — the source-level
+  `if (currentNode == nullptr) return;` guard.
+- The second (tail) recursion was compiled into a loop:
+  `0x...5B00: mov rdi, qword ptr [rdi+rax*8+20h]` (load the `left`/`right`
+  child) followed by `jmp 0x...5A42` — a back-edge that re-enters AFTER the
+  null check. A null leaf child is therefore dereferenced at the `axis`
+  load, producing `0xC0000005` on address `0x18`.
+
+Root cause: MSVC 14.44.35207 at `/O2 /Ob2 /openmp:llvm` miscompiles the tail
+recursion in `viennacore::KDTree::traverseDown` (queue-based overload; the
+`findNearest` pair overload shares the same shape) by dropping the dominating
+null check from the tail-call loop. The ViennaCore source is correct; the
+defect is external toolchain code generation triggered by this recursion
+shape. This single mechanism explains every recorded observation: the
+constant `+0x52` fault offset across Mod/reference/composed/probe binaries,
+OMP-count independence, full determinism, the default-flags pass, the pure
+and synthetic fixture passes (different codegen of the same function), and
+the preflight pass (tree built but never queried).
+
+This is a root-cause classification with direct evidence, not a repair.
+`P5-N2` remains locked until an approved ViennaCore repair candidate
+(loop-form `traverseDown` overlay) passes Lane C (probe) and Lane E (paired
+fixture) under the ordered Mod-first gates.
+
+## P5-N1G repair-candidate validation (2026-08-20)
+
+The user approved the `IterativeTraverse` candidate: both `traverseDown`
+overloads (pair and queue) are rewritten from tail recursion into an
+explicit `while` loop, applied as a runner-owned include overlay
+(`-Candidate IterativeTraverse`) without touching `.cpm-cache`, the
+reference tree, or production defaults.
+
+The first loop-form overlay still crashed identically. Disassembly of the
+rebuilt binary (`neutral_cpu_oracle_kdtree_probe_capture_mod.exe`, function
+at preferred VA `0x140045100`) showed the SAME defective shape: entry
+`test rdx,rdx; je` at `0x...50B0`, axis load at `+0x52` (`0x...5102`), and
+a back-edge `0x...51C5: jmp 0x...5102` that skips the entry null check.
+Adding an explicit `if (currentNode == nullptr) break;` on the freshly
+loaded child did not help either: MSVC deleted that check as well and
+emitted byte-equivalent defective code. The optimizer treats the loop-head
+and interior null tests as redundant with the entry test and rotates them
+out of the back-edge path.
+
+The final overlay therefore forces the check through a `volatile` store/load
+of the continuation child:
+
+```cpp
+if (distanceToHyperplane < best.first /* resp. intersects */) {
+  Node *volatile nextNode =
+      isLeft ? currentNode->right : currentNode->left;
+  if (nextNode == nullptr)
+    break;
+  currentNode = nextNode;
+} else {
+  break;
+}
+```
+
+Validation under the serialized mutex (all at
+`/O2 /Ob2 /DNDEBUG /openmp:llvm /MD /Zi`):
+
+- Lane C probe, Mod build: `notrace` and `trace` modes at OMP 1/2/4/8,
+  8/8 exit 0 (`notrace` OMP=1 previously crashed deterministically).
+- Lane C probe, reference build: `notrace`/`trace` at OMP 1/8, 4/4 exit 0.
+- Probe outputs: all available Mod/reference pairs (OMP 1/8 both modes)
+  byte-identical after removing the `source=` label; 60 radius-query
+  results on both sides.
+- Lane E paired fixture, both sides rebuilt with the overlay: OMP 1/2/4/8
+  all `paired neutral CPU differential PASS empty=exact active=exact
+  flux=exact geometry=exact process=exact max_ulp=0` — the overlay does
+  not perturb a single ULP of the differential.
+
+Status: the repair candidate is validated locally on both ordered gates.
+Adoption (a `cmake/patches/` CPM patch against ViennaCore plus an upstream
+MSVC/ViennaCore report) and the N2 acceptance-matrix requirement that the
+default-flags MSVC differential remains unchanged are main-line decisions
+and remain pending.

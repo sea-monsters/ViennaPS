@@ -13,7 +13,9 @@ Status: inventory plus fallback-contract evidence (`P5-MODEL-MATRIX-ROW-01`,
 with separately accepted narrow WetEtching, SelectiveEpitaxy, and
 single-precursor TEOS numeric Process rows (`P5-WETETCH-PROCESS-ADAPTER`,
 `P5-SELECTIVE-EPITAXY-PROCESS-ADAPTER`, and
-`P5-TEOS-PROCESS-ADAPTER`, 2026-08-18). This file does not enable a generic
+`P5-TEOS-PROCESS-ADAPTER`, 2026-08-18). `P5-S1-SURFACE-INTEGRATION-GREEN`
+(2026-08-20) additionally admits a narrow `NeutralTransport<float,2>` frontier
+ray slice on the same CPU-first boundary. This file does not enable a generic
 route or claim aggregate model support.
 
 The governing boundary is [the Vulkan intent whitepaper](vulkan-program-intent-framework.md):
@@ -46,12 +48,24 @@ evidence of Vulkan support.
    the CPU result, including conservation and geometry criteria appropriate to
    the row.
 
-The current Vulkan ray predicate is narrower than the model hierarchy:
-`float`, `D == 2`, one `SingleParticle` and data label, no custom source, and
-single-bounce (`maxReflections == 0`). The eligibility gate rejects every
-other `ProcessModelCPU` before device initialization. See
+The current Vulkan ray predicate is a three-row admission, not a generic model
+hierarchy, and requires a non-empty `multibounceFrontierQueue` SPIR-V path for
+any reflection-bearing route:
+1. `SingleParticleProcess<float,2>`, one `SingleParticle`/`particleFlux` label,
+   no custom source, and `maxReflections == 0`;
+2. `SingleParticleProcess<float,2>`, one label, no custom source, no
+   coverage/desorption, `maxReflections == 1`, and a non-empty
+   `multibounceFrontierQueue` path (bounded one-reflection slice evidenced by
+   `P5-RAY-MULTIBOUNCE-PROCESS-INTEGRATION`);
+3. `NeutralTransport<float,2>`, default-constructed or equivalent single-label
+   configuration, no custom source, `maxReflections <= 2`, and a non-empty
+   `multibounceFrontierQueue` path (narrow frontier ray slice evidenced by
+   `P5-S1-SURFACE-INTEGRATION-GREEN`; paired CPU record bit-exact, five-stage
+   shared session, negative battery 4/4).
+The eligibility gate rejects every other `ProcessModelCPU` before device
+initialization. See
 [`VulkanRayFluxEngine::checkInput`](../../gpu/vulkan/ray/vulkan_ray_flux_engine.cpp)
-and the documented no-reflection boundary in
+and the documented reflection boundary in
 [`vulkan_ray_flux_engine.hpp`](../../gpu/vulkan/ray/vulkan_ray_flux_engine.hpp).
 
 `P5-SURFACE-INTEGRATION` is still a prerequisite for a complete Process row.
@@ -68,10 +82,10 @@ silently substitutes a CUDA model.
 
 | Family (CPU source) | Vulkan compute seam | Current eligibility | Missing semantics and required CPU oracle |
 |---|---|---|---|
-| [SingleParticleProcess](../../include/viennaps/models/psSingleParticleProcess.hpp) | `VulkanRayFluxEngine` device triangle hit/compaction/reduction; CPU source setup and normalization are reused. | **Eligible now, narrowly**: only `SingleParticleProcess<float,2>`, one `SingleParticle`/`particleFlux` label, evidenced default or equivalent source, no reflection, and a valid strict deployment profile. This is not full model support until surface integration. | No reflection/roulette/multi-bounce and no general particle/model admission yet. Freeze the fixed-seed `CPU_TRIANGLE` differential (20,000/20,000 hits, total relative difference 0.29%, max 2.07% in the accepted fixture), then require unchanged CPU velocity/geometry after surface integration. |
+| [SingleParticleProcess](../../include/viennaps/models/psSingleParticleProcess.hpp) | `VulkanRayFluxEngine` device triangle hit/compaction/reduction; CPU source setup and normalization are reused. | **Eligible now, narrowly**: only `SingleParticleProcess<float,2>`, one `SingleParticle`/`particleFlux` label, evidenced default or equivalent source, `maxReflections == 0`, and a valid strict deployment profile. A bounded `maxReflections == 1` slice with no coverage/desorption and a non-empty `multibounceFrontierQueue` path is separately evidenced by `P5-RAY-MULTIBOUNCE-PROCESS-INTEGRATION`; Row-01 itself remains limited to `maxReflections == 0`. This is not full model support until surface integration. | No reflection/roulette/multi-bounce and no general particle/model admission yet. Freeze the fixed-seed `CPU_TRIANGLE` differential (20,000/20,000 hits, total relative difference 0.29%, max 2.07% in the accepted fixture), then require unchanged CPU velocity/geometry after surface integration. |
 | [MultiParticleProcess](../../include/viennaps/models/psMultiParticleProcess.hpp) (ion and neutral species) | No Vulkan species/energy/label seam. Existing GPU conversion is a CUDA model and warns that only one ion is converted. | **CPU fallback** for the complete process; no Vulkan row may be selected. | Per-species labels, ion energy distribution/threshold, angle-dependent sticking, neutral material sticking, custom rate function, and multiple particle ordering are absent from the ray engine. Oracle: per-label flux conservation and CPU surface velocity/geometry differential for one-ion, multi-ion, and mixed-neutral fixtures. |
 | [IonBeamEtching](../../include/viennaps/models/psIonBeamEtching.hpp) | No Vulkan IonBeam transport or redeposition seam; the `ProcessModelGPU` class is CUDA-only. | **CPU fallback** in Auto; Manual Vulkan **unsupported/fail closed**. | Ion energy/angle response, reflection, redeposition flux, and `IBESurfaceModel` coupling are not represented. Oracle: CPU ion flux plus redeposition labels, mass/flux conservation, and final etched geometry for 2-D and 3-D fixtures. |
-| [NeutralTransport](../../include/viennaps/models/psNeutralTransport.hpp) | `NeutralTransportVelocityExecutor` has an explicit FP32 Vulkan bridge; coverage and diffusion seams are separate P5 candidates. | **CPU fallback for the model**. The velocity substage may be an explicit candidate only after `P5-SURFACE-INTEGRATION`; it does not make ray transport Vulkan-eligible. | Ballistic transport, coverage update, desorption, surface diffusion, material IDs, and callback lifecycle are not one Vulkan route. Oracle: raw-bit velocity equality for accepted N2 cases, then CPU full-process coverage/surface-data/velocity and geometry differential with conservation. |
+| [NeutralTransport](../../include/viennaps/models/psNeutralTransport.hpp) | `NeutralTransportVelocityExecutor` has an explicit FP32 Vulkan bridge; the frontier ballistic event queue is implemented in the narrow slice below. | **Narrow frontier ray slice accepted**: `NeutralTransport<float,2>`, default-constructed or equivalent single-label configuration, no custom source, `maxReflections <= 2`, and a non-empty `multibounceFrontierQueue` path (`P5-S1-SURFACE-INTEGRATION-GREEN`: paired CPU record bit-exact on Release/Intel Arc, five-stage shared session, negative battery 4/4). The rest of the model remains CPU fallback. | The frontier slice covers only the ballistic event queue and surface-label reduction; coverage update, desorption, surface diffusion, material IDs, custom source/labels, and the full callback lifecycle remain CPU fallback. Oracle: raw-bit equality of the paired CPU record for the admitted slice (`P5-S1`), then CPU full-process coverage/surface-data/velocity and geometry differential with conservation for any broader configuration. |
 | [CF4O2Etching](../../include/viennaps/models/psCF4O2Etching.hpp) | No Vulkan seam; CPU model owns ion, etchant, oxygen, polymer particles and surface chemistry. | **CPU fallback**; no `getGPUModel()`-based promotion. | Four species, ion-enhanced oxidation/sputtering, polymer/oxygen coupling, coverage and material response are missing. Oracle: all four flux labels, per-material velocity, non-negative/conserved species totals, and final geometry. |
 | [SF6O2Etching](../../include/viennaps/models/psSF6O2Etching.hpp) | CUDA `ProcessModelGPU` callable model only; no Vulkan plasma transport or surface bridge. | **CPU fallback**; CUDA class is not Vulkan evidence. | Ion/etchant/oxygen callables, plasma surface chemistry, coverage, and material response are missing. Oracle: three species labels, flux/velocity conservation, and CPU geometry differential. |
 | [SF6C4F8Etching](../../include/viennaps/models/psSF6C4F8Etching.hpp) | CUDA `ProcessModelGPU` callable model only; it reuses the plasma surface model but has no Vulkan route. | **CPU fallback**. | Ion/etchant/polymer transport, polymer deposition/etch competition, and plasma surface response are missing. Oracle: all species labels, polymer mass balance, per-material velocity, and geometry differential. |
@@ -111,6 +125,9 @@ crash.
 **Eligible row and oracles.** The predicate is `float`, `D == 2`, one
 `SingleParticle`/`particleFlux` label, evidenced default (or equivalent)
 source, `maxReflections == 0`, and a valid strict-FP32 deployment profile.
+The engine predicate has since been extended to admit a bounded
+`SingleParticleProcess` one-reflection slice and a `NeutralTransport<float,2>`
+frontier ray slice, but Row-01 evidence remains limited to `maxReflections == 0`.
 Use the unmodified reference tree as the CPU authority. Freeze the fixed-seed
 `CPU_TRIANGLE` comparison at 20,000/20,000 hits (existing fixture limits:
 `totalRelDiff <= 0.29%`, `maxRelDiff <= 2.07%`), verify hit/flux conservation,
@@ -141,7 +158,7 @@ supplies its own seam and oracle:
 | Family | Required status in this card |
 |---|---|
 | `MultiParticleProcess` | CPU fallback; no Vulkan species/energy route. |
-| `NeutralTransport` | CPU fallback; velocity bridge alone is not a model route. |
+| `NeutralTransport` | Narrow frontier ray slice see the matrix row above; full model CPU fallback. |
 | `IonBeamEtching` | CPU fallback; Manual Vulkan fail closed. |
 | `CF4O2Etching`, `SF6O2Etching`, `SF6C4F8Etching` | CPU fallback; CUDA is not Vulkan evidence. |
 | `FluorocarbonEtching`, `PlasmaEtching` | CPU fallback; no transport/surface contract. |
@@ -169,12 +186,15 @@ subsequent rows must not widen the predicate or weaken the oracle.
 `viennaps-vulkan-model-matrix-fallback-smoke` is the machine-checkable
 inventory gate. It constructs one CPU model for each of the 14 non-eligible
 rows (the combined `FluorocarbonEtching`/`PlasmaEtching` inventory row is
-represented by its concrete CPU model), then checks that AUTO accepts the
-CPU engine contract while MANUAL Vulkan returns `INVALID_INPUT` before any
-disk-mesh output exists. A separate strict check confirms that only
-`SingleParticleProcess<float,2>` with the single-bounce parameters remains
-eligible. This smoke is routing evidence only; it does not close the pending
-Release CPU surface oracle or claim Vulkan support for any additional row.
+represented by its concrete CPU model) with an empty `multibounceFrontierQueue`
+path, then checks that AUTO accepts the CPU engine contract while MANUAL Vulkan
+returns `INVALID_INPUT` before any disk-mesh output exists. A separate strict
+check confirms that only `SingleParticleProcess<float,2>` with zero reflections
+remains eligible under that empty-path configuration; it does not exercise the
+bounded one-reflection or `NeutralTransport` frontier slices, which require a
+non-empty `multibounceFrontierQueue` path and are evidenced separately. This
+smoke is routing evidence only; it does not close the pending Release CPU
+surface oracle or claim Vulkan support for any additional row.
 
 ## Fallback and dependency rules
 

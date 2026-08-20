@@ -32,7 +32,10 @@ struct VulkanRayFluxSpirvPaths {
   std::string triangleBvh; // may be empty -> brute-force triangle hit
   // Optional bounded multi-bounce frontier shader.  An empty path keeps the
   // existing single-bounce route unchanged and forces CPU fallback for any
-  // reflection-enabled request.
+  // reflection-enabled request.  A non-empty path additionally admits the
+  // bounded one-reflection SingleParticleProcess<float, 2> slice and the
+  // NeutralTransport<float, 2> slice (single particle, no source,
+  // maxReflections <= 2).
   std::string multibounceFrontierQueue;
 };
 
@@ -42,9 +45,15 @@ struct VulkanRayFluxSpirvPaths {
 /// DeviceRayFluxPipeline.  Otherwise it degrades to the CPU triangle engine
 /// (AUTO mode) or fails closed (manual Vulkan without a valid profile).
 ///
-/// The default route remains the strict single-bounce slice.  An explicitly
-/// supplied frontier shader admits only the bounded one-reflection
-/// CPU-decision route; generic model/multi-bounce semantics remain CPU-owned.
+/// The default route remains the strict single-bounce slice:
+///   - SingleParticleProcess<float, 2> with one particle, one data label,
+///     no source, and maxReflections == 0.
+/// An explicitly supplied frontier shader additionally admits:
+///   - SingleParticleProcess<float, 2> with maxReflections == 1, no coverages
+///     or surface desorption, and a non-empty multibounceFrontierQueue;
+///   - NeutralTransport<float, 2> with one particle, one data label, no source,
+///     maxReflections <= 2, and a non-empty multibounceFrontierQueue.
+/// Generic model/multi-bounce semantics remain CPU-owned.
 template <typename NumericType, int D>
 class VulkanRayFluxEngine final : public FluxEngine<NumericType, D> {
 public:
@@ -62,8 +71,13 @@ public:
   VulkanRayFluxEngine &operator=(const VulkanRayFluxEngine &) = delete;
 
   /// Generic device-resident multi-bounce remains unavailable.  The only
-  /// admitted extension is the bounded CPU-decision frontier route selected by
-  /// an explicit shader path and a separately tested predicate.
+  /// admitted routes are:
+  ///   - SingleParticleProcess<float, 2> with one particle, one data label,
+  ///     no source, and maxReflections == 0;
+  ///   - the bounded one-reflection SingleParticleProcess<float, 2> extension
+  ///     (maxReflections == 1, no coverages/desorption, frontier shader);
+  ///   - NeutralTransport<float, 2> with one particle, one data label, no
+  ///     source, maxReflections <= 2, and the frontier shader.
   [[nodiscard]] static constexpr std::string_view devicePhysicsGap() {
     return "generic device multi-bounce physics is unavailable; only the bounded CPU-decision frontier route is admitted";
   }

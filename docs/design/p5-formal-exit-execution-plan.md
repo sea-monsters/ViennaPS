@@ -763,3 +763,38 @@ mirror header, acceptance fixture only).
 `P5-S1-SURFACE-INTEGRATION-GREEN` is `DONE-LOCAL`; `P5-SURFACE-INTEGRATION`
 is locally green. Next card on the critical path:
 `P5-M0-MODEL-MATRIX-AGGREGATE`. No push was performed in this checkpoint.
+
+## 21. Wave 3 M0 model-matrix aggregate checkpoint (2026-08-20)
+
+`P5-M0-MODEL-MATRIX-AGGREGATE` closed the aggregate 15-row support matrix
+after `P5-S1`. A read-only gap analysis reconciled the four artifacts
+(inventory, compute map, fallback smoke, status board) against the actual
+`VulkanRayFluxEngine::checkInput` predicate; the card then applied
+documentation alignment only, plus two code-adjacent tightenings:
+
+1. The NeutralTransport admission predicate gained the
+   `getParticleDataLabels().size() == 1U` check, matching the
+   SingleParticleProcess rows; the S1 evidence configuration satisfies it,
+   so all S1 acceptance evidence remains valid.
+2. Comments in `model_matrix_fallback_smoke.cpp` and
+   `vulkan_ray_flux_engine.hpp/.cpp` now state the three admitted slices
+   (SingleParticleProcess zero-reflection, bounded one-reflection, and
+   NeutralTransport maxReflections <= 2, the latter two requiring a non-empty
+   multibounce frontier SPIR-V path) instead of the stale single-row claim.
+
+The broad-switch audit confirmed no general Vulkan enable path exists:
+`backendPolicy.hpp` AUTO selection passes only through the strict per-stage
+hard thresholds (base Vulkan suite, strict-FP32 numerical smoke, memory
+budget, ray mode, FP64 suite), and `ComputeBackend::AUTO` itself is never a
+selectable backend.
+
+Acceptance evidence: after the predicate tightening the Vulkan tree
+rebuilds clean and all 46 focused Vulkan smokes pass on Release/Intel Arc,
+including the S1 acceptance smoke (record bit-exact against the paired CPU
+record) and `model_matrix_fallback_smoke` (15 rows: 1 strict-eligible row
+under its empty-frontier configuration, 14 CPU-fallback/unsupported rows
+failing closed). CPU-side behavior is untouched by diff scope.
+
+`P5-MODEL-MATRIX` is `DONE-LOCAL`. Next cards: `P5-K1` top-level gate and
+release-facing support documentation; the `P5-E0` gates are unchanged. No
+push was performed in this checkpoint.

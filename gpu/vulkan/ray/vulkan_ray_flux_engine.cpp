@@ -988,12 +988,15 @@ VulkanRayFluxEngine<NumericType, D>::checkInput(ProcessContext<NumericType, D> &
   }
   impl_->model_ = model;
 
-  // P5-RAY-ROUTE has evidence only for the concrete single-particle FP32 2D
-  // model.  Keep the predicate explicit so a ProcessModelCPU with different
-  // particle/source semantics cannot reach device dispatch.  The bounded
-  // frontier extension admits the one-reflection SingleParticleProcess row and,
-  // with coverage/global-data support, the NeutralTransport<float,2> row up to
-  // maxReflections == 2.
+  // P5-RAY-ROUTE evidence covers three concrete FP32 2D input slices:
+  //   (a) SingleParticleProcess<float, 2> with one particle, one data label,
+  //       no source, and maxReflections == 0;
+  //   (b) SingleParticleProcess<float, 2> with maxReflections == 1, no
+  //       coverages or surface desorption, and a non-empty frontier shader;
+  //   (c) NeutralTransport<float, 2> with one particle, one data label, no
+  //       source, maxReflections <= 2, and a non-empty frontier shader.
+  // Keep the predicate explicit so a ProcessModelCPU with different
+  // particle/source semantics cannot reach device dispatch.
   bool supported = false;
   bool boundedMultibounce = false;
   if constexpr (std::is_same_v<NumericType, float> && D == 2) {
@@ -1012,12 +1015,14 @@ VulkanRayFluxEngine<NumericType, D>::checkInput(ProcessContext<NumericType, D> &
 
     // NeutralTransport<float,2> needs coverage-aware surfaceReflection callbacks
     // even for maxReflections == 0, so it always uses the CPU-decision frontier
-    // route.  Evidence boundary is maxReflections <= 2.
+    // route.  Evidence boundary is maxReflections <= 2 and a single particle
+    // data label (its local fluxLabel).
     auto neutralTransport =
         std::dynamic_pointer_cast<NeutralTransport<float, 2>>(context.model);
     const bool neutralTransportModel =
         neutralTransport != nullptr &&
         neutralTransport->getParticleTypes().size() == 1U &&
+        neutralTransport->getParticleDataLabels().size() == 1U &&
         neutralTransport->getSource() == nullptr &&
         !impl_->paths.multibounceFrontierQueue.empty() &&
         context.rayTracingParams.maxReflections <= 2U;

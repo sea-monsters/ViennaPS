@@ -3,10 +3,15 @@
 //
 // P5-MODEL-MATRIX row fallback contract smoke.
 //
-// This is deliberately a CPU-led contract test.  It does not promote any
-// model: only the already evidenced SingleParticleProcess<float, 2> slice is
-// eligible, while every other inventory row must stay on CPU in AUTO and fail
-// closed for an explicit MANUAL Vulkan request.
+// This is deliberately a CPU-led contract test.  The engine is constructed
+// with an empty multibounceFrontierQueue, so under that path configuration
+// only the zero-reflection SingleParticleProcess<float, 2> slice is eligible.
+// Every other inventory row must stay on CPU in AUTO and fail closed for an
+// explicit MANUAL Vulkan request.  With a non-empty frontier shader the engine
+// also admits the bounded one-reflection SingleParticleProcess slice and a
+// narrow NeutralTransport<float, 2> slice (single particle, no source,
+// maxReflections <= 2); those routes are exercised by separate frontier tests,
+// not by this smoke.
 
 #include "vulkan_ray_flux_engine.hpp"
 
@@ -170,7 +175,10 @@ int main() {
   viennaps::units::Length::setUnit(viennaps::units::Length::MICROMETER);
   viennaps::units::Time::setUnit(viennaps::units::Time::SECOND);
 
-  // Strict row remains the only eligible model/precision/dimension slice.
+  // Strict row remains the only eligible slice when the engine is built with
+  // an empty multibounceFrontierQueue.  A non-empty frontier shader would
+  // additionally admit bounded one-reflection SingleParticleProcess and
+  // NeutralTransport<float, 2> slices, but those are validated elsewhere.
   viennaps::ProcessContext<float, 2> strictContext;
   strictContext.model =
       viennaps::SmartPointer<viennaps::SingleParticleProcess<float, 2>>::New();

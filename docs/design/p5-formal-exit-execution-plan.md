@@ -430,7 +430,7 @@ exception. The following configuration completed successfully in 21.8 s plus
 ```powershell
 $env:CPM_SOURCE_CACHE = 'D:\Codex_lib\ViennaPSMod\.cpm-cache'
 pwsh -File cmake/invoke-cmake-clean-env.ps1 -S . \
-  -B .tmp_p5_x0_config_novtk_20260819 \
+  -B .tmp_p5_x0_config_novtk_<date> \
   -DVIENNAPS_ENABLE_VULKAN=ON -DVIENNAPS_USE_VTK=OFF \
   -DVIENNAPS_VTK_RENDERING=OFF -DVIENNAPS_BUILD_TESTS=OFF \
   -DVIENNAPS_BUILD_EXAMPLES=OFF
@@ -578,7 +578,7 @@ ray-trace phase or surrounding full-strategy state.
 `P5-N1` moves to `RECLAIMED-MAIN / TRACE-PHASE-INDUCED`. This is a boundary
 classification, not a repair: `P5-N2` stays locked, and any ray-trace-phase
 candidate requires separate user approval before dispatch. The probe evidence
-bundle is `.tmp_p5_n1e_probe_20260819/`; process audits after every step found
+bundle is a temporary `.tmp_*` directory outside the durable record; process audits after every step found
 no compiler, linker, fixture, or probe descendant.
 
 ## 15. Wave 2 N1F root-cause checkpoint (2026-08-20)
@@ -664,7 +664,7 @@ performed in this checkpoint.
 
 The `P5-N2` main-line gate ran exactly as specified: both fixture sides
 and the checker were rebuilt independently into a fresh evidence
-directory (`.tmp_p5_n2_gate_20260820`) against the CPM-patched ViennaCore
+directory (a temporary `.tmp_*` directory) against the CPM-patched ViennaCore
 cache headers (no overlay), and the full matrix was rerun. Every
 acceptance cell passed: Mod and unmodified reference, OMP 1/2/4/8, exact
 Release flags `/O2 /Ob2 /DNDEBUG /openmp:llvm /MD /Zi`, identical
@@ -687,13 +687,13 @@ one fixture (`tests/surfaceProcessAcceptance/surface_acceptance_fixture.hpp`):
 raysPerPoint 1, maxReflections 2, sticking 0.5/0.8, desorption 0.1,
 surface diffusion 1e-4, steady-state coverage.
 
-CPU leg GREEN: `surface_process_acceptance_cpu` built and passed in
-`.tmp_p5_s0_20260820` (Release), emitting the full bit-pattern record
+CPU leg GREEN: `surface_process_acceptance_cpu` built and passed in a
+fresh temporary evidence directory (`.tmp_*`, Release), emitting the full bit-pattern record
 (`processResult=0`, 9-cell flux, coverage convergence in 2 iterations).
 
 Vulkan leg RED on Intel Arc as designed: the smoke
-(`gpu/vulkan/surface/surface_process_acceptance_smoke.cpp`, built in
-`.tmp_p5_s0_vulkan_20260820` with the ray SPIR-V wiring appended to
+(`gpu/vulkan/surface/surface_process_acceptance_smoke.cpp`, built in a
+separate temporary Vulkan evidence directory (`.tmp_*`) with the ray SPIR-V wiring appended to
 `gpu/vulkan/ray/CMakeLists.txt` and the ray-subdirectory guard in
 `gpu/vulkan/CMakeLists.txt`) resolved all five stages -- COVERAGE,
 SURFACE_DIFFUSION, NEUTRAL_TRANSPORT_VELOCITY, RAY_TRACING (COMPUTE_BVH),
@@ -710,6 +710,11 @@ fail-closing through the manual `LevelSetUpdateFailurePolicy::FAIL` into a
 with exit 1. The RED boundary therefore sits exactly where the intent
 framework predicts: complete NeutralTransport surface physics (multi-bounce
 re-emission feeding coverage/desorption/diffusion) is not device-resident.
+
+All `.tmp_<card>_<date>` evidence directories are temporary validation
+artifacts: they are excluded from version control and from durable records,
+and they are scheduled for cleanup after the P5 closeout completes
+(`P5-E0`).
 
 `P5-S0-SURFACE-ACCEPTANCE-RED` is `DONE-LOCAL`; `P5-SURFACE-INTEGRATION`
 moves to `S0-RED-DONE / READY-S1`. Next card on the critical path:

@@ -2108,11 +2108,11 @@ Process / `FluxProcessStrategy` behavior is changed.
 | Surface response | `MaterialMap::isMaterial` and `SurfaceModel::getCoverages` | Masked materials zero weight; multi-mask lists supported; coverage scalar lookup handles missing/out-of-range labels |
 
 Acceptance evidence: `rayPhysics` CTest passes in the reused Release MSVC C++20
-build `.tmp_p5_route_20260805` under `-DVIENNAPS_BUILD_TESTS=ON`:
+build (a temporary `.tmp_*` evidence directory) under `-DVIENNAPS_BUILD_TESTS=ON`:
 
 ```bat
-cmake --build .tmp_p5_route_20260805 --config Release --target rayPhysics
-ctest --test-dir .tmp_p5_route_20260805 -C Release -R rayPhysics --output-on-failure
+cmake --build <build-dir> --config Release --target rayPhysics
+ctest --test-dir <build-dir> -C Release -R rayPhysics --output-on-failure
 ```
 
 Result: `Test #81: rayPhysics ....................... Passed 0.54 sec`.

@@ -15,6 +15,9 @@ param(
   [int]$Threads = 1,
   [ValidateSet('notrace', 'trace')]
   [string]$ProbeMode = 'notrace',
+  [ValidateSet('Release', 'Default')]
+  [string]$FlagSet = 'Release',
+  [string]$ViennaCoreOverride = '',
   [int]$TimeoutSeconds = 180
 )
 
@@ -68,6 +71,10 @@ Require-Path $ompBin 'LLVM OpenMP runtime directory'
 Require-Path $crtBin 'MSVC runtime directory'
 
 $viennaCore = Cache-Value 'ViennaCore_SOURCE_DIR'
+if ($ViennaCoreOverride) {
+  $viennaCore = $ViennaCoreOverride
+  Require-Path $viennaCore 'ViennaCore override source'
+}
 $viennaLS = Cache-Value 'ViennaLS_SOURCE_DIR'
 $viennaHRLE = Cache-Value 'ViennaHRLE_SOURCE_DIR'
 $viennaRay = Cache-Value 'ViennaRay_SOURCE_DIR'
@@ -402,6 +409,12 @@ $dependencyIncludes = @(
 )
 $compileFlags =
     '/nologo /std:c++20 /EHsc /Zi /O2 /Ob2 /DNDEBUG /openmp:llvm /MD /bigobj'
+if ($FlagSet -eq 'Default') {
+  # 2026-08-09 baseline closure: the same flags without an explicit
+  # optimization level (cl defaults to /Od).
+  $compileFlags =
+      '/nologo /std:c++20 /EHsc /Zi /DNDEBUG /openmp:llvm /MD /bigobj'
+}
 
 function Build-Fixture([string]$Name, [string]$ViennaPS, [bool]$IsMod) {
   if ($Candidate -eq 'ExplicitKDTree') {

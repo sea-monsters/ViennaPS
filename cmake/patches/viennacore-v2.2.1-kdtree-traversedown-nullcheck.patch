@@ -1,0 +1,169 @@
+diff --git a/include/viennacore/vcKDTree.hpp b/include/viennacore/vcKDTree.hpp
+index 998ebf5..6a6b311 100644
+--- a/include/viennacore/vcKDTree.hpp
++++ b/include/viennacore/vcKDTree.hpp
+@@ -284,39 +284,48 @@ private:
+    ****************************************************************************/
+   void traverseDown(Node *currentNode, std::pair<NumericType, Node *> &best,
+                     const ValueType &x) const {
+-    if (currentNode == nullptr)
+-      return;
+-
+-    auto axis = currentNode->axis;
+-
+-    // For distance comparison operations we only use the "reduced" aka less
+-    // compute intensive, but order preserving version of the distance
+-    // function.
+-    auto distance = SquaredDistance(x, currentNode->value);
+-    if (distance < best.first)
+-      best = std::pair{distance, currentNode};
+-
+-    bool isLeft;
+-    if (x[axis] < currentNode->value[axis]) {
+-      traverseDown(currentNode->left, best, x);
+-      isLeft = true;
+-    } else {
+-      traverseDown(currentNode->right, best, x);
+-      isLeft = false;
+-    }
+-
+-    // If the hypersphere with origin at x and a radius of our current best
+-    // distance intersects the hyperplane defined by the partitioning of the
+-    // current node, we also have to search the other subtree, since there could
+-    // be points closer to x than our current best.
+-    auto distanceToHyperplane =
+-        scalingFactors[axis] * std::abs(x[axis] - currentNode->value[axis]);
+-    distanceToHyperplane *= distanceToHyperplane;
+-    if (distanceToHyperplane < best.first) {
+-      if (isLeft)
+-        traverseDown(currentNode->right, best, x);
+-      else
++    // P5-N1F workaround: MSVC 14.44 (/O2 /Ob2) miscompiles both the tail
++    // recursion and a plain while (currentNode != nullptr) loop here into
++    // a loop whose backward jump skips the null check, dereferencing null
++    // leaf children; it even deletes an explicit "if (nullptr) break" on
++    // the freshly loaded child. The volatile store/load below forces the
++    // check to be emitted. Load-bearing: do not "simplify" away.
++    while (currentNode != nullptr) {
++      auto axis = currentNode->axis;
++
++      // For distance comparison operations we only use the "reduced" aka
++      // less compute intensive, but order preserving version of the
++      // distance function.
++      auto distance = SquaredDistance(x, currentNode->value);
++      if (distance < best.first)
++        best = std::pair{distance, currentNode};
++
++      bool isLeft;
++      if (x[axis] < currentNode->value[axis]) {
+         traverseDown(currentNode->left, best, x);
++        isLeft = true;
++      } else {
++        traverseDown(currentNode->right, best, x);
++        isLeft = false;
++      }
++
++      // If the hypersphere with origin at x and a radius of our current
++      // best distance intersects the hyperplane defined by the
++      // partitioning of the current node, we also have to search the other
++      // subtree, since there could be points closer to x than our current
++      // best.
++      auto distanceToHyperplane =
++          scalingFactors[axis] * std::abs(x[axis] - currentNode->value[axis]);
++      distanceToHyperplane *= distanceToHyperplane;
++      if (distanceToHyperplane < best.first) {
++        Node *volatile nextNode =
++            isLeft ? currentNode->right : currentNode->left;
++        if (nextNode == nullptr)
++          break;
++        currentNode = nextNode;
++      } else {
++        break;
++      }
+     }
+   }
+ 
+@@ -325,44 +334,49 @@ private:
+                 std::is_same_v<Q, BoundedPQueue<NumericType, Node *>> ||
+                 std::is_same_v<Q, ClampedPQueue<NumericType, Node *>>>>
+   void traverseDown(Node *currentNode, Q &queue, const ValueType &x) const {
+-    if (currentNode == nullptr)
+-      return;
+-
+-    int axis = currentNode->axis;
++    // P5-N1F workaround: see the pair overload above. Same MSVC 14.44
++    // miscompilation; the volatile child load below is load-bearing.
++    while (currentNode != nullptr) {
++      int axis = currentNode->axis;
+ 
+-    queue.enqueue(std::pair{Distance(x, currentNode->value), currentNode});
++      queue.enqueue(std::pair{Distance(x, currentNode->value), currentNode});
+ 
+-    bool isLeft;
+-    if (x[axis] < currentNode->value[axis]) {
+-      traverseDown(currentNode->left, queue, x);
+-      isLeft = true;
+-    } else {
+-      traverseDown(currentNode->right, queue, x);
+-      isLeft = false;
+-    }
++      bool isLeft;
++      if (x[axis] < currentNode->value[axis]) {
++        traverseDown(currentNode->left, queue, x);
++        isLeft = true;
++      } else {
++        traverseDown(currentNode->right, queue, x);
++        isLeft = false;
++      }
+ 
+-    // If the hypersphere with origin at x and a radius of our current best
+-    // distance intersects the hyperplane defined by the partitioning of the
+-    // current node, we also have to search the other subtree, since there could
+-    // be points closer to x than our current best.
+-    auto distanceToHyperplane =
+-        scalingFactors[axis] * std::abs(x[axis] - currentNode->value[axis]);
+-    distanceToHyperplane *= distanceToHyperplane;
+-
+-    bool intersects = false;
+-    if constexpr (std::is_same_v<Q, BoundedPQueue<NumericType, Node *>>) {
+-      intersects = queue.size() < queue.maxSize() ||
+-                   distanceToHyperplane < queue.worst();
+-    } else if constexpr (std::is_same_v<Q,
+-                                        ClampedPQueue<NumericType, Node *>>) {
+-      intersects = distanceToHyperplane < queue.worst();
+-    }
++      // If the hypersphere with origin at x and a radius of our current
++      // best distance intersects the hyperplane defined by the
++      // partitioning of the current node, we also have to search the other
++      // subtree, since there could be points closer to x than our current
++      // best.
++      auto distanceToHyperplane =
++          scalingFactors[axis] * std::abs(x[axis] - currentNode->value[axis]);
++      distanceToHyperplane *= distanceToHyperplane;
++
++      bool intersects = false;
++      if constexpr (std::is_same_v<Q, BoundedPQueue<NumericType, Node *>>) {
++        intersects = queue.size() < queue.maxSize() ||
++                     distanceToHyperplane < queue.worst();
++      } else if constexpr (std::is_same_v<
++                           Q, ClampedPQueue<NumericType, Node *>>) {
++        intersects = distanceToHyperplane < queue.worst();
++      }
+ 
+-    if (intersects) {
+-      if (isLeft)
+-        traverseDown(currentNode->right, queue, x);
+-      else
+-        traverseDown(currentNode->left, queue, x);
++      if (intersects) {
++        Node *volatile nextNode =
++            isLeft ? currentNode->right : currentNode->left;
++        if (nextNode == nullptr)
++          break;
++        currentNode = nextNode;
++      } else {
++        break;
++      }
+     }
+   }
+ 

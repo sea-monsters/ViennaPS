@@ -53,7 +53,11 @@ remain at `CHECKPOINT` until the main line releases the validation lane.
 ## Build, Test, and Development Commands
 
 Use an out-of-tree `build/` directory. Dependencies such as ViennaTools
-components are fetched by CMake when needed.
+components are fetched by CMake when needed. ViennaCore v2.2.1 is patched
+at CPM fetch time with
+`cmake/patches/viennacore-v2.2.1-kdtree-traversedown-nullcheck.patch`
+(MSVC 14.44 `traverseDown` null-check miscompilation workaround, P5-N1);
+setting a local `CPM_ViennaCore_SOURCE` override bypasses the patch.
 
 ```bash
 cmake -S . -B build -DVIENNAPS_BUILD_TESTS=ON

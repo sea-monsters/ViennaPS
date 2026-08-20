@@ -401,3 +401,36 @@ Adoption (a `cmake/patches/` CPM patch against ViennaCore plus an upstream
 MSVC/ViennaCore report) and the N2 acceptance-matrix requirement that the
 default-flags MSVC differential remains unchanged are main-line decisions
 and remain pending.
+
+## P5-N1H patch adoption and default-flags re-check (2026-08-20)
+
+The user approved adoption and deferred both upstream reports. The fix
+landed as `cmake/patches/viennacore-v2.2.1-kdtree-traversedown-nullcheck.patch`
+(content byte-identical to the validated N1G overlay), wired into the
+ViennaCore `CPMAddPackage` call through `PATCHES` plus
+`CUSTOM_CACHE_KEY "v2.2.1-kdtree-nullcheck-<sha256[0:16]>"`, following the
+ViennaLS patch precedent; a local `CPM_ViennaCore_SOURCE` override is
+exempt. GNU `patch --dry-run` against a pristine v2.2.1 copy passes, and a
+fresh top-level configure (tests/examples/Python/VTK off, verified
+`.cpm-cache`) fetched ViennaCore into the new cache key
+`v2.2.1-kdtree-nullcheck-31f6423c177a320d` with the patched header
+byte-identical to the validated overlay.
+
+The runner gained two test-only controls: `-ViennaCoreOverride` (point at
+the patched cache while keeping the existing configured build for
+Embree/TBB) and `-FlagSet Release|Default` (Default drops the explicit
+`/O2 /Ob2`, reproducing the 2026-08-09 baseline closure). With the patched
+cache headers and NO overlay (`-Candidate Baseline`):
+
+- Release flags: paired fixture OMP 1/2/4/8 all
+  `PASS ... max_ulp=0` — the patch alone fixes the Release crash and
+  preserves raw equality.
+- Default flags: paired fixture OMP 1/2/4/8 all
+  `PASS ... max_ulp=0` — the differential is unchanged against the
+  2026-08-09 baseline, closing the N2 acceptance-matrix default-flags
+  requirement.
+
+Evidence directories: `.tmp_p5_n1_adopt_release_20260820` and
+`.tmp_p5_n1_adopt_default_20260820` (outputs), `.tmp_p5_n1_adopt_20260820`
+(configure tree). The N1G overlay path in the runner remains available for
+forensics but is no longer required for a passing Release differential.

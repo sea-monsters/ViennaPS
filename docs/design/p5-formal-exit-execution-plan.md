@@ -635,3 +635,28 @@ reports, (3) re-confirm the N2 acceptance-matrix requirement that the
 default-flags MSVC differential is unchanged (2026-08-09 PASS evidence to
 be re-reviewed at adoption). No push or production-tree edit was performed
 in this checkpoint.
+
+## 17. Wave 2 N1H patch-adoption checkpoint (2026-08-20)
+
+The user approved adoption (1) and the default-flags re-check (3), and
+deferred the upstream reports (2). Execution under the serialized mutex:
+
+- Patch created at
+  `cmake/patches/viennacore-v2.2.1-kdtree-traversedown-nullcheck.patch`
+  (byte-identical to the validated N1G overlay content) and wired into the
+  ViennaCore `CPMAddPackage` via `PATCHES` + `CUSTOM_CACHE_KEY`, mirroring
+  the ViennaLS precedent; local `CPM_ViennaCore_SOURCE` overrides are
+  exempt.
+- GNU patch dry-run against pristine v2.2.1 passes; a fresh configure
+  (tests/examples/Python/VTK off) fetched ViennaCore into cache key
+  `v2.2.1-kdtree-nullcheck-31f6423c177a320d` and the cached patched header
+  is byte-identical to the validated overlay.
+- Runner gained `-ViennaCoreOverride` and `-FlagSet Release|Default`.
+  Against the patched cache headers with no overlay: Release paired
+  fixture OMP 1/2/4/8 PASS `max_ulp=0` (Release crash fixed by the patch
+  itself); Default paired fixture OMP 1/2/4/8 PASS `max_ulp=0`
+  (differential unchanged versus the 2026-08-09 baseline).
+
+`P5-N1` moves to `PATCH-ADOPTED-LOCAL / N2-GATE-READY`. `P5-N2` gate review
+against its acceptance matrix is the next main-line step. No push was
+performed in this checkpoint.

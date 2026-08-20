@@ -182,10 +182,25 @@ target_include_directories(
 include("cmake/cpm.cmake")
 include("cmake/vtk.cmake")
 
+set(_VIENNAPS_VIENNACORE_PATCH_ARGS "")
+if(NOT CPM_ViennaCore_SOURCE)
+  set(_VIENNAPS_VIENNACORE_PATCH
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/patches/viennacore-v2.2.1-kdtree-traversedown-nullcheck.patch")
+  file(SHA256 "${_VIENNAPS_VIENNACORE_PATCH}" _VIENNAPS_VIENNACORE_PATCH_HASH)
+  string(SUBSTRING "${_VIENNAPS_VIENNACORE_PATCH_HASH}" 0 16
+                   _VIENNAPS_VIENNACORE_PATCH_CACHE_KEY)
+  list(APPEND _VIENNAPS_VIENNACORE_PATCH_ARGS
+       PATCHES
+       "${_VIENNAPS_VIENNACORE_PATCH}"
+       CUSTOM_CACHE_KEY
+       "v2.2.1-kdtree-nullcheck-${_VIENNAPS_VIENNACORE_PATCH_CACHE_KEY}")
+endif()
+
 CPMAddPackage(
   NAME ViennaCore
   VERSION 2.2.1
   GIT_REPOSITORY "https://github.com/ViennaTools/ViennaCore"
+  ${_VIENNAPS_VIENNACORE_PATCH_ARGS}
   EXCLUDE_FROM_ALL ${VIENNAPS_BUILD_PYTHON}
   OPTIONS "VIENNACORE_FORMAT_EXCLUDE build/" "VIENNACORE_USE_GPU ${VIENNAPS_USE_GPU}")
 

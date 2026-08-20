@@ -678,3 +678,40 @@ milestone is closed. `P5-SURFACE-INTEGRATION` moves from `BLOCKED-ORACLE`
 to `ORACLE-UNBLOCKED / READY-S` after `P5-S0`. Next card on the critical
 path: `P5-S0-SURFACE-ACCEPTANCE-RED`. No push was performed in this
 checkpoint.
+
+## 19. Wave 2 S0 surface-acceptance RED checkpoint (2026-08-20)
+
+The `P5-S0` card ran under the validation mutex with both legs sharing
+one fixture (`tests/surfaceProcessAcceptance/surface_acceptance_fixture.hpp`):
+2D MakePlane, gridDelta 0.5, extent 4, processDuration 0.1, seed 42,
+raysPerPoint 1, maxReflections 2, sticking 0.5/0.8, desorption 0.1,
+surface diffusion 1e-4, steady-state coverage.
+
+CPU leg GREEN: `surface_process_acceptance_cpu` built and passed in
+`.tmp_p5_s0_20260820` (Release), emitting the full bit-pattern record
+(`processResult=0`, 9-cell flux, coverage convergence in 2 iterations).
+
+Vulkan leg RED on Intel Arc as designed: the smoke
+(`gpu/vulkan/surface/surface_process_acceptance_smoke.cpp`, built in
+`.tmp_p5_s0_vulkan_20260820` with the ray SPIR-V wiring appended to
+`gpu/vulkan/ray/CMakeLists.txt` and the ray-subdirectory guard in
+`gpu/vulkan/CMakeLists.txt`) resolved all five stages -- COVERAGE,
+SURFACE_DIFFUSION, NEUTRAL_TRANSPORT_VELOCITY, RAY_TRACING (COMPUTE_BVH),
+and the composition-owned LEVEL_SET -- onto one shared Vulkan session
+(session generation match, live shared context), and the negative battery
+passed 4/4 (AUTO no-Vulkan degradation, MANUAL invalid-device fail-closed,
+retained-callback fail-closed, generation invalidation). The positive
+route then failed deterministically and identically across two runs: the
+ray-flux engine declared the NeutralTransport model outside the evidenced
+FP32 2D single-particle slice (no `neutralFlux` cell data published), and
+the device HRLE rebuild reported candidate indices outside the grid,
+fail-closing through the manual `LevelSetUpdateFailurePolicy::FAIL` into a
+`Process failed.` exception, reported as `RED_BOUNDARY=vulkanRoute.exception`
+with exit 1. The RED boundary therefore sits exactly where the intent
+framework predicts: complete NeutralTransport surface physics (multi-bounce
+re-emission feeding coverage/desorption/diffusion) is not device-resident.
+
+`P5-S0-SURFACE-ACCEPTANCE-RED` is `DONE-LOCAL`; `P5-SURFACE-INTEGRATION`
+moves to `S0-RED-DONE / READY-S1`. Next card on the critical path:
+`P5-S1-SURFACE-INTEGRATION-GREEN`, which may only add the adapters the S0
+RED boundary requires. No push was performed in this checkpoint.

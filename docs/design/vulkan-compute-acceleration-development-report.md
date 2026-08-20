@@ -948,6 +948,7 @@ MSVC 14.44.35207 在 `/O2 /Ob2` 下把 `KDTree::traverseDown` 的尾递归（含
 为 `DONE-LOCAL`，`P5-NEUTRAL-CPU-ORACLE` 里程碑关闭，Surface 由
 `ORACLE-UNBLOCKED / READY-S` 等待 `P5-S0`。上游 MSVC/ViennaCore 报告按用户
 决定暂缓。本波不 push。
+Wave 2 续（2026-08-20，S0）：`P5-S0-SURFACE-ACCEPTANCE-RED` 在验证互斥锁下完成。双腿共用同一夹具（`tests/surfaceProcessAcceptance/surface_acceptance_fixture.hpp`，2D MakePlane、gridDelta 0.5、processDuration 0.1、seed 42、raysPerPoint 1、maxReflections 2、sticking 0.5/0.8、desorption 0.1、表面扩散 1e-4、稳态覆盖率）。CPU 腿 GREEN：`surface_process_acceptance_cpu` Release 构建 exit 0，记录完整（`processResult=0`、9 单元通量、覆盖率 2 次迭代收敛）。Vulkan 腿在 Intel Arc 上按设计 RED：smoke 将 COVERAGE、SURFACE_DIFFUSION、NEUTRAL_TRANSPORT_VELOCITY、RAY_TRACING（COMPUTE_BVH）与 composition 持有的 LEVEL_SET 五个 stage 解析到同一共享 session（generation 一致、共享上下文存活），负例电池 4/4 fail-closed；正例路由随后确定性失败且两次运行输出逐字节一致——ray-flux 引擎声明 NeutralTransport 模型在已取证 FP32 2D 单粒子切片之外（未发布 `neutralFlux` 单元数据），设备端 HRLE rebuild 报告候选索引越出网格，经手动 `LevelSetUpdateFailurePolicy::FAIL` fail-closed 为 `Process failed.` 异常，以 `RED_BOUNDARY=vulkanRoute.exception`、exit 1 上报。构建期修正：`gpu/vulkan/CMakeLists.txt` 让 SURFACE_SMOKE 拉入 ray 子目录，ray 侧末尾追加acceptance smoke 的 10 个 SPIR-V 路径接线（沿用既有 ray→surface 反向接线模式），Windows 下 `capabilityProfileIO.hpp` 首先包含并 `#undef ERROR` 系宏，负例（c）改用 `unique_ptr` 持有不可移动的 Composition。`P5-SURFACE-INTEGRATION` 进入 `S0-RED-DONE / READY-S1`；下一卡 `P5-S1` 只准补该 RED 边界要求的适配器。本检查点不 push。
 
 ## 9. 风险登记
 

@@ -1285,4 +1285,30 @@ if(TARGET ViennaPS)
                                VIENNAPS_VULKAN_RAY_FLUX_ENGINE_AVAILABLE)
   endif()
 
+  # P5-S0: wire the RAY_TRACING stage into the surface-process acceptance
+  # smoke.  The surface subdirectory is configured before this one, so the
+  # smoke target already exists; attach the ray SPIR-V paths here where the
+  # ray path variables are in scope.
+  if(TARGET viennaps-vulkan-surface-process-acceptance-smoke)
+    add_dependencies(viennaps-vulkan-surface-process-acceptance-smoke
+                     viennaps-vulkan-triangle-hit-device-spv
+                     viennaps-vulkan-triangle-bvh-hit-spv
+                     viennaps-vulkan-ray-record-compaction-spv
+                     viennaps-vulkan-ray-record-radix-sort-spv
+                     viennaps-vulkan-ray-surface-reduction-spv
+                     viennaps-vulkan-multibounce-frontier-queue-spv)
+    target_compile_definitions(
+      viennaps-vulkan-surface-process-acceptance-smoke PRIVATE
+      "VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_HIT_DEVICE_SPV_PATH}\""
+      "VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_COMPACTION_SPV_PATH}\""
+      "VIENNAPS_VULKAN_REDUCTION_SCAN_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_REDUCTION_SCAN_SPV_PATH}\""
+      "VIENNAPS_VULKAN_RAY_RECORD_RADIX_HISTOGRAM_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_RADIX_HISTOGRAM_SPV_PATH}\""
+      "VIENNAPS_VULKAN_RAY_RECORD_RADIX_PREFIX_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_RADIX_PREFIX_SPV_PATH}\""
+      "VIENNAPS_VULKAN_RAY_RECORD_RADIX_SCATTER_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_RECORD_RADIX_SCATTER_SPV_PATH}\""
+      "VIENNAPS_VULKAN_RAY_SURFACE_SEGMENTS_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_SURFACE_SEGMENTS_SPV_PATH}\""
+      "VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV_PATH=\"${VIENNAPS_VULKAN_RAY_SURFACE_REDUCE_SPV_PATH}\""
+      "VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH=\"${VIENNAPS_VULKAN_TRIANGLE_BVH_HIT_SPV_PATH}\""
+      "VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SPV_PATH=\"${VIENNAPS_VULKAN_MULTIBOUNCE_FRONTIER_QUEUE_SPV_PATH}\"")
+  endif()
+
 endif()

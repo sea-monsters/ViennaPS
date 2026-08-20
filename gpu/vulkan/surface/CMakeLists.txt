@@ -226,6 +226,87 @@ if(TARGET ViennaPS)
   endif()
 endif()
 
+if(TARGET ViennaPS AND TARGET viennaps_vulkan_hrle_compaction AND
+   TARGET viennaps_vulkan_levelset_update)
+  add_executable(viennaps-vulkan-surface-process-acceptance-smoke
+                 surface_process_acceptance_smoke.cpp)
+  add_dependencies(viennaps-vulkan-surface-process-acceptance-smoke
+                   viennaps-vulkan-graph-diffusion-spv
+                   viennaps-vulkan-coverage-delta-metric-spv
+                   viennaps-vulkan-neutral-transport-surface-spv
+                   viennaps-vulkan-levelset-update-spv
+                   viennaps-vulkan-hrle-classification-spv
+                   viennaps-vulkan-reduction-scan-smoke-spv
+                   viennaps-vulkan-hrle-compaction-spv)
+  target_compile_features(viennaps-vulkan-surface-process-acceptance-smoke
+                          PRIVATE cxx_std_20)
+  string(REPLACE "\\" "/" VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH
+                 "${VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV}")
+  string(REPLACE "\\" "/" VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV_PATH
+                 "${VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV}")
+  string(REPLACE "\\" "/" VIENNAPS_VULKAN_NEUTRAL_TRANSPORT_SPV_PATH
+                 "${VIENNAPS_VULKAN_SURFACE_SPV}")
+  get_property(_VIENNAPS_LEVELSET_UPDATE_SPV
+               TARGET viennaps_vulkan_levelset_update
+               PROPERTY VIENNAPS_LEVELSET_UPDATE_SPV)
+  get_property(_VIENNAPS_HRLE_CLASSIFICATION_SPV
+               TARGET viennaps_vulkan_levelset_update
+               PROPERTY VIENNAPS_HRLE_CLASSIFICATION_SPV)
+  get_property(_VIENNAPS_REDUCTION_SCAN_SPV
+               TARGET viennaps_vulkan_reduction_scan_primitives
+               PROPERTY VIENNAPS_REDUCTION_SCAN_SPV)
+  get_property(_VIENNAPS_HRLE_ACTION_FLAGS_SPV
+               TARGET viennaps_vulkan_hrle_compaction
+               PROPERTY VIENNAPS_HRLE_ACTION_FLAGS_SPV)
+  get_property(_VIENNAPS_HRLE_COMPACT_SPV
+               TARGET viennaps_vulkan_hrle_compaction
+               PROPERTY VIENNAPS_HRLE_COMPACT_SPV)
+  string(REPLACE "\\" "/" _VIENNAPS_LEVELSET_UPDATE_SPV_PATH
+                 "${_VIENNAPS_LEVELSET_UPDATE_SPV}")
+  string(REPLACE "\\" "/" _VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH
+                 "${_VIENNAPS_HRLE_CLASSIFICATION_SPV}")
+  string(REPLACE "\\" "/" _VIENNAPS_REDUCTION_SCAN_SPV_PATH
+                 "${_VIENNAPS_REDUCTION_SCAN_SPV}")
+  string(REPLACE "\\" "/" _VIENNAPS_HRLE_ACTION_FLAGS_SPV_PATH
+                 "${_VIENNAPS_HRLE_ACTION_FLAGS_SPV}")
+  string(REPLACE "\\" "/" _VIENNAPS_HRLE_COMPACT_SPV_PATH
+                 "${_VIENNAPS_HRLE_COMPACT_SPV}")
+  target_compile_definitions(
+    viennaps-vulkan-surface-process-acceptance-smoke PRIVATE
+    "VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH=\"${VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH}\""
+    "VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV_PATH=\"${VIENNAPS_VULKAN_COVERAGE_DELTA_METRIC_SPV_PATH}\""
+    "VIENNAPS_VULKAN_NEUTRAL_TRANSPORT_SPV_PATH=\"${VIENNAPS_VULKAN_NEUTRAL_TRANSPORT_SPV_PATH}\""
+    "VIENNAPS_LEVELSET_UPDATE_SPV_PATH=\"${_VIENNAPS_LEVELSET_UPDATE_SPV_PATH}\""
+    "VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH=\"${_VIENNAPS_HRLE_CLASSIFICATION_SPV_PATH}\""
+    "VIENNAPS_REDUCTION_SCAN_SPV_PATH=\"${_VIENNAPS_REDUCTION_SCAN_SPV_PATH}\""
+    "VIENNAPS_HRLE_ACTION_FLAGS_SPV_PATH=\"${_VIENNAPS_HRLE_ACTION_FLAGS_SPV_PATH}\""
+    "VIENNAPS_HRLE_COMPACT_SPV_PATH=\"${_VIENNAPS_HRLE_COMPACT_SPV_PATH}\"")
+  target_include_directories(viennaps-vulkan-surface-process-acceptance-smoke
+                             PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../../../tests")
+  target_link_libraries(viennaps-vulkan-surface-process-acceptance-smoke
+                        PRIVATE ViennaPS viennaps_vulkan_surface_diffusion
+                                viennaps_vulkan_coverage_delta_metric
+                                viennaps_vulkan_surface
+                                viennaps_vulkan_levelset_update
+                                viennaps_vulkan_hrle_compaction Vulkan::Vulkan)
+  if(WIN32)
+    viennacore_setup_embree_env(
+      viennaps-vulkan-surface-process-acceptance-smoke
+      $<TARGET_FILE_DIR:viennaps-vulkan-surface-process-acceptance-smoke>)
+    find_package(TBB CONFIG REQUIRED COMPONENTS tbb)
+    add_custom_command(
+      TARGET viennaps-vulkan-surface-process-acceptance-smoke POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:TBB::tbb>
+              $<TARGET_FILE_DIR:viennaps-vulkan-surface-process-acceptance-smoke>)
+  endif()
+
+  if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND
+     VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE)
+    add_test(NAME viennaps-vulkan-surface-process-acceptance-smoke
+             COMMAND viennaps-vulkan-surface-process-acceptance-smoke)
+  endif()
+endif()
+
 string(REPLACE "\\" "/" VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV_PATH
                "${VIENNAPS_VULKAN_GRAPH_DIFFUSION_SPV}")
 add_executable(viennaps-vulkan-graph-diffusion-smoke

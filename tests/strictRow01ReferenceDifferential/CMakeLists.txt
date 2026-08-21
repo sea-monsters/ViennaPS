@@ -8,5 +8,6 @@ if(VIENNAPS_BUILD_TESTS OR BUILD_TESTING)
     NAME strict-row01-cpu-reference-differential
     COMMAND ${_p5_powershell} -NoProfile -ExecutionPolicy Bypass -File
             ${CMAKE_CURRENT_SOURCE_DIR}/run_paired_oracle.ps1
-            -OutputDirectory ${CMAKE_CURRENT_BINARY_DIR}/strict-row01-cpu)
+            -OutputDirectory ${CMAKE_CURRENT_BINARY_DIR}/strict-row01-cpu
+            -BuildDirectory ${CMAKE_BINARY_DIR})
 endif()

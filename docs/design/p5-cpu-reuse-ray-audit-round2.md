@@ -5,9 +5,11 @@
 - 对照基线：`D:\Codex_lib\code_reference\ViennaPS`
 - 被审实现：[`gpu/vulkan/ray/vulkan_ray_flux_engine.cpp`](../../gpu/vulkan/ray/vulkan_ray_flux_engine.cpp)
 - 规范来源：[`vulkan-program-intent-framework.md`](vulkan-program-intent-framework.md) §2.2/§12、[`vulkan-compute-acceleration-status.md`](vulkan-compute-acceleration-status.md) `P5-CPU-REUSE-RAY-ROUND2`
-- 审计范围：source setup、边界处理、归一化、postprocessing；P5 当前只允许
-  `SingleParticleProcess<float,2>`、单粒子、单 label、无 custom source、
-  `maxReflections == 0` 进入 Vulkan。
+- 审计范围：source setup、边界处理、归一化、postprocessing；这是
+  2026-08-06 的零反射历史审计快照。此后 bounded 一反射由其 Process
+  card 接受，`P5-S1` 接受窄 `NeutralTransport<float,2>` frontier 切片，
+  `P5-M0` 将这些准入事实汇总进矩阵；当前 `checkInput` 与
+  [模型矩阵清单](p5-model-matrix-inventory.md) 才是准入现状的权威记录。
 
 ## 结论
 

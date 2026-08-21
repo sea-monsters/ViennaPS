@@ -1,10 +1,12 @@
 # P5 bounded multi-bounce Process integration contract
 
-Status: design gate plus the accepted narrow implementation
-(`P5-RAY-MULTIBOUNCE-PROCESS-INTEGRATION-IMPLEMENTATION`, 2026-08-17). This
-document still defines the boundary for generic Process integration: the
-implemented route is only the separately admitted one-reflection slice below.
-It does not claim generic multi-bounce Process or model support.
+Status: design gate plus the accepted narrow implementation slices
+(`P5-RAY-MULTIBOUNCE-PROCESS-INTEGRATION-IMPLEMENTATION`, 2026-08-17, and
+`P5-S1-SURFACE-INTEGRATION-GREEN`, 2026-08-20). The separately admitted slices
+are bounded one-reflection `SingleParticleProcess` and the narrow
+`NeutralTransport<float,2>` frontier. This document still defines the boundary
+for generic Process integration and does not claim generic multi-bounce Process
+or full model support.
 
 ## Card brief
 
@@ -74,9 +76,11 @@ The bounded extension is a separate, explicitly checked predicate: the same
 `float/2D/SingleParticleProcess`/one-label/default-source row, exactly
 `maxReflections == 1`, an available frontier SPIR-V path, and no coverages or
 surface desorption. It does not admit `maxReflections > 1`, custom sources,
-multiple particles or labels, double precision, 3-D, NeutralTransport, CUDA
-model classes, or any other model-matrix row. The route's Auto/Manual relation
-remains:
+multiple particles or labels, double precision, or 3-D. Separately, the
+accepted S1 frontier predicate admits `NeutralTransport<float,2>` with one
+particle, one data label, no custom source, `maxReflections <= 2`, and a
+non-empty frontier SPIR-V path. Neither slice admits CUDA model classes or any
+other model-matrix row. The route's Auto/Manual relation remains:
 
 * unsupported input in `checkInput` returns the CPU engine's check in Auto and
   `INVALID_INPUT` in Manual
@@ -282,17 +286,17 @@ true; Manual remains fail-closed.
 
 This is the same fallback rule used by the inventory
 ([fallback rules](p5-model-matrix-inventory.md:154)); it does not turn a
-successful compute primitive into a model row. The only currently eligible
-model row remains the strict single-bounce row described in §1; the bounded
-one-reflection route is an implementation slice over that same row, not a new
-model row. All other inventory families remain CPU fallback/Manual fail-closed,
-including `MultiParticleProcess`,
-`NeutralTransport`, ion/plasma families, ALD/TEOS/PECVD, wet etch, selective
-epitaxy, oxide regrowth, and oxidation
-([matrix](p5-model-matrix-inventory.md:56)). The strict baseline and bounded
-one-reflection extension are narrow ray slices, not complete model support;
-surface integration remains blocked by the Release paired NeutralTransport
-CPU oracle.
+successful compute primitive into a full model row. The currently admitted
+ray slices are the strict zero-reflection row, the bounded one-reflection
+extension, and the S1 `NeutralTransport<float,2>` frontier; each remains a
+flux-stage slice with CPU-authoritative semantics, not complete model support.
+All other inventory families remain CPU fallback/Manual fail-closed, including
+`MultiParticleProcess`, ion/plasma families, ALD/TEOS/PECVD, wet etch,
+selective epitaxy, oxide regrowth, and oxidation
+([matrix](p5-model-matrix-inventory.md:56)). `P5-N2` closed the Release paired
+NeutralTransport CPU oracle and `P5-S1` closed the surface acceptance boundary;
+broader coverage, desorption, diffusion, and material semantics remain CPU
+authoritative.
 
 ## 9. True acceptance gates
 
@@ -328,8 +332,10 @@ narrowly; these gates remain the non-expansion and aggregate-support barrier:
    preserve bytewise flux/mesh/metadata/Level Set sentinels. Prove Auto executes
    the CPU authority for each case where fallback is permitted.
 5. **Matrix non-expansion.** Run the model-matrix fallback smoke and confirm
-   exactly the previously admitted strict row is eligible; every other row
-   remains CPU fallback/Manual fail-closed. No route or matrix update is implied
+   its configured strict zero-reflection row remains eligible; verify the
+   bounded one-reflection and S1 NeutralTransport frontier predicates through
+   their separate focused evidence. Every other row remains CPU
+   fallback/Manual fail-closed. No further route or matrix update is implied
    by this document.
 
 ## 10. Scope, ordered exits, and handoff
@@ -344,8 +350,9 @@ application only, stages output, checks session generation, and retries the
 same request through CPU in Auto after a callback-triggered session reset. The
 Release Intel Arc executable reports `totalRelDiff=0,maxRelDiff=0`; the paired
 route CTest passes. This checkpoint does not change the generic `runGpuPhysics`
-fail-closed contract, does not add a model row, and does not satisfy the
-Release NeutralTransport oracle or surface/model/deployment exit.
+fail-closed contract, does not add a model row, and does not satisfy the full
+NeutralTransport model or the surface/model/deployment exit; the separate S1
+frontier evidence is recorded in the status board.
 
 **Owned by this card:** this Markdown contract and its source links only.
 

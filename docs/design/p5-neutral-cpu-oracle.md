@@ -6,7 +6,23 @@
 - Result: `SUPERSEDED` — the original harness result is not current reference
   evidence.
 
-## Current Paired Evidence (2026-08-09)
+## Current disposition (2026-08-21)
+
+The former Release crash boundary is closed at the dependency boundary. The
+adopted CPM patch
+`cmake/patches/viennacore-v2.2.1-kdtree-traversedown-nullcheck.patch` was used
+without a source-tree overlay, and `P5-N2` independently rebuilt both Mod and
+unmodified-reference fixtures under Release OMP 1/2/4/8. All eight runs exit
+0 and compare raw-equal (`empty=exact active=exact flux=exact geometry=exact
+process=exact max_ulp=0`). The remaining P5 boundary is the already accepted
+surface/matrix evidence and the unrun `P5-K1-TOP-LEVEL` long suite; this oracle
+record is not an open prerequisite.
+
+## Historical paired evidence snapshot (2026-08-09; superseded by P5-N1H/N2)
+
+The diagnostic, crash-forensics, and N1 checkpoint sections through the N1H
+adoption record below are chronological historical evidence. Their older
+`blocked`/`unlock` wording is superseded by the N2 acceptance section.
 
 The superseded diagnostic harness is replaced by the controlled paired fixture
 under `tests/neutralCpuReferenceDifferential/`. The same source is compiled
@@ -33,11 +49,12 @@ complete active NeutralTransport route (coverage evolution, ballistic
 transport, desorption, surface diffusion, and Process/Vulkan integration stay
 outside this card).
 
-The required Release `/O2 /Ob2 /openmp:llvm` gate remains an evidence gap. Both
-paired executables compile and link, but both terminate during the first
-`calculateFlux()` setup with Windows exit `-1073741819` (`0xC0000005`) after
-the first CPU ray-trace diagnostic. No optimization suppression or fixture
-change is authorized to turn this into a pass.
+At that historical snapshot, the required Release `/O2 /Ob2 /openmp:llvm` gate
+was an evidence gap. Both paired executables compiled and linked, but both
+terminated during the first `calculateFlux()` setup with Windows exit
+`-1073741819` (`0xC0000005`) after the first CPU ray-trace diagnostic. The
+boundary was later closed by `P5-N1H/N2`; no optimization suppression or
+fixture change was used to manufacture the current pass.
 
 ## Release crash forensics (2026-08-12)
 
@@ -164,11 +181,13 @@ It then terminates with Windows exit `-1073741819` (`0xC0000005`) inside
 classification because the fresh standalone reference probe passes. It remains
 useful only as a record of the old harness, not a CPU or Vulkan conclusion.
 
-## Consequence
+## Historical consequence (superseded by P5-N1H/N2)
 
-`NeutralTransport` with reflections remains CPU-only and unsupported by the P5
-Vulkan ray eligibility gate. A current paired oracle is blocked on the composed
-target isolation; no fallback or model-route expansion is justified.
+At the time of the original harness, `NeutralTransport` with reflections
+remained CPU-only and the current paired oracle was blocked on composed-target
+isolation. That conclusion is superseded by the accepted narrow S1 frontier;
+full NeutralTransport semantics and broader model promotion remain outside
+the current Vulkan predicate.
 
 ## P5-N1 serialized-validation checkpoint (2026-08-19)
 
@@ -343,10 +362,11 @@ OMP-count independence, full determinism, the default-flags pass, the pure
 and synthetic fixture passes (different codegen of the same function), and
 the preflight pass (tree built but never queried).
 
-This is a root-cause classification with direct evidence, not a repair.
-`P5-N2` remains locked until an approved ViennaCore repair candidate
-(loop-form `traverseDown` overlay) passes Lane C (probe) and Lane E (paired
-fixture) under the ordered Mod-first gates.
+This is a root-cause classification with direct evidence, not a repair. At
+this historical N1F checkpoint, `P5-N2` remained locked until an approved
+ViennaCore repair candidate (loop-form `traverseDown` overlay) passed Lane C
+(probe) and Lane E (paired fixture); N1H/N2 later closed that gate with the
+adopted CPM patch.
 
 ## P5-N1G repair-candidate validation (2026-08-20)
 

@@ -108,11 +108,11 @@ separate narrow numeric exception with the same CPU-first boundary. This card is
 execution contract, not a support or release claim.
 
 **Predecessor and next unlock.** Start after `P5-RAY-APPLY-TRANSACTION` and
-the `P5-SURFACE-INTEGRATION-NONACCEPTANCE` coverage are present. The complete
-row still requires a valid CPU surface oracle; the current reference-identical
-KDTree failure is handed to `P5-CPU-KDTREE-ROOTCAUSE`. A passing row unlocks the
-next model-matrix row and its aggregate review, never `P5-DEPLOYMENT-EXIT` by
-itself.
+the `P5-SURFACE-INTEGRATION-NONACCEPTANCE` coverage are present. At the time
+this card was drafted, the complete row was blocked by a reference-identical
+KDTree failure handed to `P5-CPU-KDTREE-ROOTCAUSE`; that dependency boundary
+was later closed by `P5-N1H/N2`. A passing row unlocks the next model-matrix
+row and its aggregate review, never `P5-DEPLOYMENT-EXIT` by itself.
 
 **Owned boundary and invariants.** Own the one eligible ray row, its CPU-led
 differential/conservation/geometry evidence, and the fallback assertions for
@@ -147,9 +147,10 @@ CPU surface oracle.
 4. For every fallback row below, assert Auto executes the linked CPU model and
    Manual Vulkan returns a non-throwing fail-closed result with no flux,
    metadata, velocity, or geometry publication.
-5. Run the CPU surface velocity/geometry differential. If the Mod and
-   unmodified reference still fail at the same KDTree traversal, stop as a
-   reference-precondition blocker and do not mark this row accepted.
+5. Run the CPU surface velocity/geometry differential. If a new Mod/reference
+   failure appears, stop as a reference-precondition blocker and do not mark
+   this row accepted; the former N1/N2 KDTree failure is already closed and is
+   not a current acceptance condition.
 
 **Explicit CPU-fallback rows.** These families remain CPU-authoritative in
 Auto and unsupported/fail-closed in Manual Vulkan until a separate row card

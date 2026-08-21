@@ -4,11 +4,11 @@
 
 - **Milestone:** `P5-K0` diagnostic top-level preflight; it does not claim
   `P5-K1`, surface/matrix progress, or P5 completion.
-- **Predecessor:** `P5-X0` accepted; the Wave 1 `P5-N1` lane is
-  `BLOCKED-EXTERNAL` and does not prevent this diagnostic run.
+- **Predecessor:** `P5-X0` accepted; this receipt predates the later
+  `P5-N1H/N2` dependency repair and acceptance.
 - **Next unlock:** provide K1 with the observed build boundary, first failure,
-  timeout/flaky classification, and remaining-suite risk. K1 still requires
-  its own accepted `P5-S1`/`P5-M0` candidate and complete long-suite run.
+  timeout/flaky classification, and remaining-suite risk. `P5-S1`/`P5-M0` are
+  now accepted, but K1 still requires its own complete long-suite run.
 
 ### Global position (approximately 150 tokens)
 
@@ -19,7 +19,8 @@ interrupted Embree compilation and produced `backendPolicy.exe`. CTest
 discovery registered 94 tests. The focused test passed after one named
 configuration correction. The next individually selected test could not run
 because its executable was not built. This is diagnostic evidence only:
-K0 did not establish a complete suite, a Vulkan result, or K1 acceptance.
+K0 did not establish a complete suite, a Vulkan result, or K1 acceptance; the
+receipt is closed as historical preparation for `P5-K1-TOP-LEVEL`.
 
 ## Validation mutex receipt
 

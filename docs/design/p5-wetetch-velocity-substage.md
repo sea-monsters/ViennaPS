@@ -249,8 +249,9 @@ arithmetic implementation. This compute-only card does **not** claim a global
 stage, CUDA parity, aggregate model promotion, or deployment promotion. The
 separately carded production adapter proves one explicit D=2 analytic model
 row while `TranslationField`, `FluxProcessStrategy`, model construction, and
-Level Set advection remain CPU-owned. The Neutral Release oracle remains a
-separate blocker for complete surface integration.
+Level Set advection remain CPU-owned. `P5-N2` has closed the Neutral Release
+oracle; complete surface integration and broader model promotion remain
+separate gates.
 
 ## 8. Narrow implementation evidence
 
@@ -277,9 +278,10 @@ separate blocker for complete surface integration.
   `fallbackExactUlp=0`.
 - The paired Process oracle
   `tests/wetetchProcessReferenceDifferential/` passes raw-exact at OMP 1/2/4/8
-  under the required Release flags. Residual: no deployment/profile binding,
-  D=3 or broader WetEtching admission, aggregate matrix unlock, or complete
-  surface integration while the Neutral Release oracle remains blocked.
+under the required Release flags. Residual: no deployment/profile binding,
+D=3 or broader WetEtching admission, aggregate matrix unlock, or complete
+surface integration. `P5-N2` has closed the former Neutral Release oracle
+blocker; these remaining boundaries are independent.
 
 Validation for this document includes the focused implementation evidence
 above plus Markdown link resolution and scoped `git diff --check`.

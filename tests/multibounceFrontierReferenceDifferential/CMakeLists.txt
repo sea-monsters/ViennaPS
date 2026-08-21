@@ -32,5 +32,6 @@ if(VIENNAPS_BUILD_TESTS OR BUILD_TESTING)
     NAME multibounce-frontier-reference-differential
     COMMAND ${_p5_powershell} -NoProfile -ExecutionPolicy Bypass -File
             ${CMAKE_CURRENT_SOURCE_DIR}/run_paired_oracle.ps1
-            -OutputDirectory ${CMAKE_CURRENT_BINARY_DIR}/p5-trace)
+            -OutputDirectory ${CMAKE_CURRENT_BINARY_DIR}/p5-trace
+            -BuildDirectory ${CMAKE_BINARY_DIR})
 endif()

@@ -10,7 +10,7 @@ Status: `CHECKPOINT / STATIC PREPARATION COMPLETE` (2026-08-19)
   `39e644082f5b007d05856dce1c6f96cb850e6209` on
   `origin/codex/p5-closeout-base`.
 - **Next unlock:** `P5-D1` local export/remote-CI exit preparation; the final
-  deployment exit remains behind `P5-M0`, `P5-K1`, and `P5-E0`.
+  deployment exit remains behind `P5-M0`, `P5-K1-TOP-LEVEL`, and `P5-E0`.
 - **Validation mutex:** this pass used no validation slot. It performed only
   static inspection and this document edit; no CMake configure, build,
   install, CTest, consumer, Vulkan, reference, or cleanup command was run.

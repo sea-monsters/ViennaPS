@@ -1,11 +1,26 @@
 # P5 Neutral CPU Oracle: Pure ViennaCore Upstream Reproduction
 
 - Card: `P5-NEUTRAL-CPU-ORACLE-EXTERNAL-UPSTREAM-REPRO-DESIGN`
-- State: `READY-S` (design-only; no production or oracle claim)
+- State: `SUPERSEDED / CLOSED` (2026-08-20; no current validation work remains)
 - Owner: P5 CPU-oracle isolation
 - Owned file: this document only
 
-## Global position (approximately 150 words)
+## Current disposition (2026-08-21)
+
+This design was superseded by the adopted ViennaCore CPM patch
+`cmake/patches/viennacore-v2.2.1-kdtree-traversedown-nullcheck.patch` and the
+accepted `P5-N2` paired matrix. Mod and unmodified-reference fixtures now pass
+the required Release OMP 1/2/4/8 runs with raw equality and `max_ulp=0`.
+The pure-upstream reproducer remains useful historical evidence, but it is no
+longer a prerequisite and must not be reopened as a current blocker.
+
+## Historical design snapshot (superseded by P5-N1H/N2)
+
+All design, predecessor, diagnostic-matrix, and implementation sections below
+are retained historical evidence for the superseded experiment. Their older
+`blocked`/`unlock` wording is not the current P5 gate state.
+
+### Global position (approximately 150 words)
 
 P5 may replace a compute operation, never the CPU definition of
 `NeutralTransport`. The paired Mod/reference fixture is exact at the default
@@ -20,7 +35,8 @@ unlock Vulkan, change CPU formulas, or turn a crash into a pass. A legitimate
 upstream repair, dependency upgrade, or runtime lock is admissible only after
 the reproducer, ABI, compiler, and loaded-binary identities are independently
 recorded and the full paired oracle is rerun with the required optimization
-and OpenMP flags. Until then, the Release CPU oracle remains blocked.
+and OpenMP flags. At the time of this design snapshot, the Release CPU oracle
+remained blocked.
 
 ## Predecessor, downstream, and handoff
 
@@ -202,7 +218,7 @@ promotion/model gates remain locked.
 - `include/viennaps/psElementToPointData.hpp` (`prepare`, KDTree lookup)
 - `tests/neutralCpuReferenceDifferential/neutral_cpu_oracle_crash_capture.cpp`
 
-## Implementation evidence (2026-08-13)
+## Historical implementation evidence (2026-08-13; superseded by P5-N1H/N2)
 
 The caller-owned temporary root was
 `.tmp_p5_neutral_upstream_repro_20260813`; no production, reference, CMake,

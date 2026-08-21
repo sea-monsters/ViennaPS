@@ -101,7 +101,7 @@ flowchart LR
   M0 --> E0["P5-E0 Formal Exit"]
 
   X0 --> K0["P5-K0 long-suite preflight"]
-  K0 --> K1["P5-K1 final long suite"]
+  K0 --> K1["P5-K1-TOP-LEVEL final long suite"]
   K1 --> E0
 
   X0 --> D0["P5-D0 deployment preparation"]
@@ -230,7 +230,7 @@ for its incoming gate.
   behavior, unsupported reason, and no inferred CUDA-to-Vulkan support.
 - **Aggregate acceptance:** the inventory, compute map, fallback smoke and
   support matrix agree on all rows; no broad Vulkan enable switch exists.
-- **Next unlock:** `P5-K1` and release-facing support documentation.
+- **Next unlock:** `P5-K1-TOP-LEVEL` and release-facing support documentation.
 
 ### P5-K0/K1-TOP-LEVEL-GATE
 
@@ -238,7 +238,9 @@ for its incoming gate.
   candidate only after a clean full run.
 - **Owner:** sub-agent C, reused for both cards.
 - **K0 predecessor:** `P5-X0`; this run is diagnostic only.
-- **K1 predecessor:** `P5-S1` and `P5-M0` accepted.
+- **K1 predecessor:** `P5-S1` and `P5-M0` accepted. The fully qualified card
+  ID is `P5-K1-TOP-LEVEL`, to distinguish it from the historical strict-FP32
+  policy seam also named `P5-K1` in the status report.
 - **Ordered exits:** fresh canonical configuration; focused smoke cluster;
   non-benchmark triage if required; complete required top-level CTest on the
   final candidate; retain timeout/flaky classification and first failure;
@@ -260,12 +262,12 @@ for its incoming gate.
 - **Remote acceptance:** publish the exact candidate; hosted path-hygiene,
   test and install-export jobs pass; record commit SHA, run IDs and URLs. A
   self-hosted Vulkan lane and VTK lane keep their explicit classifications.
-- **Next unlock:** `P5-E0` after `P5-M0` and `P5-K1`.
+- **Next unlock:** `P5-E0` after `P5-M0` and `P5-K1-TOP-LEVEL`.
 
 ### P5-E0-FINAL-AUDIT
 
 - **Owner:** main line only.
-- **Predecessors:** `P5-N2`, `P5-S1`, `P5-M0`, `P5-K1`, local deployment and
+- **Predecessors:** `P5-N2`, `P5-S1`, `P5-M0`, `P5-K1-TOP-LEVEL`, local deployment and
   hosted-CI gates.
 - **Acceptance:** self-audit the complete diff; rerun focused CPU/Vulkan gates;
   verify the formal support matrix and Selection Records; update the intent,
@@ -372,7 +374,7 @@ implementation remains locked.
 ### Wave 3 — aggregate and final candidate
 
 - Agent B completes `P5-M0` after `P5-S1`.
-- Reuse Agent C for `P5-K1` on the integrated candidate.
+- Reuse Agent C for `P5-K1-TOP-LEVEL` on the integrated candidate.
 - Complete local install/export and prepare the exact remote candidate.
 
 ### Wave 4 — remote evidence and final audit
@@ -657,9 +659,10 @@ deferred the upstream reports (2). Execution under the serialized mutex:
   itself); Default paired fixture OMP 1/2/4/8 PASS `max_ulp=0`
   (differential unchanged versus the 2026-08-09 baseline).
 
-`P5-N1` moves to `PATCH-ADOPTED-LOCAL / N2-GATE-READY`. `P5-N2` gate review
-against its acceptance matrix is the next main-line step. No push was
-performed in this checkpoint.
+At this historical N1H checkpoint, `P5-N1` moved to
+`PATCH-ADOPTED-LOCAL / N2-GATE-READY` and the `P5-N2` gate review was the next
+main-line step. The later N2 acceptance checkpoint below supersedes that
+intermediate status; no push was performed in this checkpoint.
 ## 18. Wave 2 N2 oracle-green acceptance checkpoint (2026-08-20)
 
 The `P5-N2` main-line gate ran exactly as specified: both fixture sides
@@ -795,6 +798,50 @@ record) and `model_matrix_fallback_smoke` (15 rows: 1 strict-eligible row
 under its empty-frontier configuration, 14 CPU-fallback/unsupported rows
 failing closed). CPU-side behavior is untouched by diff scope.
 
-`P5-MODEL-MATRIX` is `DONE-LOCAL`. Next cards: `P5-K1` top-level gate and
+`P5-MODEL-MATRIX` is `DONE-LOCAL`. Next cards: `P5-K1-TOP-LEVEL` top-level gate and
 release-facing support documentation; the `P5-E0` gates are unchanged. No
 push was performed in this checkpoint.
+
+## 22. Wave 3 K1 top-level preparation (2026-08-21)
+
+`P5-S1` and `P5-M0` now satisfy the final-long-suite predecessors. Static
+source and dependency review against the current committed candidate
+`5768825` prepared `P5-K1-TOP-LEVEL` without consuming the serialized
+validation lane. The preparation resolves the historical identifier collision:
+the current top-level gate is distinct from the earlier strict-FP32 policy
+seam also called `P5-K1` in the status report.
+
+The card's ordered contract is recorded in
+[the K1 preparation record](p5-k1-final-long-suite-preparation.md): fresh
+CPM provenance, a serial `ViennaPS_Tests` build to close K0's missing-target
+boundary, a fresh CTest inventory, the focused CPU/S1/M0 smoke cluster, then
+one-worker non-benchmark CTest and a descendant audit. No configure, build,
+CTest, Vulkan executable, source edit, cleanup, or acceptance claim occurred
+in this preparation checkpoint.
+
+## 23. Wave 3 K1 top-level execution checkpoint (2026-08-21)
+
+`P5-K1-TOP-LEVEL` executed under the serialized validation lane against the
+committed `5768825` candidate. Full receipt:
+[the K1 execution record](p5-k1-final-long-suite-preparation.md).
+
+Summary:
+
+- Fresh configuration, serial aggregate build, and a 95-test inventory closed
+  the K0 coverage boundary; the four focused CPU entries and both named
+  Vulkan smokes (Intel Arc) passed.
+- Two scoped test-infrastructure remediations were absorbed inside the card:
+  runtime-DLL wiring for the model-matrix smoke, and consolidation of the
+  fifteen reference-differential runners into one engine with an explicit
+  `-BuildDirectory` contract. The differential family moved 0/15 to 15/15.
+- The final serial non-benchmark suite passed **93/94 in 464.51 s**; the only
+  RED is `vulkanCpuBaseline`, classified as an uncaught structural assertion
+  (`lineCount > 0`) with determinism intact — not a crash of the memory or
+  codegen class.
+- `P5-K1-R2` adjudicated that RED the same day: ViennaLS 5.8.5 `ToDiskMesh`
+  (reference-identical) publishes a point cloud and never writes line
+  elements, so the assertion was stale. The test now asserts the real
+  disk-mesh contract, surfaces assertion failures readably, and passes; the
+  full serial rerun is **94/94 PASS in 700.93 s** and the Vulkan pair re-passed.
+- `P5-K1-TOP-LEVEL` is `DONE-LOCAL`. `P5-E0` remains gated by the unchanged
+  deployment and hosted-CI evidence rules. No push was performed.

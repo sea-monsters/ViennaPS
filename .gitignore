@@ -33,3 +33,5 @@ VP_VULKANINFO_*.json
 modeldb/
 _viennals/
 .viennaps-device-profiles/
+# P5 closeout temporary validation evidence (card-local, never synced)
+.tmp_*

@@ -1151,6 +1151,16 @@ if(TARGET ViennaPS)
   endif()
   target_link_libraries(viennaps-vulkan-model-matrix-fallback-smoke PRIVATE
                         ViennaPS viennaps_vulkan_ray_flux_engine Vulkan::Vulkan)
+  if(WIN32)
+    find_package(TBB CONFIG REQUIRED COMPONENTS tbb)
+    add_custom_command(
+      TARGET viennaps-vulkan-model-matrix-fallback-smoke POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              $<TARGET_RUNTIME_DLLS:viennaps-vulkan-model-matrix-fallback-smoke>
+              $<TARGET_FILE:TBB::tbb>
+              $<TARGET_FILE_DIR:viennaps-vulkan-model-matrix-fallback-smoke>
+      COMMAND_EXPAND_LISTS)
+  endif()
   if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_RAY_SMOKE)
     add_test(NAME viennaps-vulkan-model-matrix-fallback-smoke
              COMMAND viennaps-vulkan-model-matrix-fallback-smoke)

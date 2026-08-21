@@ -68,6 +68,10 @@ template <class NumericType> struct StructureSummary {
   std::size_t numLevelSets = 0;
   std::size_t numMaterials = 0;
   std::size_t nodeCount = 0;
+  // ViennaLS 5.8.5 publishes the disk mesh as a point cloud: one vertex per
+  // extracted interface point plus cell data. Line/triangle element arrays
+  // are structurally empty for this mesh type.
+  std::size_t vertexCount = 0;
   std::size_t lineCount = 0;
   std::size_t triangleCount = 0;
   std::array<NumericType, 3> bboxMin{};
@@ -151,6 +155,7 @@ makeStructureSummary(const SmartPointer<Domain<NumericType, 2>> &domain) {
 
   auto mesh = domain->getDiskMesh();
   summary.nodeCount = mesh->nodes.size();
+  summary.vertexCount = mesh->vertices.size();
   summary.lineCount = mesh->lines.size();
   summary.triangleCount = mesh->triangles.size();
 
@@ -177,8 +182,9 @@ void printSummary(const StructureSummary<NumericType> &summary,
   std::cout << "==== " << label << " ====\n";
   std::cout << "LevelSets: " << summary.numLevelSets << "\n";
   std::cout << "Materials: " << summary.numMaterials << "\n";
-  std::cout << "Mesh nodes/lines/triangles: " << summary.nodeCount << "/"
-            << summary.lineCount << "/" << summary.triangleCount << "\n";
+  std::cout << "Mesh nodes/vertices/lines/triangles: " << summary.nodeCount
+            << "/" << summary.vertexCount << "/" << summary.lineCount << "/"
+            << summary.triangleCount << "\n";
   std::cout << "Bounding box min: [" << summary.bboxMin[0] << ", "
             << summary.bboxMin[1] << ", " << summary.bboxMin[2] << "]\n";
   std::cout << "Bounding box max: [" << summary.bboxMax[0] << ", "
@@ -200,6 +206,7 @@ void assertSummariesEqual(const StructureSummary<NumericType> &a,
   VC_TEST_ASSERT(a.numMaterials == b.numMaterials);
   VC_TEST_ASSERT(a.materialIds == b.materialIds);
   VC_TEST_ASSERT(a.nodeCount == b.nodeCount);
+  VC_TEST_ASSERT(a.vertexCount == b.vertexCount);
   VC_TEST_ASSERT(a.lineCount == b.lineCount);
   VC_TEST_ASSERT(a.triangleCount == b.triangleCount);
   VC_TEST_ASSERT(a.quantizedNodes == b.quantizedNodes);
@@ -243,7 +250,10 @@ template <class NumericType> void RunTest() {
   VC_TEST_ASSERT(summaryA.numLevelSets > 0);
   VC_TEST_ASSERT(summaryA.numMaterials > 0);
   VC_TEST_ASSERT(summaryA.nodeCount > 0);
-  VC_TEST_ASSERT(summaryA.lineCount > 0);
+  // Disk-mesh point-cloud contract: every extracted interface point is
+  // published as exactly one vertex; no line/triangle elements exist.
+  VC_TEST_ASSERT(summaryA.vertexCount == summaryA.nodeCount);
+  VC_TEST_ASSERT(summaryA.lineCount == 0);
   VC_TEST_ASSERT(summaryA.triangleCount == 0);
   VC_TEST_ASSERT(summaryA.bboxMin[0] < summaryA.bboxMax[0]);
   VC_TEST_ASSERT(summaryA.bboxMin[1] < summaryA.bboxMax[1]);
@@ -256,6 +266,14 @@ template <class NumericType> void RunTest() {
 } // namespace viennacore
 
 int main() {
-  viennacore::RunTest<double>();
-  viennacore::RunTest<float>();
+  // VC_TEST_ASSERT throws; surface the failing condition instead of letting
+  // the uncaught exception terminate via an opaque fail-fast code.
+  try {
+    viennacore::RunTest<double>();
+    viennacore::RunTest<float>();
+  } catch (const std::exception &e) {
+    std::cerr << "vulkanCpuBaseline FAILED: " << e.what() << std::endl;
+    return 3;
+  }
+  return 0;
 }

@@ -8,6 +8,19 @@
   line-ending differences ignored, followed by call-site tracing from
   `ray_flux_process_route_smoke`.
 
+## Current disposition (2026-08-21)
+
+The Release crash described below is a historical 2026-08-09 snapshot, not a
+current blocker. The former ViennaCore `KDTree::traverseDown` optimization
+failure was repaired at the dependency boundary by
+`cmake/patches/viennacore-v2.2.1-kdtree-traversedown-nullcheck.patch` and
+closed by the independent `P5-N2` Mod/reference matrix: Release OMP 1/2/4/8
+all exit 0 with raw serialized equality and `max_ulp=0`. The bounded
+one-reflection slice was accepted by its Process card; `P5-S1` accepted the
+narrow NeutralTransport frontier and `P5-M0` consolidated those rows into the
+matrix. This inventory still does not claim broad CPU parity, full
+NeutralTransport semantics, or production Vulkan promotion.
+
 ## Reachable Route
 
 The accepted route is:
@@ -44,18 +57,18 @@ surface-composition work can reach `NeutralTransportSurfaceModel` and
 `gpu/vulkan/ray/vulkan_ray_flux_engine.cpp` is new P5 orchestration code, not a
 replacement CPU engine. It delegates `checkInput`, initialization, surface
 updates, and all source/surface flux work to `CPUTriangleEngine` when Vulkan is
-not selected (`lines 551-607`, `658-687`). For the narrow eligible slice it
-replicates ViennaRay source seeding, boundary handling, and normalization in
-`generateRays`/`triangleArea`/`normalizeFlux` (`lines 379-527`). The existing
-round-2 audit records the accepted differential and its limits: only
-`float`, `D == 2`, one particle/label, default source, zero reflections, and
-the fixed-seed plane fixture are covered. The current non-unit-grid fixture
-reports `totalRelDiff=0` and `maxRelDiff=0`; this does not prove general source,
-boundary, coverage, logging, multi-particle, desorption, or 3-D equivalence.
+not selected. The 2026-08-06 round-2 audit below records the original
+zero-reflection differential and remains a historical boundary snapshot. The
+current `checkInput` predicate has three separately evidenced narrow slices:
+zero-reflection `SingleParticleProcess`, bounded one-reflection
+`SingleParticleProcess`, and the `NeutralTransport<float,2>` frontier slice.
+Together they still do not prove general source, boundary, coverage, logging,
+multi-particle, desorption, or 3-D equivalence.
 
 Therefore:
 
-1. Keep the explicit eligibility predicate at `checkInput` lines 551-577.
+1. Keep the explicit eligibility predicate in the current `checkInput`; the
+   model-matrix inventory is the canonical row-by-row record.
 2. Auto must call the unchanged CPU engine for every rejected predicate or
    unavailable Vulkan deployment.
 3. Manual Vulkan must return a failure before publishing flux, geometry, or
@@ -66,7 +79,7 @@ Therefore:
 
 ## Validation Evidence
 
-### P5-NEUTRAL-CPU-ORACLE paired differential (2026-08-09)
+### Historical P5-NEUTRAL-CPU-ORACLE paired differential (2026-08-09)
 
 `tests/neutralCpuReferenceDifferential/` provides a same-source, controlled
 reference/Mod fixture and an independent bit-pattern checker. The default
@@ -84,12 +97,12 @@ paired neutral CPU differential PASS empty=exact active=exact flux=exact geometr
 The active result is adapter-only evidence. It does not establish complete
 NeutralTransport physics or any Vulkan/model support claim.
 
-The required `/O2 /Ob2 /openmp:llvm` gate is blocked: both executables compile
-and link but exit `-1073741819` (`0xC0000005`) during CPU `calculateFlux()`
-setup. This reproduces the known composed Release optimization boundary; no
-optimization workaround was applied.
+At this historical snapshot, the required `/O2 /Ob2 /openmp:llvm` gate was
+blocked: both executables compiled and linked but exited `-1073741819`
+(`0xC0000005`) during CPU `calculateFlux()` setup. No optimization workaround
+was applied in that snapshot; the boundary was later closed by `P5-N1H/N2`.
 
-### Deployment-only blocker
+### Historical deployment-only blocker (superseded by P5-N1H/N2)
 
 The root-cause probe ran the composed
 `.tmp_p5_route_20260805/gpu/vulkan/ray/viennaps-vulkan-levelset-surface-ray-deployment-smoke.exe`
@@ -134,9 +147,9 @@ been proven; do not convert this crash into CPU-semantic or Vulkan evidence.
 ## Handoff
 
 No CPU algorithm source drift was found in the canonical ray engine or
-postprocessor. Conditional executor behavior remains an orchestration seam,
-and the composed surface target has a separate KD-tree link/layout/runtime
-blocker despite passing standalone CPU oracles. Until that deployment binary
-is isolated or repaired, the Vulkan host replica must remain behind its narrow
-eligibility predicate and `P5-MODEL-MATRIX-ROW-01` / `P5-DEPLOYMENT-EXIT` must
-not claim broader CPU parity.
+postprocessor. Conditional executor behavior remains an orchestration seam.
+The former composed Release KD-tree failure was repaired at the ViennaCore
+dependency boundary and the required paired oracle is now closed by `P5-N2`.
+The Vulkan host replica must nevertheless remain behind its current narrow
+eligibility predicate; `P5-MODEL-MATRIX-ROW-01` and `P5-DEPLOYMENT-EXIT` still
+must not claim broader CPU parity or full model support.

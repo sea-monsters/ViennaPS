@@ -10,7 +10,7 @@ tests are under `tests/`. Python bindings, stubs, scripts, and Python tests
 are under `python/`. Assets used by documentation and examples are in
 `assets/`; CI workflows are in `.github/workflows/`.
 
-## Current Program State (2026-08-19)
+## Current Program State (2026-08-21)
 
 The active program is the Vulkan compute acceleration plan. The authoritative
 intent and evidence sources are:
@@ -38,8 +38,17 @@ revalidated on the Release Vulkan/Intel Arc path. They provide device-resident
 composition, one compute submission, and strict-FP32 fail-closed status
 propagation. They do not enable a production Process route, complete surface
 physics, automatic backend promotion, cross-vendor CI, or release readiness.
-The approved closeout order is `P5-X0 -> P5-N1/N2 -> P5-S0/S1 -> P5-M0 ->
-P5-E0`; only read-only K3E and deployment preparation may run independently.
+`P5-N1/N2`, `P5-S0/S1`, and `P5-M0` are locally accepted. `P5-K1-TOP-LEVEL`
+closed `DONE-LOCAL` on 2026-08-21: the final serial non-benchmark suite is
+**94/94 GREEN** after the scoped test-infrastructure remediations (runner
+consolidation with an explicit `-BuildDirectory` contract, model-matrix
+runtime-DLL wiring) and the `P5-K1-R2` adjudication of `vulkanCpuBaseline`
+(stale disk-mesh expectation; ViennaLS 5.8.5 `ToDiskMesh` is point-cloud-only).
+The approved remaining closeout order is
+`P5-X0 -> P5-N1/N2 -> P5-S0/S1 -> P5-M0 -> P5-K1-TOP-LEVEL (DONE-LOCAL)
+-> P5-E0`.
+Deployment preparation may remain independent, while remote CI and VTK
+install/export evidence are still explicitly gated.
 The root worktree contains accumulated accepted and pending P5 changes. Freeze
 them through the explicit `codex/p5-closeout-base` checkpoint before new
 production work, exclude generated environments, and never convert local
@@ -56,7 +65,8 @@ Use an out-of-tree `build/` directory. Dependencies such as ViennaTools
 components are fetched by CMake when needed. ViennaCore v2.2.1 is patched
 at CPM fetch time with
 `cmake/patches/viennacore-v2.2.1-kdtree-traversedown-nullcheck.patch`
-(MSVC 14.44 `traverseDown` null-check miscompilation workaround, P5-N1);
+(MSVC 14.44 `traverseDown` null-check miscompilation workaround, adopted in
+P5-N1/N2);
 setting a local `CPM_ViennaCore_SOURCE` override bypasses the patch.
 
 ```bash

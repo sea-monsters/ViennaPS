@@ -1,17 +1,21 @@
 param(
   [string]$OutputDirectory = "$PSScriptRoot\.tmp_manual",
   [string]$ReferenceViennaPS = "D:\Codex_lib\code_reference\ViennaPS",
-  [string]$ReferenceViennaRay = "$PSScriptRoot\..\..\.tmp_reference_viennaray"
+  [string]$ReferenceViennaRay = "$PSScriptRoot\..\..\.tmp_reference_viennaray",
+  [string]$BuildDirectory = ""
 )
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path "$PSScriptRoot\..\..").Path
+if (-not $BuildDirectory) { $BuildDirectory = Join-Path $root 'build' }
 $observerDirectory = (Resolve-Path $PSScriptRoot).Path
 $modViennaRay = Join-Path $root '.cpm-cache\viennaray\0fe9'
 $viennaCore = Join-Path $root '.cpm-cache\viennacore\edac'
 $embree = Join-Path $root '.cpm-cache\embree\9311'
-$embreeLibrary = Join-Path $root 'build\_deps\embree-build\Release\embree4.lib'
+$embreeLibrary = Join-Path $BuildDirectory '_deps\embree-build\Release\embree4.lib'
 $embreeBin = Split-Path $embreeLibrary
-$tbbBin = Join-Path $root 'build\gpu\vulkan\ray\Release'
+$tbbBinLegacy = Join-Path $BuildDirectory 'gpu\vulkan\ray\Release'
+$tbbBinTests = Join-Path $BuildDirectory 'tests'
+$tbbBin = if (Test-Path (Join-Path $tbbBinTests 'tbb12.dll')) { $tbbBinTests } else { $tbbBinLegacy }
 $source = Join-Path $observerDirectory 'trace_emitter.cpp'
 $checkerSource = Join-Path $observerDirectory 'trace_checker.cpp'
 $vsDevCmd = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\VsDevCmd.bat'

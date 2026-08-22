@@ -938,3 +938,27 @@ does not bundle foreign runtime binaries, matching the CPU/no-SDK precedent.
 With this evidence the local side of `P5-D0` is complete. The remaining
 external gates for formal P5 closeout are unchanged: hosted-CI run IDs/URLs
 on a published commit. No push was performed in this checkpoint.
+
+## 26. Wave 4 remote push checkpoint (2026-08-21)
+
+User authorized the wave-boundary push. Read-only preflight verified every
+contract field before the single push command:
+
+- destination `https://github.com/sea-monsters/ViennaPS.git`, branch
+  `codex/p5-closeout-base`, local HEAD `7768a48`;
+- outgoing payload = the reviewed P5 wave snapshot (16 commits,
+  `d510614..7768a48`), author identity the GitHub noreply address;
+- `.github/workflows/build.yml` on the branch is the current PD5 workflow
+  (path-hygiene job plus the optional Vulkan hardware dispatch input), not
+  the historical test-only file on `master`.
+
+Push executed once and succeeded (`d510614..7768a48`); an immediate
+`git ls-remote` confirmed the remote ref at `7768a48`. Post-push process
+audit found only unrelated pre-existing git processes (IDE-era timestamps),
+none owned by this action.
+
+Hosted-CI note: the workflow triggers on `master` pushes, pull requests, and
+manual dispatch. A run ID/URL therefore requires either a PR from this
+branch or a manual `workflow_dispatch` with the Vulkan hardware input on a
+registered self-hosted runner — both are separate main-line decisions.
+`P5-DEPLOYMENT-EXIT` remains locked until a hosted run ID/URL exists.

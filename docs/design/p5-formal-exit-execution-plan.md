@@ -896,3 +896,45 @@ variant remain explicitly gated external dependencies and are NOT converted
 to PASS by this work. `P5-DEPLOYMENT-EXIT` therefore stays formally locked
 behind those remote gates even though every locally executable acceptance
 row is green. No push was performed in this checkpoint.
+
+## 25. Wave 4 VTK-enabled packaging checkpoint (2026-08-21)
+
+The user supplied a local VTK source tree (9.6.2), unlocking the last
+locally-executable `P5-D0` gate. The X0-era failure ("ViennaLS exports
+ViennaLS with VTK targets absent from its export set") was reproduced and
+root-caused: building VTK in-tree via add_subdirectory makes the ViennaLS
+export reference real sibling targets, which CMake forbids across export
+sets. The fundamental fix is architectural, not a patch: build and INSTALL
+VTK standalone, then let both ViennaLS and ViennaPS consume it through
+find_package imported targets, which are exempt from export-set membership.
+
+Evidence chain, all green on this candidate:
+
+1. Standalone VTK 9.6.2 configure/build/install (StandAlone YES; Rendering,
+   Imaging, Qt, Web, MPI DONT_WANT; OpenMP SMP) into a card-local prefix.
+2. Root configure with VIENNAPS_USE_VTK=ON / RENDERING=OFF resolves the
+   installed vtk-config package; generation passes where X0 failed.
+3. Full-tree Release build exit 0, including all test executables.
+4. cmake --install produces ViennaPSConfig.cmake whose dependency chain
+   carries VTK through ViennaLS to the consumer.
+5. The standalone installExportConsumer fixture configures, builds, and runs
+   green against only the two installed prefixes.
+
+Two toolchain findings recorded for future cards:
+
+- Inline `-D<VAR>=<drive-letter path>` arguments are truncated at the second
+  character by the local invocation chain; absolute paths must travel through
+  initial-cache files (`cmake -C`) or environment variables
+  (`CMAKE_PREFIX_PATH`), both of which are proven here.
+- Sixteen differential fixtures carried unguarded no-VTK stub definitions of
+  `viennals::WriteVisualizationMesh`; they are now guarded by
+  `VIENNALS_USE_VTK` so the same sources compile against VTK-enabled and
+  CPU-only dependency configurations.
+
+Runtime note: the consumer executable requires the VTK DLLs and the MSVC
+OpenMP redistributable next to it (or on PATH); the installed package itself
+does not bundle foreign runtime binaries, matching the CPU/no-SDK precedent.
+
+With this evidence the local side of `P5-D0` is complete. The remaining
+external gates for formal P5 closeout are unchanged: hosted-CI run IDs/URLs
+on a published commit. No push was performed in this checkpoint.

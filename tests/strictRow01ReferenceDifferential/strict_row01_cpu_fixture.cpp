@@ -11,6 +11,7 @@
 
 #ifndef VIENNAPS_STRICT_ROW_MOD
 // Parse-only no-VTK definitions for the unmodified reference include closure.
+#ifndef VIENNALS_USE_VTK
 namespace viennals {
 template <typename T> class VTKWriter;
 template <typename T, int D> class WriteVisualizationMesh {
@@ -23,6 +24,7 @@ public:
   void apply() {}
 };
 } // namespace viennals
+#endif // VIENNALS_USE_VTK
 #endif
 
 #include <geometries/psMakePlane.hpp>

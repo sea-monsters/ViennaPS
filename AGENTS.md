@@ -51,9 +51,13 @@ CPU 94/94, Vulkan tree 132/132, and the 30 device smokes run with zero VUID
 diagnostics under a forced Khronos validation layer after two root-cause fixes
 (ray-reducer push-constant layout; runtime resource ledger enforcing
 VUID-vkDestroyDevice-device-05137 without breaking stale-handle rejection).
-Hosted-CI evidence and the VTK-enabled install/export variant remain
-explicitly gated external dependencies; `P5-DEPLOYMENT-EXIT` is not locally
-claimable.
+The VTK-enabled install/export variant is also locally closed (2026-08-21):
+a standalone VTK 9.6.2 install is consumed through find_package imported
+targets, the full tree builds and installs, and the independent consumer
+fixture runs green — see formal-exit plan §25 for the architecture note that
+in-tree VTK add_subdirectory can never satisfy ViennaLS's export set. The
+remaining external gate for formal P5 closeout is hosted-CI run evidence;
+`P5-DEPLOYMENT-EXIT` stays formally locked on that single remote dependency.
 Deployment preparation may remain independent, while remote CI and VTK
 install/export evidence are still explicitly gated.
 The root worktree contains accumulated accepted and pending P5 changes. Freeze

@@ -62,7 +62,27 @@ $viennaLS = Cache-SourceDir 'ViennaLS_SOURCE_DIR'
 $viennaHRLE = Cache-SourceDir 'ViennaHRLE_SOURCE_DIR'
 $viennaRay = Cache-SourceDir 'ViennaRay_SOURCE_DIR'
 $viennaCS = Cache-SourceDir 'ViennaCS_SOURCE_DIR'
-$embree = Join-Path $root '.cpm-cache\embree\9311'
+
+# Embree include root: three-level resolution so the engine works from any
+# verified worktree, not only from the repository root.
+#   1. '<repoRoot>\.cpm-cache\embree\9311'   (main-tree layout)
+#   2. '<BuildDirectory>\_deps\embree-src'    (CPM in-tree source)
+#   3. "$env:CPM_SOURCE_CACHE\embree\9311"    (shared CPM cache)
+function Resolve-EmbreeRoot {
+  $candidates = @((Join-Path $root '.cpm-cache\embree\9311'))
+  $candidates += (Join-Path $BuildDirectory '_deps\embree-src')
+  if ($env:CPM_SOURCE_CACHE) {
+    $candidates += (Join-Path $env:CPM_SOURCE_CACHE 'embree\9311')
+  }
+  foreach ($candidate in $candidates) {
+    if (Test-Path (Join-Path $candidate 'include\embree4\rtcore.h')) {
+      return $candidate
+    }
+  }
+  throw ('Embree include root not found; searched: ' +
+         ($candidates -join '; '))
+}
+$embree = Resolve-EmbreeRoot
 $embreeLibrary = Join-Path $BuildDirectory '_deps\embree-build\Release\embree4.lib'
 $viennaLSLibrary = Join-Path $BuildDirectory '_deps\viennals-build\Release\viennals.lib'
 $modLibrary = Join-Path $BuildDirectory 'Release\viennaps.lib'

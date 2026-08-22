@@ -10,7 +10,27 @@ if (-not $BuildDirectory) { $BuildDirectory = Join-Path $root 'build' }
 $observerDirectory = (Resolve-Path $PSScriptRoot).Path
 $modViennaRay = Join-Path $root '.cpm-cache\viennaray\0fe9'
 $viennaCore = Join-Path $root '.cpm-cache\viennacore\edac'
-$embree = Join-Path $root '.cpm-cache\embree\9311'
+# Embree include root: three-level resolution (repo root cache -> build tree
+# CPM source -> shared CPM cache), mirroring the shared engine resolver.
+$embreeCandidates = @(
+  (Join-Path $root '.cpm-cache\embree\9311'),
+  (Join-Path $BuildDirectory '_deps\embree-src')
+)
+if ($env:CPM_SOURCE_CACHE) {
+  $embreeCandidates += (Join-Path $env:CPM_SOURCE_CACHE 'embree\9311')
+}
+$embree = $null
+foreach ($candidate in $embreeCandidates) {
+  if ($candidate -and
+      (Test-Path (Join-Path $candidate 'include\embree4\rtcore.h'))) {
+    $embree = $candidate
+    break
+  }
+}
+if (-not $embree) {
+  throw ('Embree include root not found; searched: ' +
+         ($embreeCandidates -join '; '))
+}
 $embreeLibrary = Join-Path $BuildDirectory '_deps\embree-build\Release\embree4.lib'
 $embreeBin = Split-Path $embreeLibrary
 $tbbBinLegacy = Join-Path $BuildDirectory 'gpu\vulkan\ray\Release'

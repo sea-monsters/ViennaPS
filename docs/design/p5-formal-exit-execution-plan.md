@@ -845,3 +845,54 @@ Summary:
   full serial rerun is **94/94 PASS in 700.93 s** and the Vulkan pair re-passed.
 - `P5-K1-TOP-LEVEL` is `DONE-LOCAL`. `P5-E0` remains gated by the unchanged
   deployment and hosted-CI evidence rules. No push was performed.
+
+## 24. Wave 4 P5-E0 local adversarial-audit checkpoint (2026-08-21)
+
+The locally executable scope of `P5-E0` ran as a structured adversarial pass
+over the entire P5 Vulkan implementation surface:
+
+**Pass A — full suites on the fixed runtime.** After the remediations below,
+both trees were rebuilt and re-run serially end to end: CPU candidate tree
+94/94 non-benchmark CTest in 562.62 s, Vulkan-enabled root tree 132/132 in
+558.60 s (the larger inventory adds every registered device smoke).
+
+**Pass B — forced Khronos validation layer.** The 30 registered
+`viennaps-vulkan-*` smokes were re-run with
+`VK_LOADER_LAYERS_ENABLE=VK_LAYER_KHRONOS_validation`. The first sweep found
+two real spec-violation classes that exit codes alone never expose, both
+root-caused and fixed at the source:
+
+1. `VUID-VkComputePipelineCreateInfo-layout-07987` — the ray reducer shader
+   declares a push-constant block while its pipeline layout declared none;
+   the layout now mirrors the shader block exactly
+   (`gpu/vulkan/ray/ray_reducer.cpp`).
+2. `VUID-vkDestroyDevice-device-05137` — stale-generation rejection tests
+   deliberately keep wrapper objects alive across `session.reset()`, so
+   buffers, fences, shader modules, pipelines, layouts, set layouts, and
+   descriptor pools outlived their device. Fundamental fix: a process-wide
+   resource ledger registers every runtime allocation/handle at creation and
+   `VulkanDevice::reset()` force-frees all unconsumed records just before
+   `vkDestroyDevice`, preserving stale-handle rejection semantics without
+   use-after-free (`gpu/vulkan/runtime/vulkan_compute_runtime.cpp`). The
+   post-fix sweep reports zero VUID diagnostics across all 30 smokes.
+
+One latent flake surfaced under layer-induced timing perturbation:
+`ray-flux-process-route-smoke` asserted bit-exact equality between two
+independently scheduled TBB-parallel ViennaRay reductions. The contract is
+physics equality, so the check now uses a tight relative tolerance
+(1e-6 relative / 1e-12 absolute floor); repeated runs are stable in both
+layer modes.
+
+**Pass C — static fail-open audit.** No unchecked VkResult paths remain
+except two void `vkResetFences` rearm calls whose failure mode is a visible
+wait-timeout downstream (accepted residual, signature ripple disproportionate);
+no empty swallow-catches (all convert to explicit failure returns); no broad
+backend switch (AUTO reachable only through strict per-stage thresholds); no
+machine-local paths in tracked code.
+
+**Record boundary.** This checkpoint completes the local evidence for
+`P5-E0`. Remote hosted-CI run IDs/URLs and the VTK-enabled install/export
+variant remain explicitly gated external dependencies and are NOT converted
+to PASS by this work. `P5-DEPLOYMENT-EXIT` therefore stays formally locked
+behind those remote gates even though every locally executable acceptance
+row is green. No push was performed in this checkpoint.

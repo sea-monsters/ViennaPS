@@ -46,7 +46,14 @@ runtime-DLL wiring) and the `P5-K1-R2` adjudication of `vulkanCpuBaseline`
 (stale disk-mesh expectation; ViennaLS 5.8.5 `ToDiskMesh` is point-cloud-only).
 The approved remaining closeout order is
 `P5-X0 -> P5-N1/N2 -> P5-S0/S1 -> P5-M0 -> P5-K1-TOP-LEVEL (DONE-LOCAL)
--> P5-E0`.
+-> P5-E0`. `P5-E0` completed its local adversarial-audit scope on 2026-08-21:
+CPU 94/94, Vulkan tree 132/132, and the 30 device smokes run with zero VUID
+diagnostics under a forced Khronos validation layer after two root-cause fixes
+(ray-reducer push-constant layout; runtime resource ledger enforcing
+VUID-vkDestroyDevice-device-05137 without breaking stale-handle rejection).
+Hosted-CI evidence and the VTK-enabled install/export variant remain
+explicitly gated external dependencies; `P5-DEPLOYMENT-EXIT` is not locally
+claimable.
 Deployment preparation may remain independent, while remote CI and VTK
 install/export evidence are still explicitly gated.
 The root worktree contains accumulated accepted and pending P5 changes. Freeze

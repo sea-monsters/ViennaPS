@@ -110,9 +110,13 @@ bool DeterministicRayReducer::setup(const std::string_view spirvPath,
     bindings[i] = {i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1U,
                    VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
   }
+  // Must mirror the push_constant block declared by ray_reducer.comp
+  // (uint rayCount, uint surfaceDomain, uint outputCapacity).
+  const VkPushConstantRange pushRange{VK_SHADER_STAGE_COMPUTE_BIT, 0U,
+                                      sizeof(std::array<std::uint32_t, 3U>)};
   if (!descriptorSetLayout_.create(session_->device(), bindings, error) ||
       !pipelineLayout_.create(session_->device(), descriptorSetLayout_.get(),
-                              error) ||
+                              std::span(&pushRange, 1U), error) ||
       !descriptorPool_.create(session_->device(), 1U, 7U,
                               VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, error) ||
       !descriptorPool_.allocate(descriptorSetLayout_.get(), descriptorSet_,

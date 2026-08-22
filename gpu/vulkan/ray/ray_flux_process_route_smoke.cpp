@@ -22,6 +22,7 @@
 #include <psDomain.hpp>
 
 #include <array>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -73,6 +74,28 @@ bool require(const bool condition, const char *what) {
   if (!condition) {
     std::cerr << "ray-flux process route FAIL: " << what << '\n';
     return false;
+  }
+  return true;
+}
+
+// Both sides of the AUTO-fallback comparison run the CPU triangle engine on a
+// fixed seed, but ViennaRay aggregates per-ray contributions with TBB tasking,
+// so summation order may differ between two independent runs and shift
+// results at the ULP level. The contract is physics equality, not bit
+// reproducibility across scheduler timings: compare with a tight relative
+// tolerance instead of exact vector equality.
+template <typename T>
+bool nearlyEqual(const std::vector<T> &lhs, const std::vector<T> &rhs) {
+  if (lhs.size() != rhs.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < lhs.size(); ++i) {
+    const T scale = std::max(std::abs(lhs[i]), std::abs(rhs[i]));
+    const T diff = std::abs(lhs[i] - rhs[i]);
+    if (diff > static_cast<T>(1e-6) * scale &&
+        diff > static_cast<T>(1e-12)) {
+      return false;
+    }
   }
   return true;
 }
@@ -321,7 +344,7 @@ int main() {
     if (!require(!fallbackFlux.empty(),
                  "AUTO ineligible route falls back to CPU triangle flux"))
       return 1;
-    if (!require(fallbackFlux == reflectedCpuFlux &&
+    if (!require(nearlyEqual(fallbackFlux, reflectedCpuFlux) &&
                      fallbackLabel == kFluxLabel,
                  "AUTO reflection fallback matches fixed-seed CPU oracle"))
       return 1;

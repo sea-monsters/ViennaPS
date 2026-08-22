@@ -10,11 +10,102 @@
 #include <bit>
 #include <cstddef>
 #include <fstream>
+#include <functional>
+#include <mutex>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 
 #include <cstring>
 #include <vector>
+
+namespace viennaps::vulkan::runtime {
+
+namespace {
+
+// Resource ledger: every wrapper object registers its handle at creation
+// time, before any possible teardown ordering problem can exist.
+// VUID-vkDestroyDevice-device-05137 forbids leaking child objects across
+// vkDestroyDevice, while stale-generation rejection semantics deliberately
+// keep abandoned wrappers alive after their owning session died. The two
+// contracts meet here: VulkanDevice::reset() force-frees every unconsumed
+// record created on the device just before destroying it. Records are keyed
+// by raw handle bits; a record consumed by its own reset() is untracked
+// immediately, so driver-side handle reuse cannot alias a live entry.
+struct TrackedResource {
+  VkDevice device{VK_NULL_HANDLE};
+  std::function<void(VkDevice)> destroy{};
+  bool consumed{false};
+};
+
+std::mutex &resourceLedgerMutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
+std::unordered_map<unsigned long long, std::shared_ptr<TrackedResource>> &
+trackedResources() {
+  static std::unordered_map<unsigned long long,
+                            std::shared_ptr<TrackedResource>>
+      resources;
+  return resources;
+}
+
+std::unordered_map<VkDevice, std::vector<unsigned long long>> &
+deviceResourceIndex() {
+  static std::unordered_map<VkDevice, std::vector<unsigned long long>> index;
+  return index;
+}
+
+void trackResource(const VkDevice device, const void *handle,
+                   std::function<void(VkDevice)> destroy) {
+  if (device == VK_NULL_HANDLE || handle == nullptr || !destroy) {
+    return;
+  }
+  const auto key = reinterpret_cast<unsigned long long>(handle);
+  std::lock_guard lock(resourceLedgerMutex());
+  auto record = std::make_shared<TrackedResource>();
+  record->device = device;
+  record->destroy = std::move(destroy);
+  trackedResources()[key] = std::move(record);
+  deviceResourceIndex()[device].push_back(key);
+}
+
+void consumeResource(const void *handle) {
+  if (handle == nullptr) {
+    return;
+  }
+  const auto key = reinterpret_cast<unsigned long long>(handle);
+  std::lock_guard lock(resourceLedgerMutex());
+  trackedResources().erase(key);
+}
+
+void sweepDeviceResources(const VkDevice device) {
+  if (device == VK_NULL_HANDLE) {
+    return;
+  }
+  std::lock_guard lock(resourceLedgerMutex());
+  const auto indexIterator = deviceResourceIndex().find(device);
+  if (indexIterator == deviceResourceIndex().end()) {
+    return;
+  }
+  for (const auto key : indexIterator->second) {
+    const auto record = trackedResources().find(key);
+    if (record == trackedResources().end() ||
+        record->second->consumed) {
+      continue;
+    }
+    record->second->consumed = true;
+    if (record->second->destroy) {
+      record->second->destroy(device);
+    }
+    trackedResources().erase(record);
+  }
+  deviceResourceIndex().erase(indexIterator);
+}
+
+} // namespace
+} // namespace viennaps::vulkan::runtime
 
 namespace {
 
@@ -329,6 +420,7 @@ bool VulkanDevice::create(const ComputeDeviceSelection &selection,
 }
 
 void VulkanDevice::reset() {
+  sweepDeviceResources(device_);
   if (device_ != VK_NULL_HANDLE) {
     vkDestroyDevice(device_, nullptr);
   }
@@ -695,6 +787,11 @@ bool DeviceBuffer::createImpl(VulkanDevice &device, const VkDeviceSize bytes,
   memory_ = memory;
   bytes_ = bytes;
   ownerSessionGeneration_ = sessionGeneration;
+  trackResource(
+      targetDevice, buffer, [buffer, memory](VkDevice deviceHandle) {
+        vkDestroyBuffer(deviceHandle, buffer, nullptr);
+        vkFreeMemory(deviceHandle, memory, nullptr);
+      });
   return true;
 }
 
@@ -705,10 +802,14 @@ void DeviceBuffer::reset() {
   if (canDestroy && buffer_ != VK_NULL_HANDLE &&
       deviceForDestroy_ != VK_NULL_HANDLE) {
     vkDestroyBuffer(deviceForDestroy_, buffer_, nullptr);
-  }
-  if (canDestroy && memory_ != VK_NULL_HANDLE &&
-      deviceForDestroy_ != VK_NULL_HANDLE) {
     vkFreeMemory(deviceForDestroy_, memory_, nullptr);
+  }
+  // If the owning session died first, the ledger sweep frees this
+  // allocation during VulkanDevice::reset(); destroying here would be a
+  // use-after-free against a dead device, so only a live generation may
+  // consume its ledger record.
+  if (canDestroy) {
+    consumeResource(buffer_);
   }
   device_ = VK_NULL_HANDLE;
   deviceForDestroy_ = VK_NULL_HANDLE;
@@ -717,7 +818,6 @@ void DeviceBuffer::reset() {
   bytes_ = 0;
   ownerSessionGeneration_ = 0;
 }
-
 namespace {
 
 [[nodiscard]] bool validateDeviceTransfer(
@@ -1060,6 +1160,9 @@ bool ShaderModule::create(VulkanDevice &device, const SpirvProgram &program,
     device_ = VK_NULL_HANDLE;
     return false;
   }
+  trackResource(device_, module_, [module = module_](VkDevice deviceHandle) {
+    vkDestroyShaderModule(deviceHandle, module, nullptr);
+  });
   return true;
 }
 
@@ -1067,6 +1170,7 @@ void ShaderModule::reset() {
   if (module_ != VK_NULL_HANDLE && device_ != VK_NULL_HANDLE) {
     vkDestroyShaderModule(device_, module_, nullptr);
   }
+  consumeResource(module_);
   module_ = VK_NULL_HANDLE;
   device_ = VK_NULL_HANDLE;
 }
@@ -1121,6 +1225,9 @@ bool DescriptorSetLayout::create(
     reset();
     return false;
   }
+  trackResource(device_, layout_, [layout = layout_](VkDevice deviceHandle) {
+    vkDestroyDescriptorSetLayout(deviceHandle, layout, nullptr);
+  });
   return true;
 }
 
@@ -1128,6 +1235,7 @@ void DescriptorSetLayout::reset() {
   if (layout_ != VK_NULL_HANDLE && device_ != VK_NULL_HANDLE) {
     vkDestroyDescriptorSetLayout(device_, layout_, nullptr);
   }
+  consumeResource(layout_);
   layout_ = VK_NULL_HANDLE;
   device_ = VK_NULL_HANDLE;
 }
@@ -1200,6 +1308,9 @@ bool PipelineLayout::create(
     reset();
     return false;
   }
+  trackResource(device_, layout_, [layout = layout_](VkDevice deviceHandle) {
+    vkDestroyPipelineLayout(deviceHandle, layout, nullptr);
+  });
   return true;
 }
 
@@ -1207,6 +1318,7 @@ void PipelineLayout::reset() {
   if (layout_ != VK_NULL_HANDLE && device_ != VK_NULL_HANDLE) {
     vkDestroyPipelineLayout(device_, layout_, nullptr);
   }
+  consumeResource(layout_);
   layout_ = VK_NULL_HANDLE;
   device_ = VK_NULL_HANDLE;
 }
@@ -1302,6 +1414,9 @@ bool ComputePipeline::create(VulkanDevice &device, const ShaderModule &shader,
     reset();
     return false;
   }
+  trackResource(device_, pipeline_, [pipeline = pipeline_](VkDevice deviceHandle) {
+    vkDestroyPipeline(deviceHandle, pipeline, nullptr);
+  });
   return true;
 }
 
@@ -1309,6 +1424,7 @@ void ComputePipeline::reset() {
   if (pipeline_ != VK_NULL_HANDLE && device_ != VK_NULL_HANDLE) {
     vkDestroyPipeline(device_, pipeline_, nullptr);
   }
+  consumeResource(pipeline_);
   pipeline_ = VK_NULL_HANDLE;
   device_ = VK_NULL_HANDLE;
 }
@@ -1380,6 +1496,9 @@ bool DescriptorPool::create(VulkanDevice &device,
     reset();
     return false;
   }
+  trackResource(device_, pool_, [pool = pool_](VkDevice deviceHandle) {
+    vkDestroyDescriptorPool(deviceHandle, pool, nullptr);
+  });
   return true;
 }
 
@@ -1406,6 +1525,7 @@ void DescriptorPool::reset() {
   if (pool_ != VK_NULL_HANDLE && device_ != VK_NULL_HANDLE) {
     vkDestroyDescriptorPool(device_, pool_, nullptr);
   }
+  consumeResource(pool_);
   pool_ = VK_NULL_HANDLE;
   device_ = VK_NULL_HANDLE;
 }
@@ -1528,6 +1648,9 @@ bool Fence::create(VulkanDevice &device, std::string &error) {
     return false;
   }
   device_ = device.get();
+  trackResource(device_, fence_, [fence = fence_](VkDevice deviceHandle) {
+    vkDestroyFence(deviceHandle, fence, nullptr);
+  });
   return true;
 }
 
@@ -1561,6 +1684,7 @@ void Fence::destroy() {
   if (fence_ != VK_NULL_HANDLE && device_ != VK_NULL_HANDLE) {
     vkDestroyFence(device_, fence_, nullptr);
   }
+  consumeResource(fence_);
   fence_ = VK_NULL_HANDLE;
   device_ = VK_NULL_HANDLE;
 }

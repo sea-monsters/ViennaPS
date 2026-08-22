@@ -112,12 +112,19 @@ class Oxidation : public ProcessModelBase<NumericType, D> {
     NumericType maxVelocityUmPerHr;
     NumericType nextStepEstimateHr;
     bool cflLimited;
+    bool runCompleted; // only meaningful on the "done" record
     NumericType dealGroveB;   // um^2/hr
     NumericType dealGroveBoA; // um/hr
     bool maskActive;
   };
   using StageObserver = std::function<void(const StageTelemetry &)>;
   StageObserver stageObserver_;
+
+  // P6-A3 completion contract: run() must never silently report success when
+  // the internal coupling loop stalled before consuming the requested time.
+  bool lastRunCompleted_ = false;
+  NumericType lastRunCompletedTimeHr_ = NumericType(0);
+
   unsigned mechanicsIterations_ = 200;
   unsigned pressureIterations_ = 500;
   unsigned stokesIterations_ = 500;
@@ -357,6 +364,15 @@ public:
   /// Absent/empty observer keeps the simulation bit-for-bit unchanged.
   void setStageObserver(StageObserver observer) {
     stageObserver_ = std::move(observer);
+  }
+
+  /// True when the most recent run consumed the full requested oxidation
+  /// time. A stalled coupling loop (ViennaLS returning zero-length steps)
+  /// leaves this false while run() may still have advanced partially.
+  [[nodiscard]] bool lastRunCompleted() const { return lastRunCompleted_; }
+  /// Simulated hours actually advanced by the most recent run.
+  [[nodiscard]] NumericType lastRunCompletedTimeHr() const {
+    return lastRunCompletedTimeHr_;
   }
 
 
@@ -652,7 +668,8 @@ private:
     auto emitTelemetry = [&](const char *kind, unsigned substep,
                              NumericType elapsed, NumericType requestedDt,
                              NumericType actualDt, NumericType maxVel,
-                             NumericType nextEstimate, bool cflLimited) {
+                             NumericType nextEstimate, bool cflLimited,
+                             bool runCompleted) {
       if (!stageObserver_)
         return;
       StageTelemetry rec;
@@ -664,13 +681,15 @@ private:
       rec.maxVelocityUmPerHr = maxVel;
       rec.nextStepEstimateHr = nextEstimate;
       rec.cflLimited = cflLimited;
+      rec.runCompleted = runCompleted;
       rec.dealGroveB = rates.B;
       rec.dealGroveBoA = rates.BoA;
       rec.maskActive = maskIdx >= 0;
       stageObserver_(rec);
     };
     emitTelemetry("rates", 0u, NumericType(0), NumericType(0),
-                  NumericType(0), maxSurfaceVelocity, seedStep, false);
+                  NumericType(0), maxSurfaceVelocity, seedStep, false,
+                  false);
 
     ls::OxidationCouplingParameters coupling;
     coupling.maxIterations = couplingIterations_;
@@ -744,6 +763,9 @@ private:
     unsigned substep = 0;
     NumericType nextStepEstimate = seedStep;
     NumericType lastAcceptedDt = seedStep;
+    // P6-A3 completion contract bookkeeping.
+    lastRunCompleted_ = false;
+    lastRunCompletedTimeHr_ = NumericType(0);
     constexpr NumericType maxStepGrowth = NumericType(2);
     const NumericType timeEps = NumericType(1e-9) * time_;
     while (time_ - time > timeEps) {
@@ -762,8 +784,18 @@ private:
 
       const NumericType actualDt =
           locos->applyCFLLimited(requestedDt, cflFactor_);
-      if (actualDt <= NumericType(0))
+      if (actualDt <= NumericType(0)) {
+        // P6-A3: the coupling loop stalled (ViennaLS exhausted its retry
+        // budget). Nothing advanced in this step; surface the stall through
+        // the completion contract instead of looping forever or silently
+        // reporting success.
+        Logger::getInstance()
+            .addWarning("Oxidation: coupling loop returned no progress at "
+                        "t=" +
+                        std::to_string(time) + " hr; stopping early.")
+            .print();
         break;
+      }
 
       logCFLStep(modeLabel, ++substep, time, requestedDt, actualDt);
 
@@ -776,10 +808,23 @@ private:
       emitTelemetry("substep", substep, time, requestedDt, actualDt, maxV,
                     nextStepEstimate,
                     actualDt < requestedDt * (NumericType(1) -
-                                              NumericType(1e-8)));
+                                              NumericType(1e-8)),
+                    false);
     }
+
+    const bool completed =
+        substep > 0u && (time_ - time) <= timeEps;
+    if (!completed && substep == 0u)
+      Logger::getInstance()
+          .addWarning("Oxidation: no substep could advance; requested " +
+                      std::to_string(time_) + " hr but 0 hr simulated.")
+          .print();
+    lastRunCompleted_ = completed || time_ <= NumericType(0);
+    lastRunCompletedTimeHr_ = time;
+
     emitTelemetry("done", substep, time, NumericType(0), NumericType(0),
-                  NumericType(0), NumericType(0), false);
+                  NumericType(0), NumericType(0), false,
+                  lastRunCompleted_);
     if (Logger::hasInfo())
       Logger::getInstance()
           .addInfo("Oxidation: " + modeLabel + " complete — " +

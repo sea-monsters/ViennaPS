@@ -275,6 +275,70 @@ void testStageTelemetryParity() {
   VC_TEST_ASSERT(kindsObserved.back() == std::string("done"))
 }
 
+// P6-A3 completion contract: run() must report whether the requested
+// oxidation time was fully consumed, and the telemetry "done" record must
+// carry that verdict. Zero-duration runs complete trivially.
+void testCompletionContract() {
+  // Happy path: full consumption.
+  {
+    auto domain = ps::Domain<T, D>::New();
+    ps::MakePlane<T, D>(domain, 0.1, 1.0, 1.0, 0., false, ps::Material::Si)
+        .apply();
+    auto model = ps::SmartPointer<ps::Oxidation<T, D>>::New();
+    model->setTemperature(1000.);
+    model->setTime(0.05);
+    model->setOxidant(ps::OxidantType::Dry);
+    model->setInitialOxideThickness(0.1);
+    model->setMaxGridPoints(200000);
+
+    bool doneRecordCompleted = false;
+    unsigned substeps = 0;
+    model->setStageObserver([&](const ps::Oxidation<T, D>::StageTelemetry
+                                    &rec) {
+      if (std::string(rec.kind) == "done") {
+        doneRecordCompleted = rec.runCompleted;
+        substeps = rec.substep;
+      }
+    });
+
+    ps::Process<T, D>(domain, model, T(0)).apply();
+    VC_TEST_ASSERT(model->lastRunCompleted())
+    VC_TEST_ASSERT(doneRecordCompleted)
+    VC_TEST_ASSERT(substeps >= 1U)
+    const T advanced = model->lastRunCompletedTimeHr();
+    VC_TEST_ASSERT(advanced > T(0))
+    VC_TEST_ASSERT(std::abs(advanced - T(0.05)) <= T(1e-9))
+  }
+
+  // Zero-duration edge: trivially complete, zero substeps.
+  {
+    auto domain = ps::Domain<T, D>::New();
+    ps::MakePlane<T, D>(domain, 0.1, 1.0, 1.0, 0., false, ps::Material::Si)
+        .apply();
+    auto model = ps::SmartPointer<ps::Oxidation<T, D>>::New();
+    model->setTemperature(1000.);
+    model->setTime(0.);
+    model->setOxidant(ps::OxidantType::Dry);
+    model->setInitialOxideThickness(0.05);
+
+    unsigned substeps = 100; // sentinel: must be reset to 0 by "done"
+    bool doneRecordCompleted = true;
+    model->setStageObserver([&](const ps::Oxidation<T, D>::StageTelemetry
+                                    &rec) {
+      if (std::string(rec.kind) == "done") {
+        doneRecordCompleted = rec.runCompleted;
+        substeps = rec.substep;
+      }
+    });
+
+    ps::Process<T, D>(domain, model, T(0)).apply();
+    VC_TEST_ASSERT(substeps == 0U)
+    VC_TEST_ASSERT(doneRecordCompleted)
+    VC_TEST_ASSERT(model->lastRunCompleted())
+    VC_TEST_ASSERT(model->lastRunCompletedTimeHr() == T(0))
+  }
+}
+
 int main() {
   testDealGroveEstimateWet1000C();
   testDealGroveEstimateDryHighT();
@@ -283,4 +347,5 @@ int main() {
   testOxidationCallbackCreatesNativeOxide();
   testLocosOxidationPreservesLayers();
   testStageTelemetryParity();
+  testCompletionContract();
 }

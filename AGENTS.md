@@ -21,14 +21,13 @@ decision — recorded on the board as an authority decision, never a silent
 conversion. The reviewed snapshot is published at remote
 `codex/p5-closeout-base`.
 
-**Active phase: P6/P7**, governed by
-`docs/design/p6-p7-execution-plan.md` (entry card
-`P6-A0-P6-BASELINE-FREEZE`, branch `codex/p6-base`). Governing hardware fact:
-the local device lacks `shaderFloat64`, so every device-side FP64 row is
-implemented, kernel-contract verified, and classified
-`DEVICE-PENDING-HARDWARE`; automatic selection resolves FP64 stages to CPU and
-manual Vulkan-FP64 fails closed. True device-FP64 evidence arrives through the
-P7-R4 hosted lane. The P5-era execution regime carries forward unchanged:
+**Active phase: P7**, governed by
+`docs/design/p6-p7-execution-plan.md` (P6 closed DONE-LOCAL on 2026-08-22:
+CPU long suite 96/96, Vulkan tree 135/135, aggregate stage matrix recorded in
+plan §6 - every device-FP64 row is implemented + statically validated but
+classified DEVICE-PENDING-HARDWARE on this host). Entry card for P7 is
+`P7-R0-P7-BASELINE-FREEZE`; P7-R4 hosted lanes remain the deferred external
+dependency. The P5-era execution regime carries forward unchanged:
 serialized validation lane, one verified worktree per card, card-local
 `.tmp_*` directories, CPU-oracle-first evidence, main-line-only record
 acceptance and pushes, and intent-framework invariants 1–14.

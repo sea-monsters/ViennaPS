@@ -221,6 +221,38 @@ the P6 wave's temporary artifacts.
   final record reconciliation across intent/report/board per the standing
   record-update rule.
 
+## 6. P6 exit record (2026-08-22)
+
+All cards A0–A5 executed and accepted on `codex/p6-base`; the aggregate
+receipts:
+
+- **Long suites (serial, non-benchmark).** CPU/VTK tree: **96/96**;
+  Vulkan-enabled tree (FP64 flag ON): **135/135 in 543.06 s**. Both include
+  the new `laCpuOracle`, `stageGatingMatrix`, and `viennaps-vulkan-fp64-smoke`
+  fixtures alongside the full P5 inventory.
+- **Structural fixes absorbed during the wave** (test infrastructure only):
+  per-executable runtime-DLL self-provisioning in `tests/CMakeLists.txt`
+  (root cause of recurring 0xC0000135 focused-build failures), and
+  git-common-dir resolution of cache-resident dependencies in the
+  differential runners so linked worktrees no longer depend on a local CPM
+  cache.
+- **ViennaCore cache-key drift check:** two content-addressed keys
+  (`31f6423c…`, `16fcf2a2…`) both contain the N1 volatile traverseDown fix;
+  drift is a benign patch-normalization artifact.
+
+### Aggregate stage support matrix (P6 scope)
+
+| Stage | Precision | Local route | Evidence anchor |
+|---|---|---|---|
+| Oxidant diffusion / pressure-Stokes / mechanics / deformation | FP64 (CPU) | CPU-authoritative through `psOxidation` orchestration into `ls::Oxidation` | A2/A3 telemetry + completion-contract receipts; legacy fixture green |
+| OXIDATION_LINEAR_SOLVE (device) | FP64 | `DEVICE-PENDING-HARDWARE`: policy resolves to CPU; MANUAL Vulkan fails closed naming FP64 | `stageGatingMatrix` R1/R2; `fp64_smoke` guard contract |
+| LA primitives (CSR SpMV / dot / axpy) | FP64 | Production CPU layer deterministic across OMP counts; device variants compile + static-validate only | A1 fingerprints; A4 SPIR-V receipts |
+| P5 surface/ray/model-matrix rows | FP32 | Unchanged from K1/E0 acceptance | carried receipts |
+
+No FP64 row appears in any eligible list on this host; the deferred
+hosted-FP64 lane (P7-R4) remains the sole path to real device execution
+evidence.
+
 ## 5. Standing execution notes
 
 - Cards follow `READY -> RUNNING -> CHECKPOINT -> RETRY_ONCE -> DONE |

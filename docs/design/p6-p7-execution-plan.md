@@ -102,20 +102,35 @@ changes wait for main-line acceptance.
 
 ### P6-A2-OXIDATION-STAGE-DECOMPOSITION
 
-- **Milestone:** replace the monolithic `psOxidation` physics path with four
-  independently verifiable CPU stages — oxidant diffusion, pressure/Stokes,
-  harmonic extension, deformation — while keeping the public model API and
-  default results unchanged.
-- **Prohibited:** changing any default oxidation number on existing
-  geometries beyond the documented composition tolerance; touching Vulkan
-  files.
-- **Required observations:** per-stage unit oracles; composed pipeline vs
-  monolith parity harness on trench/LOCOS/fin fixtures with before/after
-  meshes and rates tables; stage boundaries emit named intermediates for
-  later device routing.
-- **Acceptance:** parity receipts within documented tolerance; legacy tests
+> **CHECKPOINT → RESCOPED 2026-08-22 (premise correction).** Reconnaissance
+> found that `psOxidation` is not a monolith awaiting decomposition: the
+> ~950-line model already implements all four stages internally (CFL-limited
+> substepping with Deal-Grove kinetics, pressure/Stokes SIMPLE relaxation,
+> mechanics/harmonic extension, deformation advection plus full LOCOS mask
+> physics), already carries a BiCGSTAB backend selection seam
+> (`GpuMode::Cpu/Gpu`), tolerance-hierarchy validation, and a focused
+> `tests/oxidation` fixture. The original card premise (written against the
+> 2026-08-05 intent sketch) is obsolete.
+
+- **Rescoped milestone:** name the existing stage boundaries instead of
+  creating them.
+  1. *Stage telemetry:* opt-in observer emitting named per-substep
+     intermediates (Deal-Grove rates, CFL step, pressure/Stokes residual
+     histories, mechanics residuals, deformation deltas) — default behavior
+     bit-identical when the observer is absent.
+  2. *LA-layer seam:* allow the internal CPU BiCGSTAB to be backed by the
+     P6-A1 deterministic `viennaps::la` solver via explicit opt-in; the
+     legacy path stays default so parity is by construction.
+  3. *Parity harness:* `tests/oxidation` gains a telemetry-on vs telemetry-off
+     bit-identity receipt plus a seam-enabled run comparing solver outputs at
+     documented tolerance.
+- **Prohibited:** changing any default oxidation number; touching Vulkan
+  files; restructuring the model header beyond adding the observer/seam.
+- **Acceptance:** bit-identity receipts; seam run green; legacy fixture
   untouched and green.
-- **Unlocks:** P6-A3.
+- **Unlocks:** P6-A3 (re-scoped identically: orchestration contracts apply to
+  the EXISTING coupling loop — rollback/residual-history contracts are
+  verified against it rather than newly written).
 
 ### P6-A3-COUPLING-ORCHESTRATION
 

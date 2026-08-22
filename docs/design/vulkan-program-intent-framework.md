@@ -690,6 +690,8 @@ PD5-CI-REMOTE(BLOCKED) → P5 回归加固宣称释放 → P5-RAY-ROUTE(DONE-LOC
 10. **清理边界**：验证后只删除当前任务创建的临时目录（先确认无活动进程），保留 `.claude/` 与用户自有改动。
 11. **一卡一界**：单卡独占文件边界；不把回归加固与 Process/模型集成混提交。
 12. **非计算复用 CPU**：除 compute 核外，编排/模型/主机输运辅助/默认引擎须复用或兼容原版 CPU 路线；有意偏离必须卡片化文档 + 回归（见 §2.2 第 8 条、§12.1）。
+13. **重型外部依赖走安装前缀**：VTK 等可选重型依赖以"独立构建安装 + find_package 导入目标"消费；禁止在树内 add_subdirectory 注入——ViennaLS/ViennaPS 的 install(EXPORT) 无法引用未导出的兄弟真实目标（2026-08-21 VTK 变体实证，见 formal-exit §25）。
+14. **device 注销所有权**：运行时包装对象（buffer/fence/shader/pipeline/layout/pool）创建时即登记资源台账；`VulkanDevice::reset()` 在 `vkDestroyDevice` 前强制回收全部未消费记录。stale 拒绝语义依赖代际检查实现，不得以泄漏句柄为代价（E0 对抗验证实证，VUID-vkDestroyDevice-device-05137 根治方案）。
 
 ---
 
@@ -702,6 +704,7 @@ PD5-CI-REMOTE(BLOCKED) → P5 回归加固宣称释放 → P5-RAY-ROUTE(DONE-LOC
 | 2026-08-05 | INTENT-WHITEPAPER | DONE-LOCAL | 本文件扩写为全程序功能意图白皮书；基线=`code_reference/ViennaPS` |
 | 2026-08-05 | INTENT-DESIGN-PHILOSOPHY | DONE-LOCAL | 补入双基线+mprocess嵌入理念与总体意图规划（§2）；参考=`D:\\mprocess` + 开发报告 §2.2 |
 | 2026-08-05 | CPU-REUSE-REQUIREMENT + P0-P4-AUDIT-R1 | DONE-LOCAL | 非计算复用CPU硬要求入账；第一轮审计账本 `docs/design/p0-p4-cpu-reuse-audit-round1.md`（RECORDED；R1-F1…F3 未关闭） |
+| 2026-08-21 | INTENT-ARCH-NOTES | DONE-LOCAL | §15 新增不变量 13/14：重型依赖安装前缀消费（VTK 变体实证）；device 注销台账所有权（E0 对抗验证实证） |
 
 ---
 

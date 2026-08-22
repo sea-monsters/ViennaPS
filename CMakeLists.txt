@@ -42,7 +42,10 @@ option(VIENNAPS_BUILD_VULKAN_LEVELSET_SMOKE
 option(VIENNAPS_BUILD_VULKAN_RAY_SMOKE
        "Build the Vulkan deterministic ray reduction smoke test" OFF)
 option(VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE
-       "Build the Vulkan surface-model differential smoke test" OFF)
+"Build the Vulkan surface-model differential smoke test" OFF)
+option(VIENNAPS_ENABLE_VULKAN_FP64
+"Compile FP64 LA kernels (requires an FP64-capable device to execute; local
+Intel Arc is DEVICE-PENDING-HARDWARE)" OFF)
 
 option(VIENNAPS_BUILD_EXAMPLES "Build examples" OFF)
 option(VIENNAPS_BUILD_TESTS "Build tests" OFF)

@@ -1,0 +1,38 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float64 : enable
+
+// P6-A4 FP64 dot-product partials: one deterministic partial per workgroup.
+// float64 atomics do not exist in Vulkan, and the project contract requires
+// scheduler-independent results anyway, so the host combines the partials
+// sequentially (mirroring viennaps::la::vectorOps block ordering).
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer A { double a[]; };
+layout(std430, set = 0, binding = 1) readonly buffer B { double b[]; };
+layout(std430, set = 0, binding = 2) writeonly buffer Partials { double partials[]; };
+
+layout(push_constant) uniform Push { uint count; } push_;
+
+shared double tile[256];
+
+void main() {
+  const uint tid = gl_LocalInvocationID.x;
+  const uint gid = gl_GlobalInvocationID.x;
+  const uint laneCount = min(push_.count - gl_WorkGroupID.x * 256u, 256u);
+
+  double local = 0.0;
+  if (gid < push_.count)
+    local = a[gid] * b[gid];
+  tile[tid] = local;
+  barrier();
+  memoryBarrierShared();
+
+  // Sequential shared-memory reduction in fixed order (deterministic).
+  if (tid == 0) {
+    double s = 0.0;
+    for (uint k = 0; k < laneCount; ++k)
+      s += tile[k];
+    partials[gl_WorkGroupID.x] = s;
+  }
+}

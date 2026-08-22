@@ -176,6 +176,15 @@ if(VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE OR
   endif()
 endif()
 
+if(VIENNAPS_ENABLE_VULKAN_FP64)
+  if(VIENNAPS_VULKAN_SDK_AVAILABLE)
+    add_subdirectory(fp64)
+  else()
+    message(STATUS
+            "[ViennaPS Vulkan FP64] Vulkan SDK unavailable; skipping kernels.")
+  endif()
+endif()
+
 if(VIENNAPS_BUILD_VULKAN_RAY_SMOKE OR VIENNAPS_BUILD_VULKAN_SURFACE_SMOKE)
   if(VIENNAPS_VULKAN_SDK_AVAILABLE)
     add_subdirectory(ray)

@@ -1,0 +1,27 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float64 : enable
+
+// P6-A4 FP64 CSR SpMV (DEVICE-PENDING-HARDWARE on the local Intel Arc).
+// Requires the shaderFloat64 device feature at pipeline creation time.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer Values { double values[]; };
+layout(std430, set = 0, binding = 1) readonly buffer ColIdx { uint colIdx[]; };
+layout(std430, set = 0, binding = 2) readonly buffer RowPtr { uint rowPtr[]; };
+layout(std430, set = 0, binding = 3) readonly buffer X { double x[]; };
+layout(std430, set = 0, binding = 4) writeonly buffer Y { double y[]; };
+
+layout(push_constant) uniform Push { uint rowCount; } push_;
+
+void main() {
+  const uint row = gl_GlobalInvocationID.x;
+  if (row >= push_.rowCount)
+    return;
+  double sum = 0.0;
+  // Deterministic ascending-column accumulation; the host contract mirrors
+  // viennaps::la::CsrMatrix::spmv ordering.
+  for (uint k = rowPtr[row]; k < rowPtr[row + 1]; ++k)
+    sum += values[k] * x[colIdx[k]];
+  y[row] = sum;
+}

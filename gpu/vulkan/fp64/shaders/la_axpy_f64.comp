@@ -1,0 +1,18 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_float64 : enable
+
+// P6-A4 FP64 AXPY: y = alpha * x + y (elementwise).
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, set = 0, binding = 0) readonly buffer X { double x[]; };
+layout(std430, set = 0, binding = 1) buffer Y { double y[]; };
+
+layout(push_constant) uniform Push { double alpha; uint count; } push_;
+
+void main() {
+  const uint i = gl_GlobalInvocationID.x;
+  if (i >= push_.count)
+    return;
+  y[i] = push_.alpha * x[i] + y[i];
+}

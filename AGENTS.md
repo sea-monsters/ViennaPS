@@ -12,8 +12,28 @@ are under `python/`. Assets used by documentation and examples are in
 
 ## Current Program State (2026-08-21)
 
-The active program is the Vulkan compute acceleration plan. The authoritative
-intent and evidence sources are:
+**P5 is closed by user declaration.** All locally executable acceptance rows
+were green beforehand (K1 serial suite 94/94; E0 adversarial audit with zero
+VUID diagnostics under forced Khronos validation; VTK-enabled install/export
+chain closed via standalone find_package consumption; X1 hygiene Tier A
+executed). The hosted-CI evidence gate was explicitly waived in the same
+decision — recorded on the board as an authority decision, never a silent
+conversion. The reviewed snapshot is published at remote
+`codex/p5-closeout-base`.
+
+**Active phase: P6/P7**, governed by
+`docs/design/p6-p7-execution-plan.md` (entry card
+`P6-A0-P6-BASELINE-FREEZE`, branch `codex/p6-base`). Governing hardware fact:
+the local device lacks `shaderFloat64`, so every device-side FP64 row is
+implemented, kernel-contract verified, and classified
+`DEVICE-PENDING-HARDWARE`; automatic selection resolves FP64 stages to CPU and
+manual Vulkan-FP64 fails closed. True device-FP64 evidence arrives through the
+P7-R4 hosted lane. The P5-era execution regime carries forward unchanged:
+serialized validation lane, one verified worktree per card, card-local
+`.tmp_*` directories, CPU-oracle-first evidence, main-line-only record
+acceptance and pushes, and intent-framework invariants 1–14.
+
+The authoritative intent and evidence sources are:
 
 - `docs/design/vulkan-program-intent-framework.md` — full-program functional
   intent whitepaper and overall Vulkan migration design philosophy (original
@@ -28,47 +48,24 @@ intent and evidence sources are:
 
 The local control-plane milestones through `PD4-HW-MATRIX` and
 `PD4-PERF-BASELINE` are accepted. `PD5-CI-DOCS-INTEGRATION` and
-`PD5-INSTALL-EXPORT` are locally accepted for the CPU/no-SDK boundary. Remote
-CI is not accepted: the configured GitHub repository still has `master` as its
-default branch; that branch has an older test-only `build.yml`, not the current
-PD5 workflow, and no registered Vulkan runner or hosted run evidence exists.
+`PD5-INSTALL-EXPORT` are locally accepted for the CPU/no-SDK boundary, and the
+VTK-enabled install/export variant closed locally on 2026-08-21. Hosted CI was
+explicitly waived by the P5 completion declaration; the deferred hosted-lane
+work resurfaces as a hard dependency of `P7-R4-CI-SOAK-RELEASE`.
 
-The P5 device ray chain cards `P5-JD`, `P5-JE`, and `P5-JF` are locally
-revalidated on the Release Vulkan/Intel Arc path. They provide device-resident
-composition, one compute submission, and strict-FP32 fail-closed status
-propagation. They do not enable a production Process route, complete surface
-physics, automatic backend promotion, cross-vendor CI, or release readiness.
-`P5-N1/N2`, `P5-S0/S1`, and `P5-M0` are locally accepted. `P5-K1-TOP-LEVEL`
-closed `DONE-LOCAL` on 2026-08-21: the final serial non-benchmark suite is
-**94/94 GREEN** after the scoped test-infrastructure remediations (runner
-consolidation with an explicit `-BuildDirectory` contract, model-matrix
-runtime-DLL wiring) and the `P5-K1-R2` adjudication of `vulkanCpuBaseline`
-(stale disk-mesh expectation; ViennaLS 5.8.5 `ToDiskMesh` is point-cloud-only).
-The approved remaining closeout order is
-`P5-X0 -> P5-N1/N2 -> P5-S0/S1 -> P5-M0 -> P5-K1-TOP-LEVEL (DONE-LOCAL)
--> P5-E0`. `P5-E0` completed its local adversarial-audit scope on 2026-08-21:
-CPU 94/94, Vulkan tree 132/132, and the 30 device smokes run with zero VUID
-diagnostics under a forced Khronos validation layer after two root-cause fixes
-(ray-reducer push-constant layout; runtime resource ledger enforcing
-VUID-vkDestroyDevice-device-05137 without breaking stale-handle rejection).
-The VTK-enabled install/export variant is also locally closed (2026-08-21):
-a standalone VTK 9.6.2 install is consumed through find_package imported
-targets, the full tree builds and installs, and the independent consumer
-fixture runs green — see formal-exit plan §25 for the architecture note that
-in-tree VTK add_subdirectory can never satisfy ViennaLS's export set. The
-remaining external gate for formal P5 closeout is hosted-CI run evidence;
-`P5-DEPLOYMENT-EXIT` stays formally locked on that single remote dependency.
-Deployment preparation may remain independent, while remote CI and VTK
-install/export evidence are still explicitly gated.
-The root worktree contains accumulated accepted and pending P5 changes. Freeze
-them through the explicit `codex/p5-closeout-base` checkpoint before new
-production work, exclude generated environments, and never convert local
-implementation evidence into a project-wide completion claim.
-
-During P5 closeout, local validation is globally serialized. Agents may
-analyze or edit independently, but only one worktree may run CMake, builds,
-CTest, reference emitters, or Vulkan executables at any moment. Other cards
-remain at `CHECKPOINT` until the main line releases the validation lane.
+Historical P5 narrative (retained for context): the device ray chain cards
+`P5-JD/JE/JF` provided device-resident composition with strict-FP32
+fail-closed propagation; `P5-N1/N2`, `P5-S0/S1`, and `P5-M0` were accepted;
+`P5-K1-TOP-LEVEL` closed DONE-LOCAL (serial non-benchmark suite 94/94 after
+runner consolidation, model-matrix runtime-DLL wiring, and the `P5-K1-R2`
+adjudication of `vulkanCpuBaseline` — stale disk-mesh expectation, ViennaLS
+5.8.5 `ToDiskMesh` is point-cloud-only); `P5-E0` completed its local
+adversarial audit (CPU 94/94, Vulkan tree 132/132, zero VUID under forced
+Khronos validation) after two root-cause fixes: ray-reducer push-constant
+layout mirroring, and the runtime resource ledger enforcing
+VUID-vkDestroyDevice-device-05137 without breaking stale-handle rejection.
+Never convert local implementation evidence into a project-wide completion
+claim beyond what the board records.
 
 ## Build, Test, and Development Commands
 

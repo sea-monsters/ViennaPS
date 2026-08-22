@@ -69,13 +69,22 @@ $viennaCS = Cache-SourceDir 'ViennaCS_SOURCE_DIR'
 #   2. '<BuildDirectory>\_deps\embree-src'    (CPM in-tree source)
 #   3. "$env:CPM_SOURCE_CACHE\embree\9311"    (shared CPM cache)
 function Resolve-EmbreeRoot {
+  # Generic resolution: locate the MAIN repository through git so linked
+  # worktrees reuse the primary cache without any machine-specific path in
+  # tracked files or environment.
   $candidates = @((Join-Path $root '.cpm-cache\embree\9311'))
+  $commonDir = (& git rev-parse --path-format=absolute --git-common-dir 2>$null)
+  if ($LASTEXITCODE -eq 0 -and $commonDir) {
+    $mainRepoRoot = Split-Path -Parent ([System.IO.Path]::GetFullPath($commonDir))
+    $candidates += (Join-Path $mainRepoRoot '.cpm-cache\embree\9311')
+  }
   $candidates += (Join-Path $BuildDirectory '_deps\embree-src')
   if ($env:CPM_SOURCE_CACHE) {
     $candidates += (Join-Path $env:CPM_SOURCE_CACHE 'embree\9311')
   }
   foreach ($candidate in $candidates) {
-    if (Test-Path (Join-Path $candidate 'include\embree4\rtcore.h')) {
+    if ($candidate -and
+        (Test-Path (Join-Path $candidate 'include\embree4\rtcore.h'))) {
       return $candidate
     }
   }

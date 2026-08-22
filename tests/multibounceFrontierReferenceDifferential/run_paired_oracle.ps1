@@ -8,14 +8,37 @@ $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path "$PSScriptRoot\..\..").Path
 if (-not $BuildDirectory) { $BuildDirectory = Join-Path $root 'build' }
 $observerDirectory = (Resolve-Path $PSScriptRoot).Path
-$modViennaRay = Join-Path $root '.cpm-cache\viennaray\0fe9'
-$viennaCore = Join-Path $root '.cpm-cache\viennacore\edac'
+# Cache-resident dependencies: resolve through the MAIN repository when
+# running from a linked worktree (generic git-based discovery).
+$commonDir = (& git rev-parse --path-format=absolute --git-common-dir 2>$null)
+$cacheRoots = @($root)
+if ($LASTEXITCODE -eq 0 -and $commonDir) {
+  $mainRepoRoot = Split-Path -Parent ([System.IO.Path]::GetFullPath($commonDir))
+  if ($mainRepoRoot -ne $root)
+    { $cacheRoots += $mainRepoRoot }
+}
+function Resolve-CacheDir([string]$relative) {
+  foreach ($cacheRoot in $cacheRoots) {
+    $candidate = Join-Path $cacheRoot $relative
+    if (Test-Path $candidate) {
+      return $candidate
+    }
+  }
+  throw "Cache directory not found: $relative (searched: $($cacheRoots -join '; '))"
+}
+$modViennaRay = Resolve-CacheDir '.cpm-cache\viennaray\0fe9'
+$viennaCore = Resolve-CacheDir '.cpm-cache\viennacore\edac'
 # Embree include root: three-level resolution (repo root cache -> build tree
 # CPM source -> shared CPM cache), mirroring the shared engine resolver.
 $embreeCandidates = @(
-  (Join-Path $root '.cpm-cache\embree\9311'),
-  (Join-Path $BuildDirectory '_deps\embree-src')
+  (Join-Path $root '.cpm-cache\embree\9311')
 )
+$commonDir = (& git rev-parse --path-format=absolute --git-common-dir 2>$null)
+if ($LASTEXITCODE -eq 0 -and $commonDir) {
+  $mainRepoRoot = Split-Path -Parent ([System.IO.Path]::GetFullPath($commonDir))
+  $embreeCandidates += (Join-Path $mainRepoRoot '.cpm-cache\embree\9311')
+}
+$embreeCandidates += (Join-Path $BuildDirectory '_deps\embree-src')
 if ($env:CPM_SOURCE_CACHE) {
   $embreeCandidates += (Join-Path $env:CPM_SOURCE_CACHE 'embree\9311')
 }

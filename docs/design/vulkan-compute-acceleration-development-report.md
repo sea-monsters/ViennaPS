@@ -1082,3 +1082,30 @@ Wave 3 续（2026-08-21，K1 准备）：当前提交 `5768825` 已具备 S1 与
 
 意图白皮书 §12.1 与状态看板文首同步指向同一轮账本；本报告记录纠偏实现，最终
 验证结果以实际 CTest 运行为准。
+
+## P5 收尾波次摘要（2026-08-19 至 2026-08-21）
+
+按正式退出计划（formal-exit plan）推进并全部本地关闭：
+
+- **根因与 Neutral 门**：MSVC 14.44 `/O2 /Ob2` 将 ViennaCore `traverseDown`
+  尾递归编译为跳过空指针回边的缺陷循环；以 `Node *volatile` 续载补丁
+  （CPM `CUSTOM_CACHE_KEY` 接线）根治。N2 主线门在全矩阵
+  （Mod/参考 × OMP 1/2/4/8，Release 旗标）上 `max_ulp=0`。
+- **Surface 边界**：S0 以共享夹具固化完整 Process 验收面并在预测的设备物理
+  缺口处确定性 RED；S1 仅加三个适配器后 GREEN，配对记录位级相等。
+- **模型矩阵**：M0 对齐 15 行支持矩阵，AUTO 宽开关审计确认不存在。
+- **顶局长套**：K1 在候选 `5768825` 上串行全量构建 + 95 项清单；
+  首轮 93/94，R2 裁决 `vulkanCpuBaseline` 为过期 disk-mesh 断言
+  （ViennaLS 5.8.5 `ToDiskMesh` 点云契约），修正后 **94/94**。
+- **E0 对抗验证**：强制 Khronos 验证层暴露两类真实违规并以根本修复清零——
+  ray reducer push-constant 布局镜像 shader 块；
+  运行时资源台账在 device 注销前回收被遗弃对象
+  （保持 stale 拒绝语义）。一处跨 TBB 调度的位级相等断言公差化。
+  CPU 树 94/94、Vulkan 树 132/132、30 设备 smoke 0 VUID。
+- **VTK 变体**：独立 VTK 9.6.2 安装经 find_package 导入目标消费；
+  配置、构建、安装、独立消费方全链路绿；16 个差分 fixture 桩类以
+  `VIENNALS_USE_VTK` 守卫。in-tree add_subdirectory 架构性不可行已记录。
+- **发布**：审查快照 16+ 提交推送至远端 `codex/p5-closeout-base`
+  （§26）；hosted-CI 运行证据按用户决定延期。
+
+剩余唯一外部门：hosted-CI run ID/URL。`P5-DEPLOYMENT-EXIT` 据此保持锁定。

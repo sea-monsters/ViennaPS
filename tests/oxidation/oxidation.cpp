@@ -10,6 +10,11 @@
 
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <tuple>
+#include <functional>
+#include <string>
+#include <vector>
 
 namespace ps = viennaps;
 
@@ -194,6 +199,82 @@ void testOrientationRatios() {
   VC_TEST_ASSERT_ISCLOSE(x111 / x100, T(1.68), T(0.02))
 }
 
+// P6-A2 parity receipt: the stage telemetry observer is read-only, so a run
+// with an attached observer must match a plain run structurally and
+// geometrically. ViennaLS-internal solves may schedule OpenMP reductions
+// differently between two runs, so geometry equality uses a tight relative
+// tolerance on the max coordinate magnitude plus exact level-set/node counts
+// (same contract class as the ray-flux route receipt). The telemetry record
+// sequence itself is asserted exactly.
+void testStageTelemetryParity() {
+  auto runOnce = [&](bool withObserver)
+      -> std::tuple<std::size_t, T, std::size_t, std::vector<std::string>,
+                    unsigned> {
+    auto domain = ps::Domain<T, D>::New();
+    ps::MakePlane<T, D>(domain, 0.1, 1.0, 1.0, 0., false, ps::Material::Si)
+        .apply();
+
+    auto model = ps::SmartPointer<ps::Oxidation<T, D>>::New();
+    model->setTemperature(1000.);
+    model->setTime(0.05);
+    model->setOxidant(ps::OxidantType::Dry);
+    model->setInitialOxideThickness(0.1);
+    model->setMaxGridPoints(200000);
+
+    std::vector<std::string> kinds;
+    unsigned substeps = 0;
+    if (withObserver) {
+      model->setStageObserver(
+          [&](const ps::Oxidation<T, D>::StageTelemetry &rec) {
+            kinds.push_back(rec.kind);
+            if (std::string(rec.kind) == "substep")
+              substeps = rec.substep;
+          });
+    }
+
+    ps::Process<T, D>(domain, model, T(0)).apply();
+
+    // Structural + geometric summary over every level set.
+    std::size_t totalNodes = 0;
+    T maxCoord = 0;
+    for (const auto &ls : domain->getLevelSets()) {
+      auto mesh = viennals::Mesh<T>::New();
+      viennals::ToDiskMesh<T, D> converter;
+      converter.setMesh(mesh);
+      converter.insertNextLevelSet(ls);
+      converter.apply();
+      totalNodes += mesh->nodes.size();
+      for (const auto &node : mesh->nodes)
+        for (int d = 0; d < D; ++d) {
+          const T a = node[d] < 0 ? -node[d] : node[d];
+          if (a > maxCoord)
+            maxCoord = a;
+        }
+    }
+    return {totalNodes, maxCoord, domain->getNumberOfLevelSets(), kinds,
+            substeps};
+  };
+
+  const auto [nodesPlain, coordPlain, lsCountPlain, kindsPlain, subPlain] =
+      runOnce(false);
+  const auto [nodesObserved, coordObserved, lsCountObserved, kindsObserved,
+              subObserved] = runOnce(true);
+
+  VC_TEST_ASSERT(lsCountPlain == 2)
+  VC_TEST_ASSERT(lsCountObserved == 2)
+  VC_TEST_ASSERT(nodesPlain == nodesObserved)
+  VC_TEST_ASSERT(coordPlain > T(0))
+  VC_TEST_ASSERT(coordObserved <= coordPlain * (T(1) + T(1e-9)) + T(1e-12))
+  VC_TEST_ASSERT(coordObserved >= coordPlain * (T(1) - T(1e-9)))
+  (void)kindsPlain; // plain run records nothing by design
+
+  // Telemetry sequence contract.
+  VC_TEST_ASSERT(subObserved >= 1U)
+  VC_TEST_ASSERT(kindsObserved.size() == subObserved + 2U) // rates + done
+  VC_TEST_ASSERT(kindsObserved.front() == std::string("rates"))
+  VC_TEST_ASSERT(kindsObserved.back() == std::string("done"))
+}
+
 int main() {
   testDealGroveEstimateWet1000C();
   testDealGroveEstimateDryHighT();
@@ -201,4 +282,5 @@ int main() {
   testOrientationRatios();
   testOxidationCallbackCreatesNativeOxide();
   testLocosOxidationPreservesLayers();
+  testStageTelemetryParity();
 }

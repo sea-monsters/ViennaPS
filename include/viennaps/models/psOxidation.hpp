@@ -40,6 +40,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <string>
 
@@ -100,6 +101,23 @@ class Oxidation : public ProcessModelBase<NumericType, D> {
   NumericType maskCouplingTolerance_ = NumericType(2e-2);
   GpuMode gpuMode_ = GpuMode::Cpu;
   GpuPreconditioner gpuPreconditioner_ = GpuPreconditioner::Jacobi;
+
+  // P6-A2 stage telemetry types (opt-in observer; see public setter).
+  struct StageTelemetry {
+    const char *kind; // "rates" | "substep" | "done"
+    unsigned substep;
+    NumericType elapsedHr;
+    NumericType requestedDtHr;
+    NumericType actualDtHr;
+    NumericType maxVelocityUmPerHr;
+    NumericType nextStepEstimateHr;
+    bool cflLimited;
+    NumericType dealGroveB;   // um^2/hr
+    NumericType dealGroveBoA; // um/hr
+    bool maskActive;
+  };
+  using StageObserver = std::function<void(const StageTelemetry &)>;
+  StageObserver stageObserver_;
   unsigned mechanicsIterations_ = 200;
   unsigned pressureIterations_ = 500;
   unsigned stokesIterations_ = 500;
@@ -328,6 +346,19 @@ public:
   void setGpuPreconditioner(GpuPreconditioner preconditioner) {
     gpuPreconditioner_ = preconditioner;
   }
+
+  // ---- P6 stage telemetry (opt-in; zero effect when unset) --------------
+  // Named intermediates for the stage boundaries this orchestrator owns.
+  // The ViennaLS-side per-stage residual histories live behind
+  // ls::Oxidation::applyCFLLimited and are NOT exposed here; see
+  // docs/design/p6-p7-execution-plan.md P6-A2 for the boundary note.
+
+  /// Register an opt-in observer receiving named stage intermediates.
+  /// Absent/empty observer keeps the simulation bit-for-bit unchanged.
+  void setStageObserver(StageObserver observer) {
+    stageObserver_ = std::move(observer);
+  }
+
 
   void setMechanicsIterations(unsigned iterations) {
     mechanicsIterations_ = std::max(1u, iterations);
@@ -618,6 +649,29 @@ private:
         timeStep_ > NumericType(0) ? timeStep_
                                    : std::numeric_limits<NumericType>::max();
 
+    auto emitTelemetry = [&](const char *kind, unsigned substep,
+                             NumericType elapsed, NumericType requestedDt,
+                             NumericType actualDt, NumericType maxVel,
+                             NumericType nextEstimate, bool cflLimited) {
+      if (!stageObserver_)
+        return;
+      StageTelemetry rec;
+      rec.kind = kind;
+      rec.substep = substep;
+      rec.elapsedHr = elapsed;
+      rec.requestedDtHr = requestedDt;
+      rec.actualDtHr = actualDt;
+      rec.maxVelocityUmPerHr = maxVel;
+      rec.nextStepEstimateHr = nextEstimate;
+      rec.cflLimited = cflLimited;
+      rec.dealGroveB = rates.B;
+      rec.dealGroveBoA = rates.BoA;
+      rec.maskActive = maskIdx >= 0;
+      stageObserver_(rec);
+    };
+    emitTelemetry("rates", 0u, NumericType(0), NumericType(0),
+                  NumericType(0), maxSurfaceVelocity, seedStep, false);
+
     ls::OxidationCouplingParameters coupling;
     coupling.maxIterations = couplingIterations_;
     coupling.tolerance = couplingTolerance_;
@@ -719,7 +773,13 @@ private:
       nextStepEstimate = (maxV > NumericType(0))
                              ? std::min(userStepCap, cflStep(maxV))
                              : std::min(userStepCap, actualDt);
+      emitTelemetry("substep", substep, time, requestedDt, actualDt, maxV,
+                    nextStepEstimate,
+                    actualDt < requestedDt * (NumericType(1) -
+                                              NumericType(1e-8)));
     }
+    emitTelemetry("done", substep, time, NumericType(0), NumericType(0),
+                  NumericType(0), NumericType(0), false);
     if (Logger::hasInfo())
       Logger::getInstance()
           .addInfo("Oxidation: " + modeLabel + " complete — " +

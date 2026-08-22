@@ -38,6 +38,11 @@ The only local Vulkan device (Intel Arc graphics) reports
   there as a hard dependency, by design rather than by omission).
 - FP32 device compute remains governed by the existing strict-FP32 evidence
   thresholds from P5.
+- Schema binding: stage-level FP64 eligibility consumes
+  `CapabilityProfileRecord::vulkanFp64SuitePass`
+  (`include/viennaps/compute/probeProfileAdapter.hpp`), which the deployment
+  probe sets only from PASS validation evidence — never from raw
+  `shaderFloat64` presence.
 
 ## 2. Dependency graph
 

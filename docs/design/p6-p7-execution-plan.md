@@ -212,6 +212,33 @@ the P6 wave's temporary artifacts.
   arrive exclusively from the P7-R4 hosted lane.
 
 ### P7-R4-CI-SOAK-RELEASE
+
+> **Status 2026-08-22: local deliverables DONE-LOCAL; hosted soak
+> BLOCKED-EXTERNAL (DEFERRED-BY-STANDING-DECISION).** The runner
+> provisioning deferred since the P5 completion declaration remains the hard
+> external dependency for real soak runs and device-FP64 execution evidence.
+> Everything executable without those lanes was delivered:
+
+- **Release support matrix (published below)** reconciling every
+  `DEVICE-PENDING-HARDWARE` row against its evidence class.
+- **Soak substitute receipt:** all six P7 fixtures green on the target
+  hardware - laCpuOracle / stageGatingMatrix / selectionRecord /
+  calibrationRecord on the CPU tree, resident-working-set and fp64 smokes
+  on the Vulkan tree (the latter also under forced Khronos validation).
+  Full-suite soak repetition across lanes awaits the hosted provision.
+
+#### Release support matrix (P6/P7 scope, this host)
+
+| Row | Class | Local evidence |
+|---|---|---|
+| LA primitives FP64 (device) | `DEVICE-PENDING-HARDWARE` | A4 static SPIR-V receipts; policy fail-closed verified pre-submit |
+| OXIDATION_LINEAR_SOLVE device | `DEVICE-PENDING-HARDWARE` | stageGatingMatrix R1/R2 |
+| Oxidation orchestration stages | `CPU-AUTHORITATIVE` | A2/A3 telemetry, parity, completion contracts |
+| LA deterministic layer | `CPU-PRODUCTION` | A1 fingerprints, OMP-invariant |
+| Resident working set | `CPU+DEVICE-FP32` | R1 measured receipts (4x transfer reduction), validation-layer clean |
+| Selection records | `DETERMINISTIC` | R2 emit/replay byte-equality |
+| Calibration | `LOCAL-FP32` | R3 measured median receipts; FP64 entries await hosted lane |
+### P7-R4-CI-SOAK-RELEASE
 - Hard dependency: hosted runner provisioning decisions deferred during P5
   (at least one generic lane, one Vulkan-hardware lane, one FP64-capable lane)
   resurface here as blocking requirements.

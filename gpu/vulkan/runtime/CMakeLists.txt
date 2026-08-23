@@ -271,3 +271,24 @@ if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_SMOKE)
   add_test(NAME viennaps-runtime-compute-session-smoke
            COMMAND viennaps-runtime-compute-session-smoke)
 endif()
+
+# ---- P7-R1: resident working set smoke ------------------------------------
+add_executable(viennaps-runtime-resident-working-set-smoke
+  resident_working_set_smoke.cpp
+)
+target_link_libraries(viennaps-runtime-resident-working-set-smoke
+  PRIVATE
+    viennaps_vulkan_compute_runtime
+    Vulkan::Vulkan)
+target_compile_features(viennaps-runtime-resident-working-set-smoke PRIVATE cxx_std_20)
+if(MSVC)
+  target_compile_options(viennaps-runtime-resident-working-set-smoke PRIVATE /W4 /WX)
+else()
+  target_compile_options(viennaps-runtime-resident-working-set-smoke
+                         PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
+
+if((BUILD_TESTING OR VIENNAPS_BUILD_TESTS) AND VIENNAPS_BUILD_VULKAN_SMOKE)
+  add_test(NAME viennaps-runtime-resident-working-set-smoke
+           COMMAND viennaps-runtime-resident-working-set-smoke)
+endif()

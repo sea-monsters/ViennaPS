@@ -30,15 +30,23 @@ foreach(_viennaps_fp64_shader IN LISTS VIENNAPS_FP64_SHADERS)
   set(_viennaps_fp64_spv
       "${CMAKE_CURRENT_BINARY_DIR}/${_viennaps_fp64_name}.spv")
   string(REPLACE ".comp" "" _viennaps_fp64_target "viennaps-fp64-${_viennaps_fp64_name}")
-  add_custom_command(
-    OUTPUT ${_viennaps_fp64_spv}
-    COMMAND
-      ${VIENNAPS_FP64_SHADER_COMPILER}
-      $<$<MATCHES:${VIENNAPS_FP64_SHADER_COMPILER},.*glslangValidator.*>:-V>
-      ${CMAKE_CURRENT_SOURCE_DIR}/${_viennaps_fp64_shader}
-      -o ${_viennaps_fp64_spv}
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${_viennaps_fp64_shader}
-    COMMENT "Validating FP64 kernel ${_viennaps_fp64_name} (SPIR-V).")
+  if("${VIENNAPS_FP64_SHADER_COMPILER}" MATCHES ".*glslangValidator.*")
+    add_custom_command(
+      OUTPUT ${_viennaps_fp64_spv}
+      COMMAND ${VIENNAPS_FP64_SHADER_COMPILER} -V
+              ${CMAKE_CURRENT_SOURCE_DIR}/${_viennaps_fp64_shader}
+              -o ${_viennaps_fp64_spv}
+      DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${_viennaps_fp64_shader}
+      COMMENT "Validating FP64 kernel ${_viennaps_fp64_name} (SPIR-V).")
+  else()
+    add_custom_command(
+      OUTPUT ${_viennaps_fp64_spv}
+      COMMAND ${VIENNAPS_FP64_SHADER_COMPILER}
+              -o ${_viennaps_fp64_spv}
+              ${CMAKE_CURRENT_SOURCE_DIR}/${_viennaps_fp64_shader}
+      DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${_viennaps_fp64_shader}
+      COMMENT "Validating FP64 kernel ${_viennaps_fp64_name} (SPIR-V).")
+  endif()
   add_custom_target(${_viennaps_fp64_target}-spv DEPENDS ${_viennaps_fp64_spv})
   list(APPEND VIENNAPS_FP64_SPV_TARGETS ${_viennaps_fp64_target}-spv)
 endforeach()
